@@ -13,7 +13,7 @@ Current status:
 
 ```bash
 pnpm install
-pnpm setup
+pnpm bootstrap
 pnpm doctor
 ```
 

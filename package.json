@@ -10,7 +10,7 @@
   "scripts": {
     "cli": "pnpm --filter @gitcrawl/cli cli",
     "init": "pnpm --filter @gitcrawl/cli cli init",
-    "setup": "pnpm --filter @gitcrawl/cli cli init",
+    "bootstrap": "pnpm --filter @gitcrawl/cli cli init",
     "doctor": "pnpm --filter @gitcrawl/cli cli doctor",
     "sync": "pnpm --filter @gitcrawl/cli cli sync",
     "summarize": "pnpm --filter @gitcrawl/cli cli summarize",
