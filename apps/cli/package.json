@@ -40,6 +40,7 @@
     "test": "tsx --test src/*.test.ts src/**/*.test.ts"
   },
   "dependencies": {
+    "@clack/prompts": "^0.11.0",
     "@gitcrawl/api-core": "workspace:*",
     "@types/blessed": "^0.1.27",
     "neo-blessed": "^0.2.0",

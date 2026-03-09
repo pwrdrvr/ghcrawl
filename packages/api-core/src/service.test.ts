@@ -3,27 +3,114 @@ import assert from 'node:assert/strict';
 
 import { GitcrawlService } from './service.js';
 
+function makeTestConfig(overrides: Partial<GitcrawlService['config']> = {}): GitcrawlService['config'] {
+  return {
+    workspaceRoot: process.cwd(),
+    configDir: '/tmp/gitcrawl-test',
+    configPath: '/tmp/gitcrawl-test/config.json',
+    configFileExists: true,
+    dbPath: ':memory:',
+    dbPathSource: 'config',
+    apiPort: 5179,
+    githubToken: 'ghp_testtoken1234567890',
+    githubTokenSource: 'config',
+    openaiApiKeySource: 'none',
+    summaryModel: 'gpt-5-mini',
+    embedModel: 'text-embedding-3-large',
+    embedBatchSize: 2,
+    embedConcurrency: 2,
+    embedMaxUnread: 4,
+    openSearchIndex: 'gitcrawl-threads',
+    ...overrides,
+  };
+}
+
 function makeTestService(
   github: GitcrawlService['github'],
   ai?: GitcrawlService['ai'],
 ): GitcrawlService {
   return new GitcrawlService({
-    config: {
-      workspaceRoot: process.cwd(),
-      dbPath: ':memory:',
-      apiPort: 5179,
-      summaryModel: 'gpt-5-mini',
-      embedModel: 'text-embedding-3-large',
-      embedBatchSize: 2,
-      embedConcurrency: 2,
-      embedMaxUnread: 4,
-      openSearchIndex: 'gitcrawl-threads',
-      githubToken: 'test-token',
-    },
+    config: makeTestConfig(),
     github,
     ai,
   });
 }
+
+test('doctor reports config path and successful auth smoke checks', async () => {
+  let githubChecked = 0;
+  let openAiChecked = 0;
+  const service = new GitcrawlService({
+    config: makeTestConfig({
+      openaiApiKey: 'sk-proj-testkey1234567890',
+      openaiApiKeySource: 'config',
+    }),
+    github: {
+      checkAuth: async () => {
+        githubChecked += 1;
+      },
+      getRepo: async () => ({}),
+      listRepositoryIssues: async () => [],
+      getIssue: async () => ({}),
+      getPull: async () => ({}),
+      listIssueComments: async () => [],
+      listPullReviews: async () => [],
+      listPullReviewComments: async () => [],
+    },
+    ai: {
+      checkAuth: async () => {
+        openAiChecked += 1;
+      },
+      summarizeThread: async () => {
+        throw new Error('not expected');
+      },
+      embedTexts: async () => [],
+    },
+  });
+
+  try {
+    const result = await service.doctor();
+    assert.equal(result.health.configPath, '/tmp/gitcrawl-test/config.json');
+    assert.equal(result.github.formatOk, true);
+    assert.equal(result.github.authOk, true);
+    assert.equal(result.openai.formatOk, true);
+    assert.equal(result.openai.authOk, true);
+    assert.equal(githubChecked, 1);
+    assert.equal(openAiChecked, 1);
+  } finally {
+    service.close();
+  }
+});
+
+test('doctor reports invalid token format without attempting auth', async () => {
+  let githubChecked = 0;
+  const service = new GitcrawlService({
+    config: makeTestConfig({
+      githubToken: 'not-a-token',
+    }),
+    github: {
+      checkAuth: async () => {
+        githubChecked += 1;
+      },
+      getRepo: async () => ({}),
+      listRepositoryIssues: async () => [],
+      getIssue: async () => ({}),
+      getPull: async () => ({}),
+      listIssueComments: async () => [],
+      listPullReviews: async () => [],
+      listPullReviewComments: async () => [],
+    },
+  });
+
+  try {
+    const result = await service.doctor();
+    assert.equal(result.github.formatOk, false);
+    assert.equal(result.github.authOk, false);
+    assert.match(result.github.error ?? '', /does not look like a GitHub personal access token/);
+    assert.equal(githubChecked, 0);
+  } finally {
+    service.close();
+  }
+});
 
 test('syncRepository defaults to metadata-only mode, preserves thread kind, and tracks first/last pull timestamps', async () => {
   const messages: string[] = [];
@@ -666,18 +753,11 @@ test('embedRepository batches multi-source embeddings and skips unchanged inputs
 test('embedRepository truncates oversized inputs before submission', async () => {
   const embedCalls: string[][] = [];
   const service = new GitcrawlService({
-    config: {
-      workspaceRoot: process.cwd(),
-      dbPath: ':memory:',
-      apiPort: 5179,
-      summaryModel: 'gpt-5-mini',
-      embedModel: 'text-embedding-3-large',
+    config: makeTestConfig({
       embedBatchSize: 8,
       embedConcurrency: 1,
       embedMaxUnread: 2,
-      openSearchIndex: 'gitcrawl-threads',
-      githubToken: 'test-token',
-    },
+    }),
     github: {
       checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
@@ -797,18 +877,11 @@ test('embedRepository truncates oversized inputs before submission', async () =>
 test('embedRepository isolates a failing oversized item from a mixed batch and retries it shortened', async () => {
   const embedCalls: string[][] = [];
   const service = new GitcrawlService({
-    config: {
-      workspaceRoot: process.cwd(),
-      dbPath: ':memory:',
-      apiPort: 5179,
-      summaryModel: 'gpt-5-mini',
-      embedModel: 'text-embedding-3-large',
+    config: makeTestConfig({
       embedBatchSize: 8,
       embedConcurrency: 1,
       embedMaxUnread: 2,
-      openSearchIndex: 'gitcrawl-threads',
-      githubToken: 'test-token',
-    },
+    }),
     github: {
       checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),

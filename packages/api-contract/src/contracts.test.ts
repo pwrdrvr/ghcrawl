@@ -6,6 +6,8 @@ import { actionRequestSchema, healthResponseSchema, neighborsResponseSchema, sea
 test('health schema accepts configured status payload', () => {
   const parsed = healthResponseSchema.parse({
     ok: true,
+    configPath: '/Users/example/.config/gitcrawl/config.json',
+    configFileExists: true,
     dbPath: 'data/gitcrawl.db',
     apiPort: 5179,
     githubConfigured: true,

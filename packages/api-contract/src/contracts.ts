@@ -34,6 +34,8 @@ export type ThreadDto = z.infer<typeof threadSchema>;
 
 export const healthResponseSchema = z.object({
   ok: z.boolean(),
+  configPath: z.string(),
+  configFileExists: z.boolean(),
   dbPath: z.string(),
   apiPort: z.number().int().positive(),
   githubConfigured: z.boolean(),

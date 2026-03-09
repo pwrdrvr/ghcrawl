@@ -6,11 +6,8 @@ This is the quickest way to run `gitcrawl` locally against `openclaw/openclaw`.
 
 - Node.js installed
 - `pnpm` installed
-- `.env.local` present in the repo root with:
-  - `GITHUB_TOKEN`
-  - `OPENAI_API_KEY`
-  - optional `GITCRAWL_SUMMARY_MODEL=gpt-5-mini`
-  - optional `GITCRAWL_EMBED_MODEL=text-embedding-3-large`
+- a GitHub personal access token
+- an OpenAI API key
 
 ## Install
 
@@ -30,17 +27,32 @@ pnpm tui openclaw/openclaw
 
 ## Verify local setup
 
-Initialize local runtime paths and DB:
+Initialize gitcrawl config, runtime paths, and DB:
 
 ```bash
 pnpm bootstrap
 ```
+
+This opens the setup wizard the first time and stores config in `~/.config/gitcrawl/config.json`.
+
+Recommended GitHub token shape:
+
+- fine-grained PAT
+- scoped to the repos you want to crawl
+- repository permissions:
+  - `Metadata: Read-only`
+  - `Issues: Read-only`
+  - `Pull requests: Read-only`
+
+If you use a classic PAT and need private repo access, `repo` is the safe fallback scope.
 
 Check GitHub auth, OpenAI auth, DB wiring, and optional OpenSearch config:
 
 ```bash
 pnpm doctor
 ```
+
+`doctor` also validates whether the GitHub token and OpenAI key look structurally correct before it runs the live smoke checks.
 
 ## Sync `openclaw/openclaw`
 
@@ -191,3 +203,4 @@ Useful endpoints:
 - There is no web UI yet. `serve` is API-only.
 - OpenSearch is not wired yet; search is local SQLite FTS plus exact in-process vector similarity.
 - Timeline event ingestion and durable incremental sync cursors are still future work.
+- repo-root `.env.local` is still accepted as a fallback for development, but normal setup should use `pnpm bootstrap`

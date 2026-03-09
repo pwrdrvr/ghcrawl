@@ -19,6 +19,8 @@ pnpm doctor
 
 For a full first-run walkthrough against `openclaw/openclaw`, see [GETTING-STARTED.md](/Users/huntharo/github/gitcrawl/GETTING-STARTED.md).
 
+`pnpm bootstrap` runs the interactive setup wizard the first time and saves config to `~/.config/gitcrawl/config.json` by default. You do not need a repo-local `.env.local` file for normal use.
+
 ## Root Helpers
 
 The root package exposes pass-through helpers so you do not need to remember the workspace filter syntax:
@@ -78,11 +80,42 @@ Alternate form:
 pnpm --filter @gitcrawl/cli cli sync --repo openclaw/openclaw --limit 25
 ```
 
-## Environment
+## Init And Doctor
 
-`gitcrawl` explicitly loads `.env.local` from the repo root.
+First-run setup:
 
-Supported variables:
+```bash
+pnpm bootstrap
+pnpm doctor
+```
+
+`init` / `bootstrap` behavior:
+
+- saves config to `~/.config/gitcrawl/config.json` by default
+- prompts for the two required API keys:
+  - GitHub personal access token
+  - OpenAI API key
+- re-running `pnpm bootstrap` is idempotent once both keys are already stored
+- use `pnpm bootstrap -- --reconfigure` or `gitcrawl init --reconfigure` if you want to replace stored keys
+
+GitHub token guidance:
+
+- recommended: fine-grained PAT scoped to the repositories you want to crawl
+- repository permissions:
+  - `Metadata: Read-only`
+  - `Issues: Read-only`
+  - `Pull requests: Read-only`
+- if you use a classic PAT and need private repositories, `repo` is the safe fallback scope
+
+`doctor` checks:
+
+- config file presence and path
+- local DB path wiring
+- GitHub token presence, token-shape validation, and a live auth smoke check
+- OpenAI key presence, key-shape validation, and a live auth smoke check
+- optional OpenSearch reachability if configured
+
+Environment overrides are still supported and take precedence over the saved config:
 
 - `GITHUB_TOKEN`
 - `OPENAI_API_KEY`
@@ -95,6 +128,8 @@ Supported variables:
 - `GITCRAWL_EMBED_MAX_UNREAD`
 - `GITCRAWL_OPENSEARCH_URL`
 - `GITCRAWL_OPENSEARCH_INDEX`
+
+For local development, repo-root `.env.local` is still accepted as a fallback, but it is no longer the primary setup path.
 
 ## Current caveats
 

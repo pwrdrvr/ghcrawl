@@ -10,8 +10,14 @@ test('health endpoint returns contract payload', async () => {
   const service = new GitcrawlService({
     config: {
       workspaceRoot: process.cwd(),
+      configDir: '/tmp/gitcrawl-test',
+      configPath: '/tmp/gitcrawl-test/config.json',
+      configFileExists: true,
       dbPath: ':memory:',
+      dbPathSource: 'config',
       apiPort: 5179,
+      githubTokenSource: 'none',
+      openaiApiKeySource: 'none',
       summaryModel: 'gpt-5-mini',
       embedModel: 'text-embedding-3-large',
       embedBatchSize: 8,
@@ -52,8 +58,14 @@ test('neighbors endpoint returns contract payload', async () => {
   const service = new GitcrawlService({
     config: {
       workspaceRoot: process.cwd(),
+      configDir: '/tmp/gitcrawl-test',
+      configPath: '/tmp/gitcrawl-test/config.json',
+      configFileExists: true,
       dbPath: ':memory:',
+      dbPathSource: 'config',
       apiPort: 5179,
+      githubTokenSource: 'none',
+      openaiApiKeySource: 'none',
       summaryModel: 'gpt-5-mini',
       embedModel: 'text-embedding-3-large',
       embedBatchSize: 8,

@@ -26,7 +26,16 @@ import {
 } from '@gitcrawl/api-contract';
 
 import { buildClusters } from './cluster/build.js';
-import { ensureRuntimeDirs, loadConfig, requireGithubToken, requireOpenAiKey, type GitcrawlConfig } from './config.js';
+import {
+  ensureRuntimeDirs,
+  isLikelyGitHubToken,
+  isLikelyOpenAiApiKey,
+  loadConfig,
+  requireGithubToken,
+  requireOpenAiKey,
+  type ConfigValueSource,
+  type GitcrawlConfig,
+} from './config.js';
 import { migrate } from './db/migrate.js';
 import { openDb, type SqliteDatabase } from './db/sqlite.js';
 import { buildCanonicalDocument, isBotLikeAuthor } from './documents/normalize.js';
@@ -161,9 +170,25 @@ export type TuiSnapshot = {
 
 export type DoctorResult = {
   health: HealthResponse;
-  githubOk: boolean;
-  openAiOk: boolean;
-  openSearchOk: boolean;
+  github: {
+    configured: boolean;
+    source: ConfigValueSource;
+    formatOk: boolean;
+    authOk: boolean;
+    error: string | null;
+  };
+  openai: {
+    configured: boolean;
+    source: ConfigValueSource;
+    formatOk: boolean;
+    authOk: boolean;
+    error: string | null;
+  };
+  openSearch: {
+    configured: boolean;
+    ok: boolean;
+    error: string | null;
+  };
 };
 
 type SyncOptions = {
@@ -279,7 +304,7 @@ function threadToDto(row: ThreadRow, clusterId?: number | null): ThreadDto {
 export class GitcrawlService {
   readonly config: GitcrawlConfig;
   readonly db: SqliteDatabase;
-  readonly github: GitHubClient;
+  readonly github?: GitHubClient;
   readonly ai?: AiProvider;
   private readonly parsedEmbeddingCache = new Map<number, ParsedStoredEmbeddingRow[]>();
 
@@ -293,7 +318,7 @@ export class GitcrawlService {
     ensureRuntimeDirs(this.config);
     this.db = options.db ?? openDb(this.config.dbPath);
     migrate(this.db);
-    this.github = options.github ?? makeGitHubClient({ token: requireGithubToken(this.config) });
+    this.github = options.github ?? (this.config.githubToken ? makeGitHubClient({ token: this.config.githubToken }) : undefined);
     this.ai = options.ai ?? (this.config.openaiApiKey ? new OpenAiProvider(this.config.openaiApiKey) : undefined);
   }
 
@@ -307,6 +332,8 @@ export class GitcrawlService {
     migrate(this.db);
     const response = {
       ok: true,
+      configPath: this.config.configPath,
+      configFileExists: this.config.configFileExists,
       dbPath: this.config.dbPath,
       apiPort: this.config.apiPort,
       githubConfigured: Boolean(this.config.githubToken),
@@ -318,24 +345,65 @@ export class GitcrawlService {
 
   async doctor(): Promise<DoctorResult> {
     const health = this.init();
-    let githubOk = false;
-    let openAiOk = false;
-    let openSearchOk = false;
+    const github = {
+      configured: Boolean(this.config.githubToken),
+      source: this.config.githubTokenSource,
+      formatOk: this.config.githubToken ? isLikelyGitHubToken(this.config.githubToken) : false,
+      authOk: false,
+      error: null as string | null,
+    };
+    const openai = {
+      configured: Boolean(this.config.openaiApiKey),
+      source: this.config.openaiApiKeySource,
+      formatOk: this.config.openaiApiKey ? isLikelyOpenAiApiKey(this.config.openaiApiKey) : false,
+      authOk: false,
+      error: null as string | null,
+    };
+    const openSearch = {
+      configured: Boolean(this.config.openSearchUrl),
+      ok: false,
+      error: null as string | null,
+    };
 
-    if (this.config.githubToken) {
-      await this.github.checkAuth();
-      githubOk = true;
+    if (github.configured) {
+      if (!github.formatOk) {
+        github.error = 'Token format does not look like a GitHub personal access token.';
+      } else {
+        try {
+          await this.requireGithub().checkAuth();
+          github.authOk = true;
+        } catch (error) {
+          github.error = error instanceof Error ? error.message : String(error);
+        }
+      }
     }
-    if (this.ai) {
-      await this.ai.checkAuth();
-      openAiOk = true;
+
+    if (openai.configured) {
+      if (!openai.formatOk) {
+        openai.error = 'Key format does not look like an OpenAI API key.';
+      } else {
+        try {
+          await this.requireAi().checkAuth();
+          openai.authOk = true;
+        } catch (error) {
+          openai.error = error instanceof Error ? error.message : String(error);
+        }
+      }
     }
+
     if (this.config.openSearchUrl) {
-      const response = await fetch(this.config.openSearchUrl, { method: 'GET' });
-      openSearchOk = response.ok;
+      try {
+        const response = await fetch(this.config.openSearchUrl, { method: 'GET' });
+        openSearch.ok = response.ok;
+        if (!response.ok) {
+          openSearch.error = `HTTP ${response.status}`;
+        }
+      } catch (error) {
+        openSearch.error = error instanceof Error ? error.message : String(error);
+      }
     }
 
-    return { health, githubOk, openAiOk, openSearchOk };
+    return { health, github, openai, openSearch };
   }
 
   listRepositories(): RepositoriesResponse {
@@ -377,9 +445,10 @@ export class GitcrawlService {
   ): Promise<{ runId: number; threadsSynced: number; commentsSynced: number; threadsClosed: number }> {
     const crawlStartedAt = nowIso();
     const includeComments = params.includeComments ?? false;
+    const github = this.requireGithub();
     params.onProgress?.(`[sync] fetching repository metadata for ${params.owner}/${params.repo}`);
     const reporter = params.onProgress ? (message: string) => params.onProgress?.(message.replace(/^\[github\]/, '[sync/github]')) : undefined;
-    const repoData = await this.github.getRepo(params.owner, params.repo, reporter);
+    const repoData = await github.getRepo(params.owner, params.repo, reporter);
     const repoId = this.upsertRepository(params.owner, params.repo, repoData);
     const runId = this.startRun('sync_runs', repoId, `${params.owner}/${params.repo}`);
 
@@ -390,7 +459,7 @@ export class GitcrawlService {
           ? '[sync] comment hydration enabled; fetching issue comments, reviews, and review comments'
           : '[sync] metadata-only mode; skipping comment, review, and review-comment fetches',
       );
-      const items = await this.github.listRepositoryIssues(params.owner, params.repo, params.since, params.limit, reporter);
+      const items = await github.listRepositoryIssues(params.owner, params.repo, params.since, params.limit, reporter);
       params.onProgress?.(`[sync] discovered ${items.length} threads to process`);
       let threadsSynced = 0;
       let commentsSynced = 0;
@@ -405,7 +474,7 @@ export class GitcrawlService {
         const kind = isPr ? 'pull_request' : 'issue';
         params.onProgress?.(`[sync] ${index + 1}/${items.length} ${kind} #${number}`);
         try {
-          const threadPayload = isPr ? await this.github.getPull(params.owner, params.repo, number, reporter) : item;
+          const threadPayload = isPr ? await github.getPull(params.owner, params.repo, number, reporter) : item;
           const threadId = this.upsertThread(repoId, kind, threadPayload, crawlStartedAt);
           if (includeComments) {
             const comments = await this.fetchThreadComments(params.owner, params.repo, number, isPr, reporter);
@@ -1267,9 +1336,10 @@ export class GitcrawlService {
     isPr: boolean,
     reporter?: (message: string) => void,
   ): Promise<CommentSeed[]> {
+    const github = this.requireGithub();
     const comments: CommentSeed[] = [];
 
-    const issueComments = await this.github.listIssueComments(owner, repo, number, reporter);
+    const issueComments = await github.listIssueComments(owner, repo, number, reporter);
     comments.push(
       ...issueComments.map((comment) => ({
         githubId: String(comment.id),
@@ -1285,7 +1355,7 @@ export class GitcrawlService {
     );
 
     if (isPr) {
-      const reviews = await this.github.listPullReviews(owner, repo, number, reporter);
+      const reviews = await github.listPullReviews(owner, repo, number, reporter);
       comments.push(
         ...reviews.map((review) => ({
           githubId: String(review.id),
@@ -1300,7 +1370,7 @@ export class GitcrawlService {
         })),
       );
 
-      const reviewComments = await this.github.listPullReviewComments(owner, repo, number, reporter);
+      const reviewComments = await github.listPullReviewComments(owner, repo, number, reporter);
       comments.push(
         ...reviewComments.map((comment) => ({
           githubId: String(comment.id),
@@ -1324,6 +1394,13 @@ export class GitcrawlService {
       requireOpenAiKey(this.config);
     }
     return this.ai as AiProvider;
+  }
+
+  private requireGithub(): GitHubClient {
+    if (!this.github) {
+      requireGithubToken(this.config);
+    }
+    return this.github as GitHubClient;
   }
 
   private requireRepository(owner: string, repo: string): RepositoryDto {
@@ -1427,6 +1504,7 @@ export class GitcrawlService {
     reporter?: (message: string) => void;
     onProgress?: (message: string) => void;
   }): Promise<number> {
+    const github = this.requireGithub();
     const staleRows = this.db
       .prepare(
         `select id, number, kind
@@ -1455,8 +1533,8 @@ export class GitcrawlService {
       params.onProgress?.(`[sync] reconciling stale ${row.kind} #${row.number}`);
       const payload =
         row.kind === 'pull_request'
-          ? await this.github.getPull(params.owner, params.repo, row.number, params.reporter)
-          : await this.github.getIssue(params.owner, params.repo, row.number, params.reporter);
+          ? await github.getPull(params.owner, params.repo, row.number, params.reporter)
+          : await github.getIssue(params.owner, params.repo, row.number, params.reporter);
       const pulledAt = nowIso();
       const state = String(payload.state ?? 'open');
 
