@@ -1,4 +1,6 @@
 import OpenAI from 'openai';
+import { zodTextFormat } from 'openai/helpers/zod';
+import { z } from 'zod';
 
 export type SummaryResult = {
   problemSummary: string;
@@ -13,19 +15,12 @@ export type AiProvider = {
   embedTexts: (params: { model: string; texts: string[] }) => Promise<number[][]>;
 };
 
-function parseSummaryPayload(text: string): SummaryResult {
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) {
-    throw new Error('OpenAI summarization did not return JSON');
-  }
-  const parsed = JSON.parse(match[0]) as Record<string, unknown>;
-  return {
-    problemSummary: String(parsed.problem_summary ?? ''),
-    solutionSummary: String(parsed.solution_summary ?? ''),
-    maintainerSignalSummary: String(parsed.maintainer_signal_summary ?? ''),
-    dedupeSummary: String(parsed.dedupe_summary ?? ''),
-  };
-}
+const summarySchema = z.object({
+  problem_summary: z.string(),
+  solution_summary: z.string(),
+  maintainer_signal_summary: z.string(),
+  dedupe_summary: z.string(),
+});
 
 export class OpenAiProvider implements AiProvider {
   private readonly client: OpenAI;
@@ -39,28 +34,54 @@ export class OpenAiProvider implements AiProvider {
   }
 
   async summarizeThread(params: { model: string; text: string }): Promise<SummaryResult> {
-    const response = await this.client.responses.create({
-      model: params.model,
-      input: [
-        {
-          role: 'system',
-          content: [
+    const format = zodTextFormat(summarySchema, 'gitcrawl_thread_summary');
+    let lastError: Error | null = null;
+
+    for (const [attemptIndex, maxOutputTokens] of [500, 900, 1400].entries()) {
+      try {
+        const response = await this.client.responses.create({
+          model: params.model,
+          input: [
             {
-              type: 'input_text',
-              text:
-                'Summarize this GitHub issue or pull request thread. Return JSON only with keys: problem_summary, solution_summary, maintainer_signal_summary, dedupe_summary.',
+              role: 'system',
+              content: [
+                {
+                  type: 'input_text',
+                  text:
+                    'Summarize this GitHub issue or pull request thread. Return concise JSON only with keys problem_summary, solution_summary, maintainer_signal_summary, dedupe_summary. Each field should be plain text, no markdown, and usually 1-3 sentences.',
+                },
+              ],
+            },
+            {
+              role: 'user',
+              content: [{ type: 'input_text', text: params.text }],
             },
           ],
-        },
-        {
-          role: 'user',
-          content: [{ type: 'input_text', text: params.text }],
-        },
-      ],
-      max_output_tokens: 900,
-    });
+          text: {
+            format,
+            verbosity: 'low',
+          },
+          max_output_tokens: maxOutputTokens,
+        });
 
-    return parseSummaryPayload(response.output_text ?? '');
+        const raw = response.output_text ?? '';
+        const parsed = summarySchema.parse(JSON.parse(raw));
+
+        return {
+          problemSummary: parsed.problem_summary,
+          solutionSummary: parsed.solution_summary,
+          maintainerSignalSummary: parsed.maintainer_signal_summary,
+          dedupeSummary: parsed.dedupe_summary,
+        };
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        if (attemptIndex === 2) {
+          break;
+        }
+      }
+    }
+
+    throw new Error(`OpenAI summarization failed after 3 attempts: ${lastError?.message ?? 'unknown error'}`);
   }
 
   async embedTexts(params: { model: string; texts: string[] }): Promise<number[][]> {
