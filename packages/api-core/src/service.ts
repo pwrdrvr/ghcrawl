@@ -73,6 +73,7 @@ type SyncOptions = {
   repo: string;
   since?: string;
   limit?: number;
+  includeComments?: boolean;
   onProgress?: (message: string) => void;
 };
 
@@ -266,6 +267,7 @@ export class GitcrawlService {
     params: SyncOptions,
   ): Promise<{ runId: number; threadsSynced: number; commentsSynced: number; threadsClosed: number }> {
     const crawlStartedAt = nowIso();
+    const includeComments = params.includeComments ?? false;
     params.onProgress?.(`[sync] fetching repository metadata for ${params.owner}/${params.repo}`);
     const reporter = params.onProgress ? (message: string) => params.onProgress?.(message.replace(/^\[github\]/, '[sync/github]')) : undefined;
     const repoData = await this.github.getRepo(params.owner, params.repo, reporter);
@@ -274,6 +276,11 @@ export class GitcrawlService {
 
     try {
       params.onProgress?.(`[sync] listing issues and pull requests for ${params.owner}/${params.repo}`);
+      params.onProgress?.(
+        includeComments
+          ? '[sync] comment hydration enabled; fetching issue comments, reviews, and review comments'
+          : '[sync] metadata-only mode; skipping comment, review, and review-comment fetches',
+      );
       const items = await this.github.listRepositoryIssues(params.owner, params.repo, params.since, params.limit, reporter);
       params.onProgress?.(`[sync] discovered ${items.length} threads to process`);
       let threadsSynced = 0;
@@ -291,73 +298,33 @@ export class GitcrawlService {
         try {
           const threadPayload = isPr ? await this.github.getPull(params.owner, params.repo, number, reporter) : item;
           const threadId = this.upsertThread(repoId, kind, threadPayload, crawlStartedAt);
-          const comments: CommentSeed[] = [];
-
-          const issueComments = await this.github.listIssueComments(params.owner, params.repo, number, reporter);
-          comments.push(
-            ...issueComments.map((comment) => ({
-              githubId: String(comment.id),
-              commentType: 'issue_comment',
-              authorLogin: userLogin(comment),
-              authorType: userType(comment),
-              body: String(comment.body ?? ''),
-              isBot: isBotLikeAuthor({ authorLogin: userLogin(comment), authorType: userType(comment) }),
-              rawJson: asJson(comment),
-              createdAtGh: typeof comment.created_at === 'string' ? comment.created_at : null,
-              updatedAtGh: typeof comment.updated_at === 'string' ? comment.updated_at : null,
-            })),
-          );
-
-          if (isPr) {
-            const reviews = await this.github.listPullReviews(params.owner, params.repo, number, reporter);
-            comments.push(
-              ...reviews.map((review) => ({
-                githubId: String(review.id),
-                commentType: 'review',
-                authorLogin: userLogin(review),
-                authorType: userType(review),
-                body: String(review.body ?? review.state ?? ''),
-                isBot: isBotLikeAuthor({ authorLogin: userLogin(review), authorType: userType(review) }),
-                rawJson: asJson(review),
-                createdAtGh: typeof review.submitted_at === 'string' ? review.submitted_at : null,
-                updatedAtGh: typeof review.submitted_at === 'string' ? review.submitted_at : null,
-              })),
-            );
-
-            const reviewComments = await this.github.listPullReviewComments(params.owner, params.repo, number, reporter);
-            comments.push(
-              ...reviewComments.map((comment) => ({
-                githubId: String(comment.id),
-                commentType: 'review_comment',
-                authorLogin: userLogin(comment),
-                authorType: userType(comment),
-                body: String(comment.body ?? ''),
-                isBot: isBotLikeAuthor({ authorLogin: userLogin(comment), authorType: userType(comment) }),
-                rawJson: asJson(comment),
-                createdAtGh: typeof comment.created_at === 'string' ? comment.created_at : null,
-                updatedAtGh: typeof comment.updated_at === 'string' ? comment.updated_at : null,
-              })),
-            );
+          if (includeComments) {
+            const comments = await this.fetchThreadComments(params.owner, params.repo, number, isPr, reporter);
+            this.replaceComments(threadId, comments);
+            commentsSynced += comments.length;
           }
-
-          this.replaceComments(threadId, comments);
           this.refreshDocument(threadId);
           threadsSynced += 1;
-          commentsSynced += comments.length;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           throw new Error(`sync failed while processing ${kind} #${number}: ${message}`);
         }
       }
 
-      const threadsClosed = await this.reconcileMissingOpenThreads({
-        repoId,
-        owner: params.owner,
-        repo: params.repo,
-        crawlStartedAt,
-        reporter,
-        onProgress: params.onProgress,
-      });
+      const shouldReconcileMissingOpenThreads = params.limit === undefined && params.since === undefined;
+      if (!shouldReconcileMissingOpenThreads) {
+        params.onProgress?.('[sync] skipping stale-open reconciliation because this was a filtered crawl');
+      }
+      const threadsClosed = shouldReconcileMissingOpenThreads
+        ? await this.reconcileMissingOpenThreads({
+            repoId,
+            owner: params.owner,
+            repo: params.repo,
+            crawlStartedAt,
+            reporter,
+            onProgress: params.onProgress,
+          })
+        : 0;
 
       this.finishRun('sync_runs', runId, 'completed', { threadsSynced, commentsSynced, threadsClosed });
       return { runId, threadsSynced, commentsSynced, threadsClosed };
@@ -803,6 +770,65 @@ export class GitcrawlService {
         });
       }
     }
+  }
+
+  private async fetchThreadComments(
+    owner: string,
+    repo: string,
+    number: number,
+    isPr: boolean,
+    reporter?: (message: string) => void,
+  ): Promise<CommentSeed[]> {
+    const comments: CommentSeed[] = [];
+
+    const issueComments = await this.github.listIssueComments(owner, repo, number, reporter);
+    comments.push(
+      ...issueComments.map((comment) => ({
+        githubId: String(comment.id),
+        commentType: 'issue_comment',
+        authorLogin: userLogin(comment),
+        authorType: userType(comment),
+        body: String(comment.body ?? ''),
+        isBot: isBotLikeAuthor({ authorLogin: userLogin(comment), authorType: userType(comment) }),
+        rawJson: asJson(comment),
+        createdAtGh: typeof comment.created_at === 'string' ? comment.created_at : null,
+        updatedAtGh: typeof comment.updated_at === 'string' ? comment.updated_at : null,
+      })),
+    );
+
+    if (isPr) {
+      const reviews = await this.github.listPullReviews(owner, repo, number, reporter);
+      comments.push(
+        ...reviews.map((review) => ({
+          githubId: String(review.id),
+          commentType: 'review',
+          authorLogin: userLogin(review),
+          authorType: userType(review),
+          body: String(review.body ?? review.state ?? ''),
+          isBot: isBotLikeAuthor({ authorLogin: userLogin(review), authorType: userType(review) }),
+          rawJson: asJson(review),
+          createdAtGh: typeof review.submitted_at === 'string' ? review.submitted_at : null,
+          updatedAtGh: typeof review.submitted_at === 'string' ? review.submitted_at : null,
+        })),
+      );
+
+      const reviewComments = await this.github.listPullReviewComments(owner, repo, number, reporter);
+      comments.push(
+        ...reviewComments.map((comment) => ({
+          githubId: String(comment.id),
+          commentType: 'review_comment',
+          authorLogin: userLogin(comment),
+          authorType: userType(comment),
+          body: String(comment.body ?? ''),
+          isBot: isBotLikeAuthor({ authorLogin: userLogin(comment), authorType: userType(comment) }),
+          rawJson: asJson(comment),
+          createdAtGh: typeof comment.created_at === 'string' ? comment.created_at : null,
+          updatedAtGh: typeof comment.updated_at === 'string' ? comment.updated_at : null,
+        })),
+      );
+    }
+
+    return comments;
   }
 
   private requireAi(): AiProvider {

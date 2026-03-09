@@ -40,6 +40,12 @@ Full sync:
 pnpm --filter @gitcrawl/cli cli sync openclaw/openclaw
 ```
 
+Full sync with comment and review hydration:
+
+```bash
+pnpm --filter @gitcrawl/cli cli sync openclaw/openclaw --include-comments
+```
+
 Smaller first pass for recent changes only:
 
 ```bash
@@ -61,7 +67,9 @@ pnpm --filter @gitcrawl/cli cli sync --repo openclaw/openclaw --limit 25
 Notes:
 
 - `sync` only ingests open issues and PRs.
-- `sync` currently fetches issue comments and PR review data thread-by-thread.
+- `sync` is metadata-only by default, so it skips issue comments, PR reviews, and review comments unless you opt in.
+- use `--include-comments` only when you want the extra discussion context badly enough to spend the extra GitHub API budget
+- `--limit` and `--since` are filtered crawls, so they do not mark older locally-open items as closed
 - On a large repository, the full sync can take a while.
 - Starting with `--since` is the safer first run.
 - `--limit` is the safest way to confirm the pipeline works before attempting a full crawl.

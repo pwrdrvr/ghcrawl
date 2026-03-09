@@ -12,7 +12,7 @@ function usage(): string {
 Commands:
   init
   doctor
-  sync <owner/repo> [--since <iso>] [--limit <count>]
+  sync <owner/repo> [--since <iso>] [--limit <count>] [--include-comments]
   summarize <owner/repo> [--number <thread>]
   embed <owner/repo> [--number <thread>]
   cluster <owner/repo> [--k <count>] [--threshold <score>]
@@ -39,6 +39,7 @@ export function parseRepoFlags(args: string[]): { owner: string; repo: string; v
       repo: { type: 'string' },
       since: { type: 'string' },
       limit: { type: 'string' },
+      'include-comments': { type: 'boolean' },
       number: { type: 'string' },
       query: { type: 'string' },
       mode: { type: 'string' },
@@ -93,6 +94,7 @@ export async function run(argv: string[], stdout: NodeJS.WritableStream = proces
           repo,
           since: typeof values.since === 'string' ? values.since : undefined,
           limit: typeof values.limit === 'string' ? Number(values.limit) : undefined,
+          includeComments: values['include-comments'] === true,
           onProgress: (message) => {
             process.stderr.write(`${message}\n`);
           },

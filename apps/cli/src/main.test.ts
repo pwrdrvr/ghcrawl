@@ -33,3 +33,10 @@ test('parseRepoFlags accepts positional owner slash repo syntax', () => {
   assert.equal(parsed.repo, 'openclaw');
   assert.equal(parsed.values.limit, '2');
 });
+
+test('parseRepoFlags accepts include-comments boolean flag', () => {
+  const parsed = parseRepoFlags(['openclaw/openclaw', '--include-comments']);
+  assert.equal(parsed.owner, 'openclaw');
+  assert.equal(parsed.repo, 'openclaw');
+  assert.equal(parsed.values['include-comments'], true);
+});
