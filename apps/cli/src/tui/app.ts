@@ -817,29 +817,31 @@ export function describeUpdateTask(
   }
 
   if (task === 'sync') {
-    return stats.lastGithubReconciliationAt ? `last ${formatRelativeTime(stats.lastGithubReconciliationAt, now)}` : 'never run';
+    return stats.lastGithubReconciliationAt
+      ? `up to date, last ${formatRelativeTime(stats.lastGithubReconciliationAt, now)}`
+      : 'never run';
   }
 
   if (task === 'embed') {
     if (!stats.lastEmbedRefreshAt) return 'never run';
     if (stats.staleEmbedThreadCount > 0) {
-      return `${stats.staleEmbedThreadCount} stale, last ${formatRelativeTime(stats.lastEmbedRefreshAt, now)}`;
+      return `outdated: ${stats.staleEmbedThreadCount} stale, last ${formatRelativeTime(stats.lastEmbedRefreshAt, now)}`;
     }
     const syncMs = parseDateOrNull(stats.lastGithubReconciliationAt);
     const embedMs = parseDateOrNull(stats.lastEmbedRefreshAt);
     if (syncMs !== null && embedMs !== null && embedMs < syncMs) {
-      return `older than GitHub sync by ${formatAge(syncMs - embedMs)}`;
+      return `outdated: GitHub is newer by ${formatAge(syncMs - embedMs)}`;
     }
-    return `last ${formatRelativeTime(stats.lastEmbedRefreshAt, now)}`;
+    return `up to date, last ${formatRelativeTime(stats.lastEmbedRefreshAt, now)}`;
   }
 
   if (!stats.latestClusterRunFinishedAt) return 'never run';
   const embedMs = parseDateOrNull(stats.lastEmbedRefreshAt);
   const clusterMs = parseDateOrNull(stats.latestClusterRunFinishedAt);
   if (embedMs !== null && clusterMs !== null && clusterMs < embedMs) {
-    return `older than embed refresh by ${formatAge(embedMs - clusterMs)}`;
+    return `outdated: embeddings are newer by ${formatAge(embedMs - clusterMs)}`;
   }
-  return `last ${formatRelativeTime(stats.latestClusterRunFinishedAt, now)}`;
+  return `up to date, last ${formatRelativeTime(stats.latestClusterRunFinishedAt, now)}`;
 }
 
 export function buildUpdatePipelineLabels(

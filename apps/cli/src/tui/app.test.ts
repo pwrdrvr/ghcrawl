@@ -116,7 +116,7 @@ test('describeUpdateTask reports stale embeddings relative to GitHub sync', () =
     latestClusterRunFinishedAt: '2026-03-09T14:30:00Z',
   };
 
-  assert.equal(describeUpdateTask('embed', stats, new Date('2026-03-09T15:00:00Z')), 'older than GitHub sync by 2h');
+  assert.equal(describeUpdateTask('embed', stats, new Date('2026-03-09T15:00:00Z')), 'outdated: GitHub is newer by 2h');
 });
 
 test('describeUpdateTask reports stale clusters relative to embed refresh', () => {
@@ -131,7 +131,7 @@ test('describeUpdateTask reports stale clusters relative to embed refresh', () =
     latestClusterRunFinishedAt: '2026-03-09T12:00:00Z',
   };
 
-  assert.equal(describeUpdateTask('cluster', stats, new Date('2026-03-09T16:00:00Z')), 'older than embed refresh by 3h');
+  assert.equal(describeUpdateTask('cluster', stats, new Date('2026-03-09T16:00:00Z')), 'outdated: embeddings are newer by 3h');
 });
 
 test('buildUpdatePipelineLabels marks the selected tasks and includes task guidance', () => {
@@ -152,7 +152,7 @@ test('buildUpdatePipelineLabels marks the selected tasks and includes task guida
     new Date('2026-03-09T16:00:00Z'),
   );
 
-  assert.match(labels[0] ?? '', /^\[x\] GitHub sync\/reconcile  last 2h ago$/);
-  assert.match(labels[1] ?? '', /^\[x\] Embed refresh  2 stale, last 1h ago$/);
-  assert.match(labels[2] ?? '', /^\[ \] Cluster rebuild  older than embed refresh by 3h$/);
+  assert.match(labels[0] ?? '', /^\[x\] GitHub sync\/reconcile  up to date, last 2h ago$/);
+  assert.match(labels[1] ?? '', /^\[x\] Embed refresh  outdated: 2 stale, last 1h ago$/);
+  assert.match(labels[2] ?? '', /^\[ \] Cluster rebuild  outdated: embeddings are newer by 3h$/);
 });
