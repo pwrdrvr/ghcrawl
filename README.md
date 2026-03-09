@@ -162,6 +162,7 @@ For local development, repo-root `.env.local` is still accepted as a fallback, b
 
 - `serve` starts the local HTTP API only. The web UI is not built yet.
 - `sync` only pulls open issues and PRs now.
+- a no-arg `sync owner/repo` is now incremental-by-default after the first full completed open scan for that repo; gitcrawl derives an overlapping `since` window from the last qualifying scan instead of refetching the whole open set every time
 - `sync` is metadata-only by default. It pulls titles, bodies, labels, assignees, state, and timestamps without fetching comment bodies.
 - `sync --include-comments` enables issue comments, PR reviews, and review comments for deeper per-thread context.
 - `embed` now defaults to `text-embedding-3-large`.

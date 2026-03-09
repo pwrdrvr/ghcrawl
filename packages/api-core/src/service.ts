@@ -106,6 +106,28 @@ type EmbeddingWorkset = {
   pending: EmbeddingTask[];
 };
 
+type SyncCursorState = {
+  lastFullOpenScanStartedAt: string | null;
+  lastOverlappingOpenScanCompletedAt: string | null;
+  lastNonOverlappingScanCompletedAt: string | null;
+  lastReconciledOpenCloseAt: string | null;
+};
+
+type SyncRunStats = {
+  threadsSynced: number;
+  commentsSynced: number;
+  threadsClosed: number;
+  crawlStartedAt: string;
+  requestedSince: string | null;
+  effectiveSince: string | null;
+  limit: number | null;
+  includeComments: boolean;
+  isFullOpenScan: boolean;
+  isOverlappingOpenScan: boolean;
+  overlapReferenceAt: string | null;
+  reconciledOpenCloseAt: string | null;
+};
+
 export type TuiClusterSortMode = 'recent' | 'size';
 
 export type TuiRepoStats = {
@@ -193,6 +215,7 @@ type SyncOptions = {
   limit?: number;
   includeComments?: boolean;
   onProgress?: (message: string) => void;
+  startedAt?: string;
 };
 
 type SearchResultInternal = SearchResponse;
@@ -207,6 +230,47 @@ const EMBED_TRUNCATION_MARKER = '\n\n[truncated for embedding]';
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function parseIso(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function deriveIncrementalSince(referenceAt: string, crawlStartedAt: string): string {
+  const referenceMs = parseIso(referenceAt) ?? Date.now();
+  const crawlMs = parseIso(crawlStartedAt) ?? Date.now();
+  const gapMs = Math.max(0, crawlMs - referenceMs);
+  const hourMs = 60 * 60 * 1000;
+  const roundedHours = Math.max(2, Math.ceil(gapMs / hourMs));
+  return new Date(crawlMs - roundedHours * hourMs).toISOString();
+}
+
+function parseSyncRunStats(statsJson: string | null): SyncRunStats | null {
+  if (!statsJson) return null;
+  try {
+    const parsed = JSON.parse(statsJson) as Partial<SyncRunStats>;
+    if (typeof parsed.crawlStartedAt !== 'string') {
+      return null;
+    }
+    return {
+      threadsSynced: typeof parsed.threadsSynced === 'number' ? parsed.threadsSynced : 0,
+      commentsSynced: typeof parsed.commentsSynced === 'number' ? parsed.commentsSynced : 0,
+      threadsClosed: typeof parsed.threadsClosed === 'number' ? parsed.threadsClosed : 0,
+      crawlStartedAt: parsed.crawlStartedAt,
+      requestedSince: typeof parsed.requestedSince === 'string' ? parsed.requestedSince : null,
+      effectiveSince: typeof parsed.effectiveSince === 'string' ? parsed.effectiveSince : null,
+      limit: typeof parsed.limit === 'number' ? parsed.limit : null,
+      includeComments: parsed.includeComments === true,
+      isFullOpenScan: parsed.isFullOpenScan === true,
+      isOverlappingOpenScan: parsed.isOverlappingOpenScan === true,
+      overlapReferenceAt: typeof parsed.overlapReferenceAt === 'string' ? parsed.overlapReferenceAt : null,
+      reconciledOpenCloseAt: typeof parsed.reconciledOpenCloseAt === 'string' ? parsed.reconciledOpenCloseAt : null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function asJson(value: unknown): string {
@@ -425,7 +489,7 @@ export class GitcrawlService {
   async syncRepository(
     params: SyncOptions,
   ): Promise<{ runId: number; threadsSynced: number; commentsSynced: number; threadsClosed: number }> {
-    const crawlStartedAt = nowIso();
+    const crawlStartedAt = params.startedAt ?? nowIso();
     const includeComments = params.includeComments ?? false;
     const github = this.requireGithub();
     params.onProgress?.(`[sync] fetching repository metadata for ${params.owner}/${params.repo}`);
@@ -433,6 +497,17 @@ export class GitcrawlService {
     const repoData = await github.getRepo(params.owner, params.repo, reporter);
     const repoId = this.upsertRepository(params.owner, params.repo, repoData);
     const runId = this.startRun('sync_runs', repoId, `${params.owner}/${params.repo}`);
+    const syncCursor = this.getSyncCursorState(repoId);
+    const overlapReferenceAt = syncCursor.lastOverlappingOpenScanCompletedAt ?? syncCursor.lastFullOpenScanStartedAt;
+    const effectiveSince =
+      params.since ??
+      (params.limit === undefined && overlapReferenceAt ? deriveIncrementalSince(overlapReferenceAt, crawlStartedAt) : undefined);
+    const isFullOpenScan = params.limit === undefined && params.since === undefined && overlapReferenceAt === null;
+    const isOverlappingOpenScan =
+      params.limit === undefined &&
+      overlapReferenceAt !== null &&
+      effectiveSince !== undefined &&
+      (parseIso(effectiveSince) ?? Number.POSITIVE_INFINITY) <= (parseIso(overlapReferenceAt) ?? Number.NEGATIVE_INFINITY);
 
     try {
       params.onProgress?.(`[sync] listing issues and pull requests for ${params.owner}/${params.repo}`);
@@ -441,7 +516,16 @@ export class GitcrawlService {
           ? '[sync] comment hydration enabled; fetching issue comments, reviews, and review comments'
           : '[sync] metadata-only mode; skipping comment, review, and review-comment fetches',
       );
-      const items = await github.listRepositoryIssues(params.owner, params.repo, params.since, params.limit, reporter);
+      if (isFullOpenScan) {
+        params.onProgress?.('[sync] full open scan; no prior completed overlap/full cursor was found for this repository');
+      } else if (params.since === undefined && effectiveSince && overlapReferenceAt) {
+        params.onProgress?.(
+          `[sync] derived incremental window since=${effectiveSince} from overlap reference ${overlapReferenceAt}`,
+        );
+      } else if (params.since !== undefined) {
+        params.onProgress?.(`[sync] using requested since=${params.since}`);
+      }
+      const items = await github.listRepositoryIssues(params.owner, params.repo, effectiveSince, params.limit, reporter);
       params.onProgress?.(`[sync] discovered ${items.length} threads to process`);
       let threadsSynced = 0;
       let commentsSynced = 0;
@@ -471,9 +555,9 @@ export class GitcrawlService {
         }
       }
 
-      const shouldReconcileMissingOpenThreads = params.limit === undefined && params.since === undefined;
+      const shouldReconcileMissingOpenThreads = params.limit === undefined && (isFullOpenScan || isOverlappingOpenScan);
       if (!shouldReconcileMissingOpenThreads) {
-        params.onProgress?.('[sync] skipping stale-open reconciliation because this was a filtered crawl');
+        params.onProgress?.('[sync] skipping stale-open reconciliation because this scan did not overlap a confirmed full/overlap cursor');
       }
       const threadsClosed = shouldReconcileMissingOpenThreads
         ? await this.reconcileMissingOpenThreads({
@@ -485,8 +569,22 @@ export class GitcrawlService {
             onProgress: params.onProgress,
           })
         : 0;
+      const reconciledOpenCloseAt = shouldReconcileMissingOpenThreads ? nowIso() : null;
 
-      this.finishRun('sync_runs', runId, 'completed', { threadsSynced, commentsSynced, threadsClosed });
+      this.finishRun('sync_runs', runId, 'completed', {
+        threadsSynced,
+        commentsSynced,
+        threadsClosed,
+        crawlStartedAt,
+        requestedSince: params.since ?? null,
+        effectiveSince: effectiveSince ?? null,
+        limit: params.limit ?? null,
+        includeComments,
+        isFullOpenScan,
+        isOverlappingOpenScan,
+        overlapReferenceAt,
+        reconciledOpenCloseAt,
+      } satisfies SyncRunStats);
       return { runId, threadsSynced, commentsSynced, threadsClosed };
     } catch (error) {
       this.finishRun('sync_runs', runId, 'failed', null, error);
@@ -1208,6 +1306,37 @@ export class GitcrawlService {
         });
       }
     }
+  }
+
+  private getSyncCursorState(repoId: number): SyncCursorState {
+    const rows = this.db
+      .prepare("select finished_at, stats_json from sync_runs where repo_id = ? and status = 'completed' order by id desc")
+      .all(repoId) as Array<{ finished_at: string | null; stats_json: string | null }>;
+    const state: SyncCursorState = {
+      lastFullOpenScanStartedAt: null,
+      lastOverlappingOpenScanCompletedAt: null,
+      lastNonOverlappingScanCompletedAt: null,
+      lastReconciledOpenCloseAt: null,
+    };
+
+    for (const row of rows) {
+      const stats = parseSyncRunStats(row.stats_json);
+      if (!stats) continue;
+      if (state.lastFullOpenScanStartedAt === null && stats.isFullOpenScan) {
+        state.lastFullOpenScanStartedAt = stats.crawlStartedAt;
+      }
+      if (state.lastOverlappingOpenScanCompletedAt === null && stats.isOverlappingOpenScan && row.finished_at) {
+        state.lastOverlappingOpenScanCompletedAt = row.finished_at;
+      }
+      if (state.lastNonOverlappingScanCompletedAt === null && !stats.isFullOpenScan && !stats.isOverlappingOpenScan && row.finished_at) {
+        state.lastNonOverlappingScanCompletedAt = row.finished_at;
+      }
+      if (state.lastReconciledOpenCloseAt === null && stats.reconciledOpenCloseAt) {
+        state.lastReconciledOpenCloseAt = stats.reconciledOpenCloseAt;
+      }
+    }
+
+    return state;
   }
 
   private getTuiRepoStats(repoId: number): TuiRepoStats {

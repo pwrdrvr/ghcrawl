@@ -1540,6 +1540,79 @@ test('syncRepository skips stale-open reconciliation for filtered crawls', async
   }
 });
 
+test('syncRepository derives the default overlapping since window from the last completed full scan', async () => {
+  const sinceValues: Array<string | undefined> = [];
+
+  const service = makeTestService({
+    checkAuth: async () => undefined,
+    getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+    listRepositoryIssues: async (_owner, _repo, since) => {
+      sinceValues.push(since);
+      return [
+        {
+          id: 100,
+          number: 42,
+          state: 'open',
+          title: 'Downloader hangs',
+          body: 'The transfer never finishes.',
+          html_url: 'https://github.com/openclaw/openclaw/issues/42',
+          labels: [{ name: 'bug' }],
+          assignees: [],
+          user: { login: 'alice', type: 'User' },
+          updated_at: '2026-03-09T00:00:00Z',
+        },
+      ];
+    },
+    getIssue: async (_owner, _repo, number) => ({
+      id: 100,
+      number,
+      state: 'open',
+      title: 'Downloader hangs',
+      body: 'The transfer never finishes.',
+      html_url: `https://github.com/openclaw/openclaw/issues/${number}`,
+      labels: [{ name: 'bug' }],
+      assignees: [],
+      user: { login: 'alice', type: 'User' },
+      updated_at: '2026-03-09T00:00:00Z',
+    }),
+    getPull: async () => {
+      throw new Error('not expected');
+    },
+    listIssueComments: async () => [],
+    listPullReviews: async () => [],
+    listPullReviewComments: async () => [],
+  });
+
+  try {
+    await service.syncRepository({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      startedAt: '2026-03-09T13:13:00.000Z',
+    });
+    await service.syncRepository({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      startedAt: '2026-03-09T14:13:01.000Z',
+    });
+
+    assert.equal(sinceValues[0], undefined);
+    assert.equal(sinceValues[1], '2026-03-09T12:13:01.000Z');
+
+    const rows = service.db
+      .prepare("select stats_json from sync_runs where status = 'completed' order by id asc")
+      .all() as Array<{ stats_json: string | null }>;
+    const firstStats = JSON.parse(rows[0]?.stats_json ?? '{}') as Record<string, unknown>;
+    const secondStats = JSON.parse(rows[1]?.stats_json ?? '{}') as Record<string, unknown>;
+
+    assert.equal(firstStats.isFullOpenScan, true);
+    assert.equal(firstStats.effectiveSince, null);
+    assert.equal(secondStats.isOverlappingOpenScan, true);
+    assert.equal(secondStats.effectiveSince, '2026-03-09T12:13:01.000Z');
+  } finally {
+    service.close();
+  }
+});
+
 test('repository-scoped reads and neighbors do not leak across repos in the same database', () => {
   const service = makeTestService({
     checkAuth: async () => undefined,

@@ -121,6 +121,7 @@ pnpm --filter @gitcrawl/cli cli sync --repo openclaw/openclaw --limit 25
 Notes:
 
 - `sync` only ingests open issues and PRs.
+- after the first full completed open scan for a repo, a later plain `sync owner/repo` automatically derives an overlapping incremental `since` window from the last qualifying sync instead of re-pulling the full open set
 - `sync` is metadata-only by default, so it skips issue comments, PR reviews, and review comments unless you opt in.
 - use `--include-comments` only when you want the extra discussion context badly enough to spend the extra GitHub API budget
 - `--since` accepts ISO timestamps and relative durations like `15m`, `2h`, `7d`, and `1mo`
