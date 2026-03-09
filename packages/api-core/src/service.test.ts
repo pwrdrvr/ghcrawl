@@ -1694,6 +1694,92 @@ test('syncRepository reconciles stale open threads and marks confirmed closures 
   }
 });
 
+test('syncRepository treats missing stale pull requests as closed and continues', async () => {
+  let listRepositoryIssuesCalls = 0;
+  let getPullCalls = 0;
+  const messages: string[] = [];
+
+  const service = makeTestService({
+    checkAuth: async () => undefined,
+    getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+    listRepositoryIssues: async () => {
+      listRepositoryIssuesCalls += 1;
+      return listRepositoryIssuesCalls === 1
+        ? [
+            {
+              id: 101,
+              number: 43,
+              state: 'open',
+              title: 'Fix downloader hang',
+              body: 'Implements a fix.',
+              html_url: 'https://github.com/openclaw/openclaw/pull/43',
+              labels: [{ name: 'bug' }],
+              assignees: [],
+              pull_request: { url: 'https://api.github.com/repos/openclaw/openclaw/pulls/43' },
+              user: { login: 'bob', type: 'User' },
+              updated_at: '2026-03-09T00:00:00Z',
+            },
+          ]
+        : [];
+    },
+    getIssue: async () => {
+      throw new Error('not expected');
+    },
+    getPull: async (_owner, _repo, number) => {
+      getPullCalls += 1;
+      if (getPullCalls === 1) {
+        return {
+          id: 101,
+          number,
+          state: 'open',
+          title: 'Fix downloader hang',
+          body: 'Implements a fix.',
+          html_url: `https://github.com/openclaw/openclaw/pull/${number}`,
+          labels: [{ name: 'bug' }],
+          assignees: [],
+          user: { login: 'bob', type: 'User' },
+          draft: false,
+          updated_at: '2026-03-09T00:00:00Z',
+        };
+      }
+      throw Object.assign(new Error('GitHub request failed for GET /repos/openclaw/openclaw/pulls/43: Not Found'), {
+        status: 404,
+      });
+    },
+    listIssueComments: async () => [],
+    listPullReviews: async () => [],
+    listPullReviewComments: async () => [],
+  });
+
+  try {
+    await service.syncRepository({ owner: 'openclaw', repo: 'openclaw' });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const result = await service.syncRepository({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      onProgress: (message) => messages.push(message),
+    });
+    const after = service.db
+      .prepare("select state, closed_at_gh, last_pulled_at from threads where number = 43 and kind = 'pull_request'")
+      .get() as {
+      state: string;
+      closed_at_gh: string | null;
+      last_pulled_at: string | null;
+    };
+
+    assert.equal(result.threadsSynced, 0);
+    assert.equal(result.threadsClosed, 1);
+    assert.equal(after.state, 'closed');
+    assert.ok(after.closed_at_gh);
+    assert.ok(after.last_pulled_at);
+    assert.equal(getPullCalls, 2);
+    assert.match(messages.join('\n'), /missing on GitHub; marking it closed locally and continuing/);
+  } finally {
+    service.close();
+  }
+});
+
 test('syncRepository skips stale-open reconciliation for filtered crawls', async () => {
   let listRepositoryIssuesCalls = 0;
   let getIssueCalls = 0;

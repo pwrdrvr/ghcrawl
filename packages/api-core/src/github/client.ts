@@ -26,6 +26,16 @@ export type GitHubClient = {
 
 export type GitHubReporter = (message: string) => void;
 
+export class GitHubRequestError extends Error {
+  readonly status?: number;
+
+  constructor(message: string, status?: number) {
+    super(message);
+    this.name = 'GitHubRequestError';
+    this.status = status;
+  }
+}
+
 type RequestOptions = {
   token: string;
   userAgent?: string;
@@ -109,7 +119,8 @@ export function makeGitHubClient(options: RequestOptions): GitHubClient {
       return await fn(octokit);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`GitHub request failed for ${label}: ${message}`);
+      const status = typeof (error as { status?: unknown })?.status === 'number' ? Number((error as { status?: unknown }).status) : undefined;
+      throw new GitHubRequestError(`GitHub request failed for ${label}: ${message}`, status);
     }
   }
 
@@ -138,7 +149,8 @@ export function makeGitHubClient(options: RequestOptions): GitHubClient {
       return out;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`GitHub pagination failed for ${label}: ${message}`);
+      const status = typeof (error as { status?: unknown })?.status === 'number' ? Number((error as { status?: unknown }).status) : undefined;
+      throw new GitHubRequestError(`GitHub pagination failed for ${label}: ${message}`, status);
     }
   }
 

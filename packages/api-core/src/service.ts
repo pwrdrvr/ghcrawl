@@ -250,6 +250,15 @@ function parseIso(value: string | null | undefined): number | null {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
+function isMissingGitHubResourceError(error: unknown): boolean {
+  const status = typeof (error as { status?: unknown })?.status === 'number' ? Number((error as { status?: unknown }).status) : null;
+  if (status === 404 || status === 410) {
+    return true;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b(404|410)\b/.test(message) || /Not Found|Gone/i.test(message);
+}
+
 function deriveIncrementalSince(referenceAt: string, crawlStartedAt: string): string {
   const referenceMs = parseIso(referenceAt) ?? Date.now();
   const crawlMs = parseIso(crawlStartedAt) ?? Date.now();
@@ -1882,35 +1891,60 @@ export class GitcrawlService {
         await new Promise((resolve) => setTimeout(resolve, SYNC_BATCH_DELAY_MS));
       }
       params.onProgress?.(`[sync] reconciling stale ${row.kind} #${row.number}`);
-      const payload =
-        row.kind === 'pull_request'
-          ? await github.getPull(params.owner, params.repo, row.number, params.reporter)
-          : await github.getIssue(params.owner, params.repo, row.number, params.reporter);
       const pulledAt = nowIso();
-      const state = String(payload.state ?? 'open');
+      let payload: Record<string, unknown> | null = null;
+      let state = 'closed';
 
-      this.db
-        .prepare(
-          `update threads
-           set state = ?,
-               raw_json = ?,
-               updated_at_gh = ?,
-               closed_at_gh = ?,
-               merged_at_gh = ?,
-               last_pulled_at = ?,
-               updated_at = ?
-           where id = ?`,
-        )
-        .run(
-          state,
-          asJson(payload),
-          typeof payload.updated_at === 'string' ? payload.updated_at : null,
-          typeof payload.closed_at === 'string' ? payload.closed_at : null,
-          typeof payload.merged_at === 'string' ? payload.merged_at : null,
-          pulledAt,
-          pulledAt,
-          row.id,
+      try {
+        payload =
+          row.kind === 'pull_request'
+            ? await github.getPull(params.owner, params.repo, row.number, params.reporter)
+            : await github.getIssue(params.owner, params.repo, row.number, params.reporter);
+        state = String(payload.state ?? 'open');
+      } catch (error) {
+        if (!isMissingGitHubResourceError(error)) {
+          throw error;
+        }
+        params.onProgress?.(
+          `[sync] stale ${row.kind} #${row.number} is missing on GitHub; marking it closed locally and continuing`,
         );
+      }
+
+      if (payload) {
+        this.db
+          .prepare(
+            `update threads
+             set state = ?,
+                 raw_json = ?,
+                 updated_at_gh = ?,
+                 closed_at_gh = ?,
+                 merged_at_gh = ?,
+                 last_pulled_at = ?,
+                 updated_at = ?
+             where id = ?`,
+          )
+          .run(
+            state,
+            asJson(payload),
+            typeof payload.updated_at === 'string' ? payload.updated_at : null,
+            typeof payload.closed_at === 'string' ? payload.closed_at : null,
+            typeof payload.merged_at === 'string' ? payload.merged_at : null,
+            pulledAt,
+            pulledAt,
+            row.id,
+          );
+      } else {
+        this.db
+          .prepare(
+            `update threads
+             set state = 'closed',
+                 closed_at_gh = coalesce(closed_at_gh, ?),
+                 last_pulled_at = ?,
+                 updated_at = ?
+             where id = ?`,
+          )
+          .run(pulledAt, pulledAt, pulledAt, row.id);
+      }
 
       if (state !== 'open') {
         threadsClosed += 1;
