@@ -22,16 +22,23 @@ export type InitPrompter = {
     initialValue?: string;
     options: Array<{ value: string; label: string; hint?: string }>;
   }) => Promise<string | symbol>;
-  text: (options: { message: string; placeholder?: string; validate?: (value: string) => string | undefined }) => Promise<string | symbol>;
+  text: (options: {
+    message: string;
+    placeholder?: string;
+    validate?: (value: string) => string | undefined;
+  }) => Promise<string | symbol | undefined>;
   confirm: (options: { message: string; initialValue?: boolean }) => Promise<boolean | symbol>;
   password: (options: { message: string; validate?: (value: string) => string | undefined }) => Promise<string | symbol>;
   outro: (message: string) => Promise<void> | void;
   cancel: (message: string) => void;
 };
 
-function resolveTextValue(value: string | symbol, fallback: string): string | symbol {
+function resolveTextValue(value: string | symbol | undefined, fallback: string): string | symbol {
   if (isCancel(value)) {
     return value;
+  }
+  if (typeof value !== 'string') {
+    return fallback;
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : fallback;

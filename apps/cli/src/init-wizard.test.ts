@@ -154,3 +154,22 @@ test('runInitWizard accepts empty 1Password vault and item input as defaults', a
   assert.equal(persisted.data.opVaultName, 'Private');
   assert.equal(persisted.data.opItemName, 'gitcrawl');
 });
+
+test('runInitWizard accepts undefined 1Password text responses as defaults', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gitcrawl-init-test-'));
+  const env = { ...process.env, HOME: home };
+
+  await runInitWizard({
+    env,
+    prompter: makePrompter({
+      select: async () => 'op',
+      text: async () => undefined,
+      confirm: async () => true,
+    }),
+    isInteractive: true,
+  });
+
+  const persisted = readPersistedConfig({ env });
+  assert.equal(persisted.data.opVaultName, 'Private');
+  assert.equal(persisted.data.opItemName, 'gitcrawl');
+});
