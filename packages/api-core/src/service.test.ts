@@ -663,7 +663,7 @@ test('embedRepository batches multi-source embeddings and skips unchanged inputs
   }
 });
 
-test('embedRepository truncates oversized inputs and splits batches by estimated token budget', async () => {
+test('embedRepository truncates oversized inputs before submission', async () => {
   const embedCalls: string[][] = [];
   const service = new GitcrawlService({
     config: {
@@ -706,7 +706,7 @@ test('embedRepository truncates oversized inputs and splits batches by estimated
 
   try {
     const now = '2026-03-09T00:00:00Z';
-    const hugeBody = 'a'.repeat(15000);
+    const hugeBody = 'a'.repeat(30000);
     service.db
       .prepare(
         `insert into repositories (id, owner, name, full_name, github_repo_id, raw_json, updated_at)
@@ -783,12 +783,146 @@ test('embedRepository truncates oversized inputs and splits batches by estimated
     const result = await service.embedRepository({ owner: 'openclaw', repo: 'openclaw' });
 
     assert.equal(result.embedded, 4);
-    assert.ok(embedCalls.length >= 3);
+    assert.ok(embedCalls.length >= 1);
     const truncatedBodies = embedCalls.flat().filter((text) => text.includes('[truncated for embedding]'));
     assert.equal(truncatedBodies.length, 2);
     for (const text of truncatedBodies) {
-      assert.ok(text.length <= 12000);
+      assert.ok(text.length < hugeBody.length);
     }
+  } finally {
+    service.close();
+  }
+});
+
+test('embedRepository isolates a failing oversized item from a mixed batch and retries it shortened', async () => {
+  const embedCalls: string[][] = [];
+  const service = new GitcrawlService({
+    config: {
+      workspaceRoot: process.cwd(),
+      dbPath: ':memory:',
+      apiPort: 5179,
+      summaryModel: 'gpt-5-mini',
+      embedModel: 'text-embedding-3-large',
+      embedBatchSize: 8,
+      embedConcurrency: 1,
+      embedMaxUnread: 2,
+      openSearchIndex: 'gitcrawl-threads',
+      githubToken: 'test-token',
+    },
+    github: {
+      checkAuth: async () => undefined,
+      getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+      listRepositoryIssues: async () => [],
+      getIssue: async () => {
+        throw new Error('not expected');
+      },
+      getPull: async () => {
+        throw new Error('not expected');
+      },
+      listIssueComments: async () => [],
+      listPullReviews: async () => [],
+      listPullReviewComments: async () => [],
+    },
+    ai: {
+      checkAuth: async () => undefined,
+      summarizeThread: async () => {
+        throw new Error('not expected');
+      },
+      embedTexts: async ({ texts }) => {
+        embedCalls.push(texts);
+        for (const text of texts) {
+          if (text.length > 9000) {
+            throw new Error(
+              "400 This model's maximum context length is 8192 tokens, however you requested 18227 tokens (18227 in your prompt; 0 for the completion).",
+            );
+          }
+        }
+        return texts.map((text, index) => [text.length, index]);
+      },
+    },
+  });
+
+  try {
+    const now = '2026-03-09T00:00:00Z';
+    service.db
+      .prepare(
+        `insert into repositories (id, owner, name, full_name, github_repo_id, raw_json, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '1', '{}', now);
+    service.db
+      .prepare(
+        `insert into threads (
+          id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
+          labels_json, assignees_json, raw_json, content_hash, is_draft, created_at_gh, updated_at_gh, closed_at_gh,
+          merged_at_gh, first_pulled_at, last_pulled_at, updated_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        10,
+        1,
+        '100',
+        42,
+        'issue',
+        'open',
+        'Short title',
+        'short body',
+        'alice',
+        'User',
+        'https://github.com/openclaw/openclaw/issues/42',
+        '[]',
+        '[]',
+        '{}',
+        'hash-42',
+        0,
+        now,
+        now,
+        null,
+        null,
+        now,
+        now,
+        now,
+      );
+    service.db
+      .prepare(
+        `insert into threads (
+          id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
+          labels_json, assignees_json, raw_json, content_hash, is_draft, created_at_gh, updated_at_gh, closed_at_gh,
+          merged_at_gh, first_pulled_at, last_pulled_at, updated_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        11,
+        1,
+        '101',
+        43,
+        'issue',
+        'open',
+        'Large body',
+        'x'.repeat(20000),
+        'bob',
+        'User',
+        'https://github.com/openclaw/openclaw/issues/43',
+        '[]',
+        '[]',
+        '{}',
+        'hash-43',
+        0,
+        now,
+        now,
+        null,
+        null,
+        now,
+        now,
+        now,
+      );
+
+    const result = await service.embedRepository({ owner: 'openclaw', repo: 'openclaw' });
+
+    assert.equal(result.embedded, 4);
+    assert.ok(embedCalls.length >= 3);
+    assert.equal(embedCalls[0].length, 4);
+    assert.ok(embedCalls.flat().some((text) => text.includes('[truncated for embedding]')));
   } finally {
     service.close();
   }

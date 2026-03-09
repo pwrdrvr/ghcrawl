@@ -102,9 +102,9 @@ type NeighborsResultInternal = NeighborsResponse;
 
 const SYNC_BATCH_SIZE = 100;
 const SYNC_BATCH_DELAY_MS = 5000;
-const EMBED_ESTIMATED_CHARS_PER_TOKEN = 2;
-const EMBED_MAX_ITEM_TOKENS = 6000;
-const EMBED_MAX_BATCH_TOKENS = 6000;
+const EMBED_ESTIMATED_CHARS_PER_TOKEN = 3;
+const EMBED_MAX_ITEM_TOKENS = 7000;
+const EMBED_MAX_BATCH_TOKENS = 250000;
 const EMBED_TRUNCATION_MARKER = '\n\n[truncated for embedding]';
 
 function nowIso(): string {
@@ -566,11 +566,7 @@ export class GitcrawlService {
       const mapper = new IterableMapper(
         batches,
         async (batch: EmbeddingTask[]) => {
-          const embeddings = await ai.embedTexts({
-            model: this.config.embedModel,
-            texts: batch.map((task) => task.text),
-          });
-          return batch.map((task, index) => ({ task, embedding: embeddings[index] }));
+          return this.embedBatchWithRecovery(ai, batch, params.onProgress);
         },
         {
           concurrency: this.config.embedConcurrency,
@@ -1382,6 +1378,95 @@ export class GitcrawlService {
 
   private estimateEmbeddingTokens(text: string): number {
     return Math.max(1, Math.ceil(text.length / EMBED_ESTIMATED_CHARS_PER_TOKEN));
+  }
+
+  private isEmbeddingContextError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return /maximum context length/i.test(message) || /requested \d+ tokens/i.test(message);
+  }
+
+  private async embedBatchWithRecovery(
+    ai: AiProvider,
+    batch: EmbeddingTask[],
+    onProgress?: (message: string) => void,
+  ): Promise<Array<{ task: EmbeddingTask; embedding: number[] }>> {
+    try {
+      const embeddings = await ai.embedTexts({
+        model: this.config.embedModel,
+        texts: batch.map((task) => task.text),
+      });
+      return batch.map((task, index) => ({ task, embedding: embeddings[index] }));
+    } catch (error) {
+      if (!this.isEmbeddingContextError(error) || batch.length === 1) {
+        if (batch.length === 1 && this.isEmbeddingContextError(error)) {
+          const recovered = await this.embedSingleTaskWithRecovery(ai, batch[0], onProgress);
+          return [recovered];
+        }
+        throw error;
+      }
+
+      onProgress?.(
+        `[embed] batch context error; isolating ${batch.length} item(s) to find oversized input(s)`,
+      );
+
+      const recovered: Array<{ task: EmbeddingTask; embedding: number[] }> = [];
+      for (const task of batch) {
+        recovered.push(await this.embedSingleTaskWithRecovery(ai, task, onProgress));
+      }
+      return recovered;
+    }
+  }
+
+  private async embedSingleTaskWithRecovery(
+    ai: AiProvider,
+    task: EmbeddingTask,
+    onProgress?: (message: string) => void,
+  ): Promise<{ task: EmbeddingTask; embedding: number[] }> {
+    let current = task;
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        const [embedding] = await ai.embedTexts({
+          model: this.config.embedModel,
+          texts: [current.text],
+        });
+        return { task: current, embedding };
+      } catch (error) {
+        if (!this.isEmbeddingContextError(error)) {
+          throw error;
+        }
+
+        const next = this.shrinkEmbeddingTask(current);
+        if (!next || next.text === current.text) {
+          throw error;
+        }
+        onProgress?.(
+          `[embed] shortened #${current.threadNumber}:${current.sourceKind} after context error est_tokens=${current.estimatedTokens}->${next.estimatedTokens}`,
+        );
+        current = next;
+      }
+    }
+
+    throw new Error(`Unable to shrink embedding input for #${task.threadNumber}:${task.sourceKind} below model limits`);
+  }
+
+  private shrinkEmbeddingTask(task: EmbeddingTask): EmbeddingTask | null {
+    const withoutMarker = task.text.endsWith(EMBED_TRUNCATION_MARKER)
+      ? task.text.slice(0, -EMBED_TRUNCATION_MARKER.length)
+      : task.text;
+    if (withoutMarker.length < 256) {
+      return null;
+    }
+
+    const nextLength = Math.max(256, Math.floor(withoutMarker.length * 0.5));
+    const nextText = `${withoutMarker.slice(0, Math.max(0, nextLength - EMBED_TRUNCATION_MARKER.length)).trimEnd()}${EMBED_TRUNCATION_MARKER}`;
+    return {
+      ...task,
+      text: nextText,
+      contentHash: stableContentHash(`embedding:${task.sourceKind}\n${nextText}`),
+      estimatedTokens: this.estimateEmbeddingTokens(nextText),
+      wasTruncated: true,
+    };
   }
 
   private chunkEmbeddingTasks(items: EmbeddingTask[], maxItems: number, maxEstimatedTokens: number): EmbeddingTask[][] {
