@@ -70,6 +70,8 @@ type SyncOptions = {
   owner: string;
   repo: string;
   since?: string;
+  limit?: number;
+  onProgress?: (message: string) => void;
 };
 
 type SearchResultInternal = SearchResponse;
@@ -256,58 +258,33 @@ export class GitcrawlService {
   }
 
   async syncRepository(params: SyncOptions): Promise<{ runId: number; threadsSynced: number; commentsSynced: number }> {
+    params.onProgress?.(`[sync] fetching repository metadata for ${params.owner}/${params.repo}`);
     const repoData = await this.github.getRepo(params.owner, params.repo);
     const repoId = this.upsertRepository(params.owner, params.repo, repoData);
     const runId = this.startRun('sync_runs', repoId, `${params.owner}/${params.repo}`);
 
     try {
-      const items = await this.github.listRepositoryIssues(params.owner, params.repo, params.since);
+      params.onProgress?.(`[sync] listing issues and pull requests for ${params.owner}/${params.repo}`);
+      const items = await this.github.listRepositoryIssues(params.owner, params.repo, params.since, params.limit);
+      params.onProgress?.(`[sync] discovered ${items.length} threads to process`);
       let threadsSynced = 0;
       let commentsSynced = 0;
 
-      for (const item of items) {
+      for (const [index, item] of items.entries()) {
         const number = Number(item.number);
         const isPr = isPullRequestPayload(item);
-        const threadPayload = isPr ? await this.github.getPull(params.owner, params.repo, number) : item;
-        const threadId = this.upsertThread(repoId, isPr ? 'pull_request' : 'issue', threadPayload);
-        const comments: CommentSeed[] = [];
+        const kind = isPr ? 'pull_request' : 'issue';
+        params.onProgress?.(`[sync] ${index + 1}/${items.length} ${kind} #${number}`);
+        try {
+          const threadPayload = isPr ? await this.github.getPull(params.owner, params.repo, number) : item;
+          const threadId = this.upsertThread(repoId, kind, threadPayload);
+          const comments: CommentSeed[] = [];
 
-        const issueComments = await this.github.listIssueComments(params.owner, params.repo, number);
-        comments.push(
-          ...issueComments.map((comment) => ({
-            githubId: String(comment.id),
-            commentType: 'issue_comment',
-            authorLogin: userLogin(comment),
-            authorType: userType(comment),
-            body: String(comment.body ?? ''),
-            isBot: isBotLikeAuthor({ authorLogin: userLogin(comment), authorType: userType(comment) }),
-            rawJson: asJson(comment),
-            createdAtGh: typeof comment.created_at === 'string' ? comment.created_at : null,
-            updatedAtGh: typeof comment.updated_at === 'string' ? comment.updated_at : null,
-          })),
-        );
-
-        if (isPr) {
-          const reviews = await this.github.listPullReviews(params.owner, params.repo, number);
+          const issueComments = await this.github.listIssueComments(params.owner, params.repo, number);
           comments.push(
-            ...reviews.map((review) => ({
-              githubId: String(review.id),
-              commentType: 'review',
-              authorLogin: userLogin(review),
-              authorType: userType(review),
-              body: String(review.body ?? review.state ?? ''),
-              isBot: isBotLikeAuthor({ authorLogin: userLogin(review), authorType: userType(review) }),
-              rawJson: asJson(review),
-              createdAtGh: typeof review.submitted_at === 'string' ? review.submitted_at : null,
-              updatedAtGh: typeof review.submitted_at === 'string' ? review.submitted_at : null,
-            })),
-          );
-
-          const reviewComments = await this.github.listPullReviewComments(params.owner, params.repo, number);
-          comments.push(
-            ...reviewComments.map((comment) => ({
+            ...issueComments.map((comment) => ({
               githubId: String(comment.id),
-              commentType: 'review_comment',
+              commentType: 'issue_comment',
               authorLogin: userLogin(comment),
               authorType: userType(comment),
               body: String(comment.body ?? ''),
@@ -317,12 +294,47 @@ export class GitcrawlService {
               updatedAtGh: typeof comment.updated_at === 'string' ? comment.updated_at : null,
             })),
           );
-        }
 
-        this.replaceComments(threadId, comments);
-        this.refreshDocument(threadId);
-        threadsSynced += 1;
-        commentsSynced += comments.length;
+          if (isPr) {
+            const reviews = await this.github.listPullReviews(params.owner, params.repo, number);
+            comments.push(
+              ...reviews.map((review) => ({
+                githubId: String(review.id),
+                commentType: 'review',
+                authorLogin: userLogin(review),
+                authorType: userType(review),
+                body: String(review.body ?? review.state ?? ''),
+                isBot: isBotLikeAuthor({ authorLogin: userLogin(review), authorType: userType(review) }),
+                rawJson: asJson(review),
+                createdAtGh: typeof review.submitted_at === 'string' ? review.submitted_at : null,
+                updatedAtGh: typeof review.submitted_at === 'string' ? review.submitted_at : null,
+              })),
+            );
+
+            const reviewComments = await this.github.listPullReviewComments(params.owner, params.repo, number);
+            comments.push(
+              ...reviewComments.map((comment) => ({
+                githubId: String(comment.id),
+                commentType: 'review_comment',
+                authorLogin: userLogin(comment),
+                authorType: userType(comment),
+                body: String(comment.body ?? ''),
+                isBot: isBotLikeAuthor({ authorLogin: userLogin(comment), authorType: userType(comment) }),
+                rawJson: asJson(comment),
+                createdAtGh: typeof comment.created_at === 'string' ? comment.created_at : null,
+                updatedAtGh: typeof comment.updated_at === 'string' ? comment.updated_at : null,
+              })),
+            );
+          }
+
+          this.replaceComments(threadId, comments);
+          this.refreshDocument(threadId);
+          threadsSynced += 1;
+          commentsSynced += comments.length;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(`sync failed while processing ${kind} #${number}: ${message}`);
+        }
       }
 
       this.finishRun('sync_runs', runId, 'completed', { threadsSynced, commentsSynced });

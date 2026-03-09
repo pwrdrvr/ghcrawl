@@ -20,6 +20,7 @@
 - We should summarize first, then embed the summaries.
 - Bot review comments should be skipped from the dedupe-oriented document text.
 - OpenSearch 3.3 is optional for V1 and should not block initial usefulness.
+- Exact local cosine similarity is the active kNN plan for now; OpenSearch is deferred until we have real performance evidence that we need it.
 - This repo uses a `pnpm` monorepo with `packages/api-core`, `packages/api-contract`, `apps/cli`, and a deferred `apps/web`.
 - CLI is the only supported execution host in V1. Web is deferred and must stay HTTP-only against the local API boundary.
 
@@ -75,6 +76,11 @@
 - [ ] Design a backend interface for optional OpenSearch support.
 - [ ] Testing goal: embedding job tests cover batching, retry, and skipped unchanged rows.
 
+Decision note:
+
+- this phase is the primary kNN path for the foreseeable future
+- do not block on Docker, OpenSearch, Lucene, or Faiss
+
 ## Phase 5: OpenSearch Evaluation And Optional Backend
 
 - [ ] Add a Docker Compose or equivalent local recipe for OpenSearch 3.3.
@@ -84,6 +90,11 @@
 - [ ] Add a smoke test for indexing and kNN query execution.
 - [ ] Evaluate whether Faiss adds real value for this corpus before implementing it.
 - [ ] Testing goal: one integration test suite can run against an ephemeral local OpenSearch instance.
+
+Decision note:
+
+- this phase is explicitly deferred
+- only start it after exact local similarity is measured and shown to be insufficient
 
 ## Phase 6: Clustering
 

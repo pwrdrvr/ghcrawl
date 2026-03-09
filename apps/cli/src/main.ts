@@ -12,7 +12,7 @@ function usage(): string {
 Commands:
   init
   doctor
-  sync --owner <owner> --repo <repo> [--since <iso>]
+  sync --owner <owner> --repo <repo> [--since <iso>] [--limit <count>]
   summarize --owner <owner> --repo <repo> [--number <thread>]
   embed --owner <owner> --repo <repo> [--number <thread>]
   cluster --owner <owner> --repo <repo> [--k <count>] [--threshold <score>]
@@ -29,6 +29,7 @@ function parseRepoFlags(args: string[]): { owner: string; repo: string; values: 
       owner: { type: 'string' },
       repo: { type: 'string' },
       since: { type: 'string' },
+      limit: { type: 'string' },
       number: { type: 'string' },
       query: { type: 'string' },
       mode: { type: 'string' },
@@ -71,6 +72,10 @@ export async function run(argv: string[], stdout: NodeJS.WritableStream = proces
           owner,
           repo,
           since: typeof values.since === 'string' ? values.since : undefined,
+          limit: typeof values.limit === 'string' ? Number(values.limit) : undefined,
+          onProgress: (message) => {
+            process.stderr.write(`${message}\n`);
+          },
         });
         stdout.write(`${JSON.stringify(result, null, 2)}\n`);
         return;

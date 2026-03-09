@@ -46,11 +46,19 @@ Smaller first pass for recent changes only:
 pnpm --filter @gitcrawl/cli cli sync --owner openclaw --repo openclaw --since 2026-03-01T00:00:00Z
 ```
 
+Smallest smoke-test path:
+
+```bash
+pnpm --filter @gitcrawl/cli cli sync --owner openclaw --repo openclaw --limit 25
+```
+
 Notes:
 
 - `sync` currently fetches issue comments and PR review data thread-by-thread.
 - On a large repository, the full sync can take a while.
 - Starting with `--since` is the safer first run.
+- `--limit` is the safest way to confirm the pipeline works before attempting a full crawl.
+- Long syncs can hit GitHub rate limits because the current implementation does multiple per-thread API calls.
 
 ## Enrich the local data
 

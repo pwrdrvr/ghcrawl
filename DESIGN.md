@@ -66,6 +66,22 @@ Do not copy `dupcanon`'s Postgres-first runtime, close-planning workflow, or app
   - baseline: exact cosine search in-process over vectors stored in SQLite
   - optional: OpenSearch 3.3 in Docker for ANN / filtered kNN
 
+## Current kNN Decision
+
+For the current corpus size, `gitcrawl` should use exact local similarity only.
+
+- store embeddings in SQLite
+- load embeddings for the active repository into process memory
+- compute cosine similarity directly in Node
+- do not require Docker, OpenSearch, Lucene, or Faiss for normal local use
+
+Reasoning:
+
+- a few thousand summarized threads is small enough for exact search
+- this avoids JVM or native vector-service operational overhead on modest machines
+- the TypeScript/Node stack stays simpler and easier to debug
+- we can defer service-backed ANN until there is real evidence that latency or filtering needs it
+
 ## Why TypeScript Instead Of Go
 
 `discrawl` is the operational pattern, not the language mandate. For this project:
@@ -296,6 +312,7 @@ Cons:
 Recommendation:
 
 - start here first
+- keep this as the default until measured performance proves otherwise
 
 ### Option B: OpenSearch 3.3 With Lucene HNSW
 
@@ -351,6 +368,12 @@ Phase recommendation:
 3. evaluate Faiss only if query latency, filtering, or scale justify it
 
 This is the right trade for the expected corpus size. A few thousand summarized threads is small enough that exact local similarity is cheap and easier to debug.
+
+Current execution decision:
+
+- exact local kNN is the only planned default path right now
+- OpenSearch is explicitly deferred
+- Lucene and Faiss are not implementation targets unless the local exact path proves insufficient
 
 ## Clustering Design
 
@@ -472,6 +495,7 @@ Golden tests:
 - Bot noise can drown similarity. Mitigation: aggressive author filtering and normalization.
 - Summaries can over-compress. Mitigation: keep raw source excerpts and allow re-embedding from adjusted prompts.
 - OpenSearch can add unnecessary complexity. Mitigation: make it optional and keep SQLite exact search as the baseline.
+- JVM or native vector backends can overcomplicate local setup on low-memory machines. Mitigation: keep exact local search as the primary path and postpone service-backed ANN.
 - Cluster thresholds will need tuning. Mitigation: persist neighbor edges and inspect false positives directly in the UI.
 
 ## Immediate Recommendation
