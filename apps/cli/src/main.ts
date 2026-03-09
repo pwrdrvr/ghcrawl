@@ -19,22 +19,38 @@ type CommandName =
   | 'tui'
   | 'serve';
 
-function usage(): string {
-  return `gitcrawl <command> [options]
+function usage(devMode = false): string {
+  const lines = [
+    'gitcrawl <command> [options]',
+    '',
+    'Commands:',
+    '  init [--reconfigure]',
+    '  doctor',
+    '  sync <owner/repo> [--since <iso|duration>] [--limit <count>] [--include-comments]',
+    '  embed <owner/repo> [--number <thread>]',
+    '  cluster <owner/repo> [--k <count>] [--threshold <score>]',
+    '  search <owner/repo> --query <text> [--mode keyword|semantic|hybrid]',
+    '  neighbors <owner/repo> --number <thread> [--limit <count>] [--threshold <score>]',
+    '  tui [owner/repo]',
+    '  serve',
+  ];
+  if (devMode) {
+    lines.push('', 'Advanced Commands:', '  summarize <owner/repo> [--number <thread>] [--include-comments]', '  purge-comments <owner/repo> [--number <thread>]');
+  }
+  return `${lines.join('\n')}\n`;
+}
 
-Commands:
-  init [--reconfigure]
-  doctor
-  sync <owner/repo> [--since <iso|duration>] [--limit <count>] [--include-comments]
-  summarize <owner/repo> [--number <thread>] [--include-comments]
-  purge-comments <owner/repo> [--number <thread>]
-  embed <owner/repo> [--number <thread>]
-  cluster <owner/repo> [--k <count>] [--threshold <score>]
-  search <owner/repo> --query <text> [--mode keyword|semantic|hybrid]
-  neighbors <owner/repo> --number <thread> [--limit <count>] [--threshold <score>]
-  tui [owner/repo]
-  serve
-`;
+function parseGlobalFlags(argv: string[], env: NodeJS.ProcessEnv = process.env): { argv: string[]; devMode: boolean } {
+  let devMode = env.GITCRAWL_DEV_MODE === '1';
+  const filtered: string[] = [];
+  for (const arg of argv) {
+    if (arg === '--dev') {
+      devMode = true;
+      continue;
+    }
+    filtered.push(arg);
+  }
+  return { argv: filtered, devMode };
 }
 
 export function parseOwnerRepo(value: string): { owner: string; repo: string } {
@@ -144,10 +160,11 @@ function closeService(service: GitcrawlService | null): void {
 }
 
 export async function run(argv: string[], stdout: NodeJS.WritableStream = process.stdout): Promise<void> {
-  const [commandRaw, ...rest] = argv;
+  const parsedGlobals = parseGlobalFlags(argv);
+  const [commandRaw, ...rest] = parsedGlobals.argv;
   const command = commandRaw as CommandName | undefined;
   if (!command || commandRaw === '--help' || commandRaw === '-h' || commandRaw === 'help') {
-    stdout.write(usage());
+    stdout.write(usage(parsedGlobals.devMode));
     return;
   }
 

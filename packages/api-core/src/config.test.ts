@@ -131,6 +131,18 @@ test('writePersistedConfig creates a readable config file', () => {
   assert.equal(persisted.data.openaiApiKey, 'sk-proj-testkey1234567890');
 });
 
+test('getConfigPath uses APPDATA on Windows', () => {
+  const configPath = getConfigPath({
+    env: {
+      ...process.env,
+      APPDATA: 'C:\\Users\\example\\AppData\\Roaming',
+    },
+    platform: 'win32',
+  });
+
+  assert.equal(configPath, path.resolve('C:\\Users\\example\\AppData\\Roaming', 'gitcrawl', 'config.json'));
+});
+
 test('loadConfig rejects invalid port', () => {
   const home = makeTempHome();
   assert.throws(() =>

@@ -51,6 +51,7 @@ type LoadedStoredConfig = {
 type LoadConfigOptions = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
 };
 
 type LayeredValue<T> = {
@@ -77,8 +78,12 @@ function resolveHomeDirectory(env: NodeJS.ProcessEnv): string {
 
 export function getConfigDir(options: LoadConfigOptions = {}): string {
   const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
   if (env.XDG_CONFIG_HOME) {
     return path.resolve(env.XDG_CONFIG_HOME, 'gitcrawl');
+  }
+  if (platform === 'win32' && env.APPDATA) {
+    return path.resolve(env.APPDATA, 'gitcrawl');
   }
   return path.join(resolveHomeDirectory(env), '.config', 'gitcrawl');
 }

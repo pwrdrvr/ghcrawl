@@ -587,10 +587,16 @@ function applyRect(element: blessed.Widgets.BoxElement | blessed.Widgets.ListEle
 }
 
 function openUrl(url: string): void {
-  const command = process.platform === 'darwin' ? 'open' : 'xdg-open';
-  const child = spawn(command, [url], {
+  const launch =
+    process.platform === 'darwin'
+      ? { command: 'open', args: [url] }
+      : process.platform === 'win32'
+        ? { command: 'cmd', args: ['/c', 'start', '', url] }
+        : { command: 'xdg-open', args: [url] };
+  const child = spawn(launch.command, launch.args, {
     detached: true,
     stdio: 'ignore',
+    windowsVerbatimArguments: process.platform === 'win32',
   });
   child.unref();
 }
@@ -601,7 +607,7 @@ async function pickRepository(service: GitcrawlService): Promise<{ owner: string
     .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || left.fullName.localeCompare(right.fullName));
 
   if (repositories.length === 0) {
-    throw new Error('No repositories found in the local DB. Run sync first.');
+    return await runColdStartOnboarding(service);
   }
 
   const screen = blessed.screen({
@@ -655,6 +661,147 @@ async function pickRepository(service: GitcrawlService): Promise<{ owner: string
       finish(selected ? { owner: selected.owner, repo: selected.name } : null);
     });
   });
+}
+
+async function runColdStartOnboarding(service: GitcrawlService): Promise<{ owner: string; repo: string } | null> {
+  const screen = blessed.screen({
+    smartCSR: true,
+    fullUnicode: true,
+    dockBorders: true,
+    autoPadding: false,
+    title: 'gitcrawl onboarding',
+  });
+
+  const info = blessed.box({
+    parent: screen,
+    top: 0,
+    left: 0,
+    width: '100%',
+    height: 6,
+    tags: true,
+    content: '{bold}No local repositories yet.{/bold}\n\nEnter an {bold}owner/repo{/bold} target and gitcrawl can run an initial sync, embed, and cluster pass for you.',
+    style: { fg: 'white', bg: '#0d1321' },
+  });
+  const log = blessed.log({
+    parent: screen,
+    top: 6,
+    left: 0,
+    width: '100%',
+    bottom: 1,
+    border: 'line',
+    label: ' Setup ',
+    tags: false,
+    scrollable: true,
+    alwaysScroll: true,
+    scrollbar: { ch: ' ' },
+    style: {
+      border: { fg: '#5bc0eb' },
+      fg: 'white',
+    },
+  });
+  const footer = blessed.box({
+    parent: screen,
+    bottom: 0,
+    left: 0,
+    width: '100%',
+    height: 1,
+    content: 'Enter owner/repo to begin. Press q to quit.',
+    style: { fg: 'black', bg: '#5bc0eb' },
+  });
+
+  screen.render();
+
+  return await new Promise<{ owner: string; repo: string } | null>((resolve) => {
+    const finish = (value: { owner: string; repo: string } | null): void => {
+      screen.destroy();
+      resolve(value);
+    };
+
+    screen.key(['q', 'C-c', 'escape'], () => finish(null));
+
+    const prompt = blessed.prompt({
+      parent: screen,
+      border: 'line',
+      height: 7,
+      width: '60%',
+      top: 'center',
+      left: 'center',
+      label: ' Initial Repository ',
+      tags: true,
+      keys: true,
+      vi: true,
+      style: {
+        border: { fg: 'cyan' },
+        bg: '#101522',
+      },
+    });
+
+    const askForRepository = (): void => {
+      prompt.input('Repository to sync (owner/repo)', '', async (_error, value) => {
+        const trimmed = (value ?? '').trim();
+        if (!trimmed) {
+          finish(null);
+          return;
+        }
+        const parsed = parseOwnerRepoValue(trimmed);
+        if (!parsed) {
+          log.log(`[setup] invalid repository target: ${trimmed}`);
+          footer.setContent('Use owner/repo format. Press q to quit.');
+          screen.render();
+          prompt.destroy();
+          askForRepository();
+          return;
+        }
+
+        prompt.destroy();
+        log.log(`[setup] starting initial setup for ${parsed.owner}/${parsed.repo}`);
+        footer.setContent('Running initial sync, embed, and cluster. This can take a while.');
+        screen.render();
+
+        try {
+          const reporter = (message: string): void => {
+            log.log(message);
+            screen.render();
+          };
+          await service.syncRepository({
+            owner: parsed.owner,
+            repo: parsed.repo,
+            onProgress: reporter,
+          });
+          await service.embedRepository({
+            owner: parsed.owner,
+            repo: parsed.repo,
+            onProgress: reporter,
+          });
+          service.clusterRepository({
+            owner: parsed.owner,
+            repo: parsed.repo,
+            onProgress: reporter,
+          });
+          log.log('[setup] initial setup complete');
+          finish(parsed);
+        } catch (error) {
+          log.log(`[setup] failed: ${error instanceof Error ? error.message : String(error)}`);
+          footer.setContent('Initial setup failed. Press q to quit or Enter to try another repo.');
+          screen.render();
+          screen.key(['enter'], () => {
+            screen.removeAllListeners('enter');
+            askForRepository();
+          });
+        }
+      });
+    };
+
+    askForRepository();
+  });
+}
+
+function parseOwnerRepoValue(value: string): { owner: string; repo: string } | null {
+  const parts = value.trim().split('/');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    return null;
+  }
+  return { owner: parts[0], repo: parts[1] };
 }
 
 function formatActivityTimestamp(now: Date = new Date()): string {

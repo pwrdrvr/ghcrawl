@@ -13,7 +13,6 @@
     "bootstrap": "pnpm --filter @gitcrawl/cli cli init",
     "doctor": "pnpm --filter @gitcrawl/cli cli doctor",
     "sync": "pnpm --filter @gitcrawl/cli cli sync",
-    "summarize": "pnpm --filter @gitcrawl/cli cli summarize",
     "embed": "pnpm --filter @gitcrawl/cli cli embed",
     "cluster": "pnpm --filter @gitcrawl/cli cli cluster",
     "search": "pnpm --filter @gitcrawl/cli cli search",

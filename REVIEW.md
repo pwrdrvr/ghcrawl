@@ -35,6 +35,6 @@ The config file is at `~/.config/gitcrawl/config.json` and is written with restr
 - [x] Add an in-TUI cluster refresh action so the app can complete sync -> embed -> cluster without dropping back to the shell.
 - [x] Escape Blessed tags in all user-provided text rendered into the detail pane.
 - [x] Return 4xx for malformed request bodies and validation failures in the local HTTP API.
-- [ ] Decide whether `summarize` and `purge-comments` are advanced supported commands or internal maintenance commands, then align help/scripts/docs accordingly.
-- [ ] Add a cold-start onboarding flow in the TUI for repos with no local data yet.
+- [x] Decide whether `summarize` and `purge-comments` are advanced supported commands or internal maintenance commands, then align help/scripts/docs accordingly.
+- [x] Add a cold-start onboarding flow in the TUI for repos with no local data yet.
 - [ ] Consider keychain-backed secret storage for macOS/Linux/Windows as a future security upgrade.

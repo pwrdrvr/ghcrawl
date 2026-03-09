@@ -18,6 +18,7 @@ test('run prints usage with no command', async () => {
   await run([], stdout);
   assert.match(output, /gitcrawl <command>/);
   assert.match(output, /tui \[owner\/repo\]/);
+  assert.doesNotMatch(output, /summarize <owner\/repo>/);
 });
 
 test('run prints usage for help flag', async () => {
@@ -32,6 +33,22 @@ test('run prints usage for help flag', async () => {
   await run(['--help'], stdout);
   assert.match(output, /gitcrawl <command>/);
   assert.match(output, /tui \[owner\/repo\]/);
+  assert.doesNotMatch(output, /summarize <owner\/repo>/);
+});
+
+test('run prints advanced commands when dev mode is enabled', async () => {
+  let output = '';
+  const stdout = {
+    write(chunk: string) {
+      output += chunk;
+      return true;
+    },
+  } as unknown as NodeJS.WritableStream;
+
+  await run(['--dev', '--help'], stdout);
+  assert.match(output, /Advanced Commands:/);
+  assert.match(output, /summarize <owner\/repo>/);
+  assert.match(output, /purge-comments <owner\/repo>/);
 });
 
 test('parseOwnerRepo accepts owner slash repo syntax', () => {
