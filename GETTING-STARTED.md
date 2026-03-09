@@ -11,7 +11,7 @@ This is the quickest way to run `gitcrawl` locally against `openclaw/openclaw`.
 
 ## Install
 
-From [gitcrawl](/Users/huntharo/github/gitcrawl):
+From `gitcrawl`:
 
 ```bash
 pnpm install
@@ -22,6 +22,7 @@ You can use the root helper scripts instead of the longer workspace filter form:
 ```bash
 pnpm bootstrap
 pnpm health
+pnpm refresh openclaw/openclaw
 pnpm tui openclaw/openclaw
 ```
 
@@ -133,6 +134,14 @@ Notes:
 
 ## Build embeddings and clusters
 
+Run the full staged refresh:
+
+```bash
+pnpm --filter @gitcrawl/cli cli refresh openclaw/openclaw
+```
+
+This runs sync, then embed, then cluster in the only allowed order.
+
 Generate embeddings:
 
 ```bash
@@ -159,6 +168,7 @@ pnpm --filter @gitcrawl/cli cli tui openclaw/openclaw
 
 Notes:
 
+- `refresh` is the easiest machine-facing command for agents and automation
 - `embed` defaults to `text-embedding-3-large`
 - `embed` creates separate vectors for `title` and `body`, and also uses stored summary text when present
 - unchanged embedding inputs are skipped by stored hash, so reruns do not resubmit identical text
@@ -169,6 +179,18 @@ Notes:
 - inside the TUI: `Tab` changes pane, `j/k` moves, `s` changes sort, `f` changes min cluster size, `p` opens repo browsing, `/` filters, `o` opens the selected GitHub URL, and `q` quits
 - sort order and min cluster size are remembered per repository
 - if you add a brand-new repo from inside the TUI, gitcrawl runs sync -> embed -> cluster and opens that repo at min cluster size `1+`
+
+Inspect the latest cluster list as JSON:
+
+```bash
+pnpm --filter @gitcrawl/cli cli clusters openclaw/openclaw --min-size 10 --limit 20 --sort recent
+```
+
+Inspect one cluster in detail as JSON:
+
+```bash
+pnpm --filter @gitcrawl/cli cli cluster-detail openclaw/openclaw --id 123 --member-limit 20 --body-chars 280
+```
 
 ## Search
 
@@ -209,6 +231,8 @@ Useful endpoints:
 - [http://127.0.0.1:5179/threads?owner=openclaw&repo=openclaw](http://127.0.0.1:5179/threads?owner=openclaw&repo=openclaw)
 - [http://127.0.0.1:5179/neighbors?owner=openclaw&repo=openclaw&number=42&limit=10](http://127.0.0.1:5179/neighbors?owner=openclaw&repo=openclaw&number=42&limit=10)
 - [http://127.0.0.1:5179/clusters?owner=openclaw&repo=openclaw](http://127.0.0.1:5179/clusters?owner=openclaw&repo=openclaw)
+- [http://127.0.0.1:5179/cluster-summaries?owner=openclaw&repo=openclaw&minSize=10&limit=20&sort=recent](http://127.0.0.1:5179/cluster-summaries?owner=openclaw&repo=openclaw&minSize=10&limit=20&sort=recent)
+- [http://127.0.0.1:5179/cluster-detail?owner=openclaw&repo=openclaw&clusterId=123&memberLimit=20&bodyChars=280](http://127.0.0.1:5179/cluster-detail?owner=openclaw&repo=openclaw&clusterId=123&memberLimit=20&bodyChars=280)
 - [http://127.0.0.1:5179/search?owner=openclaw&repo=openclaw&query=download%20stalls&mode=hybrid](http://127.0.0.1:5179/search?owner=openclaw&repo=openclaw&query=download%20stalls&mode=hybrid)
 
 ## Current limitations

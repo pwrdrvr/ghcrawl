@@ -37,20 +37,20 @@ Current priorities:
 
 ## Where To Read First
 
-- product/design: [docs/DESIGN.md](/Users/huntharo/github/gitcrawl/docs/DESIGN.md)
-- implementation status and next phases: [docs/PLAN.md](/Users/huntharo/github/gitcrawl/docs/PLAN.md)
-- operator overview: [README.md](/Users/huntharo/github/gitcrawl/README.md)
-- local usage walkthrough: [GETTING-STARTED.md](/Users/huntharo/github/gitcrawl/GETTING-STARTED.md)
+- product/design: [docs/DESIGN.md](./docs/DESIGN.md)
+- implementation status and next phases: [docs/PLAN.md](./docs/PLAN.md)
+- operator overview: [README.md](./README.md)
+- local usage walkthrough: [GETTING-STARTED.md](./GETTING-STARTED.md)
 
 ## Code Areas
 
-- CLI entrypoint: [apps/cli/src/main.ts](/Users/huntharo/github/gitcrawl/apps/cli/src/main.ts)
-- core service orchestration: [packages/api-core/src/service.ts](/Users/huntharo/github/gitcrawl/packages/api-core/src/service.ts)
-- local HTTP API: [packages/api-core/src/api/server.ts](/Users/huntharo/github/gitcrawl/packages/api-core/src/api/server.ts)
-- shared schemas/contracts: [packages/api-contract/src/contracts.ts](/Users/huntharo/github/gitcrawl/packages/api-contract/src/contracts.ts)
-- GitHub client: [packages/api-core/src/github/client.ts](/Users/huntharo/github/gitcrawl/packages/api-core/src/github/client.ts)
-- OpenAI provider: [packages/api-core/src/openai/provider.ts](/Users/huntharo/github/gitcrawl/packages/api-core/src/openai/provider.ts)
-- SQLite migration/schema: [packages/api-core/src/db/migrate.ts](/Users/huntharo/github/gitcrawl/packages/api-core/src/db/migrate.ts)
+- CLI entrypoint: [apps/cli/src/main.ts](./apps/cli/src/main.ts)
+- core service orchestration: [packages/api-core/src/service.ts](./packages/api-core/src/service.ts)
+- local HTTP API: [packages/api-core/src/api/server.ts](./packages/api-core/src/api/server.ts)
+- shared schemas/contracts: [packages/api-contract/src/contracts.ts](./packages/api-contract/src/contracts.ts)
+- GitHub client: [packages/api-core/src/github/client.ts](./packages/api-core/src/github/client.ts)
+- OpenAI provider: [packages/api-core/src/openai/provider.ts](./packages/api-core/src/openai/provider.ts)
+- SQLite migration/schema: [packages/api-core/src/db/migrate.ts](./packages/api-core/src/db/migrate.ts)
 
 ## Working Rules
 

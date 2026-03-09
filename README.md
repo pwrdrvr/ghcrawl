@@ -16,7 +16,7 @@ pnpm bootstrap
 pnpm health
 ```
 
-For a full first-run walkthrough against `openclaw/openclaw`, see [GETTING-STARTED.md](/Users/huntharo/github/gitcrawl/GETTING-STARTED.md).
+For a full first-run walkthrough against `openclaw/openclaw`, see [GETTING-STARTED.md](./GETTING-STARTED.md).
 
 `pnpm bootstrap` runs the interactive setup wizard the first time. It can either save plaintext keys in `~/.config/gitcrawl/config.json` or guide you through a 1Password CLI (`op`) setup that keeps keys out of the config file. You do not need a repo-local `.env.local` file for normal use.
 
@@ -39,8 +39,11 @@ The root package exposes pass-through helpers so you do not need to remember the
 ```bash
 pnpm tui openclaw/openclaw
 pnpm sync openclaw/openclaw --since 7d
+pnpm refresh openclaw/openclaw
 pnpm embed openclaw/openclaw
 pnpm cluster openclaw/openclaw
+pnpm clusters openclaw/openclaw --min-size 10 --limit 20
+pnpm cluster-detail openclaw/openclaw --id 123
 pnpm search openclaw/openclaw --query "download stalls"
 pnpm health
 pnpm serve
@@ -53,7 +56,34 @@ The CLI package exposes a real `gitcrawl` bin entrypoint for installed use:
 ```bash
 gitcrawl tui openclaw/openclaw
 gitcrawl sync openclaw/openclaw --since 7d
+gitcrawl refresh openclaw/openclaw
 ```
+
+## Agent Skill
+
+This repo now ships an installable skill at [skills/gitcrawl/SKILL.md](./skills/gitcrawl/SKILL.md).
+
+It is meant for Codex Desktop / Codex CLI style skill installs and follows the same `SKILL.md` + `agents/openai.yaml` layout used by Vercel-style skill repos.
+
+To install it locally for Codex Desktop, copy this folder into your skills directory:
+
+```bash
+mkdir -p ~/.codex/skills
+cp -R ./skills/gitcrawl ~/.codex/skills/gitcrawl
+```
+
+If you use the older agents layout instead, copy it to `~/.agents/skills/gitcrawl`.
+
+The skill is built around the stable JSON CLI surface:
+
+```bash
+gitcrawl doctor --json
+gitcrawl refresh owner/repo
+gitcrawl clusters owner/repo --min-size 10 --limit 20 --sort recent
+gitcrawl cluster-detail owner/repo --id 123 --member-limit 20 --body-chars 280
+```
+
+The agent/build contract for this repo now lives in [SPEC.md](./SPEC.md).
 
 ## Release Flow
 
@@ -72,10 +102,13 @@ CI also runs a package smoke check on pull requests and `main` by packing the pu
 
 ```bash
 pnpm --filter @gitcrawl/cli cli sync openclaw/openclaw
+pnpm --filter @gitcrawl/cli cli refresh openclaw/openclaw
 pnpm --filter @gitcrawl/cli cli sync openclaw/openclaw --limit 25
 pnpm --filter @gitcrawl/cli cli sync openclaw/openclaw --include-comments --limit 25
 pnpm --filter @gitcrawl/cli cli embed openclaw/openclaw
 pnpm --filter @gitcrawl/cli cli cluster openclaw/openclaw
+pnpm --filter @gitcrawl/cli cli clusters openclaw/openclaw --min-size 10 --limit 20
+pnpm --filter @gitcrawl/cli cli cluster-detail openclaw/openclaw --id 123 --member-limit 20 --body-chars 280
 pnpm --filter @gitcrawl/cli cli neighbors openclaw/openclaw --number 42 --limit 10
 pnpm --filter @gitcrawl/cli cli search openclaw/openclaw --query "download stalls"
 pnpm --filter @gitcrawl/cli cli tui openclaw/openclaw

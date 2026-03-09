@@ -1,0 +1,4 @@
+interface:
+  display_name: "gitcrawl"
+  short_description: "Refresh and inspect local GitHub issue/PR clusters"
+  default_prompt: "Use $gitcrawl to refresh a repo locally, list the latest clusters, and inspect one cluster in detail."
