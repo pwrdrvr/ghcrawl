@@ -17,6 +17,8 @@ The skill has two modes:
 
 Even in API-enabled mode, never run `sync`, `embed`, `cluster`, or `refresh` unless the user explicitly asks for that work. Those commands can take a long time, consume paid API usage, and trigger rate limiting if used too often.
 
+Also never run `close-thread` or `close-cluster` unless the user explicitly asks you to mark a local thread or cluster closed.
+
 ## When to use this skill
 
 - The user wants related issue/PR clusters for one repo.
@@ -54,9 +56,25 @@ ghcrawl neighbors owner/repo --number 42 --limit 10
 
 These operate on the existing local SQLite dataset.
 
+By default:
+
+- `threads` and `author` hide locally closed issues/PRs
+- `clusters` and `cluster-detail` hide locally closed clusters
+
+If the user explicitly wants to inspect those records, add `--include-closed`.
+
 Use `threads --numbers ...` when you need a batch of specific issue/PR records. Do not pay the CLI startup cost 10 times for 10 separate single-thread lookups.
 
 Use `author --login ...` when you need one author's open threads and their strongest stored same-author similarity matches in one call.
+
+If the user explicitly asks to mark a local issue/PR or cluster closed, use:
+
+```bash
+ghcrawl close-thread owner/repo --number 42
+ghcrawl close-cluster owner/repo --id 123
+```
+
+If `close-thread` closes the last open item in a cluster, ghcrawl will automatically mark that cluster closed too.
 
 ### 2. Check local health only when needed
 

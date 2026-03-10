@@ -21,6 +21,8 @@ test('run prints usage with no command', async () => {
   assert.match(output, /refresh <owner\/repo>/);
   assert.match(output, /threads <owner\/repo>/);
   assert.match(output, /author <owner\/repo> --login <user>/);
+  assert.match(output, /close-thread <owner\/repo> --number <thread>/);
+  assert.match(output, /close-cluster <owner\/repo> --id <cluster-id>/);
   assert.match(output, /clusters <owner\/repo>/);
   assert.match(output, /cluster-detail <owner\/repo>/);
   assert.match(output, /tui \[owner\/repo\]/);
@@ -42,6 +44,7 @@ test('run prints usage for help flag', async () => {
   assert.match(output, /refresh <owner\/repo>/);
   assert.match(output, /threads <owner\/repo>/);
   assert.match(output, /author <owner\/repo> --login <user>/);
+  assert.match(output, /close-thread <owner\/repo> --number <thread>/);
   assert.match(output, /tui \[owner\/repo\]/);
   assert.doesNotMatch(output, /summarize <owner\/repo>/);
 });
@@ -150,6 +153,13 @@ test('parseRepoFlags accepts full-reconcile boolean flag', () => {
   assert.equal(parsed.owner, 'openclaw');
   assert.equal(parsed.repo, 'openclaw');
   assert.equal(parsed.values['full-reconcile'], true);
+});
+
+test('parseRepoFlags accepts include-closed boolean flag', () => {
+  const parsed = parseRepoFlags(['openclaw/openclaw', '--include-closed']);
+  assert.equal(parsed.owner, 'openclaw');
+  assert.equal(parsed.repo, 'openclaw');
+  assert.equal(parsed.values['include-closed'], true);
 });
 
 test('resolveSinceValue keeps ISO timestamps', () => {

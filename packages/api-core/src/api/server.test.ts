@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { authorThreadsResponseSchema, clusterDetailResponseSchema, clusterSummariesResponseSchema, healthResponseSchema, neighborsResponseSchema, threadsResponseSchema } from '@ghcrawl/api-contract';
+import { authorThreadsResponseSchema, closeResponseSchema, clusterDetailResponseSchema, clusterSummariesResponseSchema, healthResponseSchema, neighborsResponseSchema, threadsResponseSchema } from '@ghcrawl/api-contract';
 
 import { createApiServer } from './server.js';
 import { GHCrawlService } from '../service.js';
@@ -290,6 +290,89 @@ test('author-threads endpoint returns one author with strongest same-author matc
     assert.equal(payload.authorLogin, 'lqquan');
     assert.deepEqual(payload.threads.map((item) => item.thread.number), [43, 42]);
     assert.equal(payload.threads[0]?.strongestSameAuthorMatch?.number, 42);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    service.close();
+  }
+});
+
+test('close-thread and includeClosed thread routes expose locally closed items', async () => {
+  const service = new GHCrawlService({
+    config: {
+      workspaceRoot: process.cwd(),
+      configDir: '/tmp/ghcrawl-test',
+      configPath: '/tmp/ghcrawl-test/config.json',
+      configFileExists: true,
+      dbPath: ':memory:',
+      dbPathSource: 'config',
+      apiPort: 5179,
+      secretProvider: 'plaintext',
+      githubTokenSource: 'none',
+      openaiApiKeySource: 'none',
+      summaryModel: 'gpt-5-mini',
+      embedModel: 'text-embedding-3-large',
+      embedBatchSize: 8,
+      embedConcurrency: 10,
+      embedMaxUnread: 20,
+      openSearchIndex: 'ghcrawl-threads',
+      tuiPreferences: {},
+    },
+    github: {
+      checkAuth: async () => undefined,
+      getRepo: async () => ({}),
+      listRepositoryIssues: async () => [],
+      getIssue: async () => ({}),
+      getPull: async () => ({}),
+      listIssueComments: async () => [],
+      listPullReviews: async () => [],
+      listPullReviewComments: async () => [],
+    },
+  });
+
+  const now = '2026-03-09T00:00:00Z';
+  service.db
+    .prepare(
+      `insert into repositories (id, owner, name, full_name, github_repo_id, raw_json, updated_at)
+       values (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '1', '{}', now);
+  service.db
+    .prepare(
+      `insert into threads (
+        id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
+        labels_json, assignees_json, raw_json, content_hash, is_draft, created_at_gh, updated_at_gh, closed_at_gh,
+        merged_at_gh, first_pulled_at, last_pulled_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(10, 1, '100', 42, 'issue', 'open', 'Downloader hangs', 'The transfer never finishes.', 'alice', 'User', 'https://github.com/openclaw/openclaw/issues/42', '[]', '[]', '{}', 'hash-42', 0, now, now, null, null, now, now, now);
+
+  const server = createApiServer(service);
+  try {
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert(address && typeof address === 'object');
+
+    const closeResponse = await fetch(`http://127.0.0.1:${address.port}/actions/close-thread`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ owner: 'openclaw', repo: 'openclaw', threadNumber: 42 }),
+    });
+    assert.equal(closeResponse.status, 200);
+    const closedPayload = closeResponseSchema.parse((await closeResponse.json()) as unknown);
+    assert.equal(closedPayload.thread?.isClosed, true);
+
+    const defaultResponse = await fetch(`http://127.0.0.1:${address.port}/threads?owner=openclaw&repo=openclaw`);
+    assert.equal(defaultResponse.status, 200);
+    const defaultPayload = threadsResponseSchema.parse((await defaultResponse.json()) as unknown);
+    assert.equal(defaultPayload.threads.length, 0);
+
+    const includeClosedResponse = await fetch(
+      `http://127.0.0.1:${address.port}/threads?owner=openclaw&repo=openclaw&includeClosed=true`,
+    );
+    assert.equal(includeClosedResponse.status, 200);
+    const includeClosedPayload = threadsResponseSchema.parse((await includeClosedResponse.json()) as unknown);
+    assert.equal(includeClosedPayload.threads.length, 1);
+    assert.equal(includeClosedPayload.threads[0]?.isClosed, true);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     service.close();

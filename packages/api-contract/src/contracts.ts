@@ -22,6 +22,10 @@ export const threadSchema = z.object({
   number: z.number().int().positive(),
   kind: threadKindSchema,
   state: z.string(),
+  isClosed: z.boolean(),
+  closedAtGh: z.string().nullable().optional(),
+  closedAtLocal: z.string().nullable().optional(),
+  closeReasonLocal: z.string().nullable().optional(),
   title: z.string(),
   body: z.string().nullable(),
   authorLogin: z.string().nullable(),
@@ -104,6 +108,7 @@ export const clusterMemberSchema = z.object({
   threadId: z.number().int().positive(),
   number: z.number().int().positive(),
   kind: threadKindSchema,
+  isClosed: z.boolean().default(false),
   title: z.string(),
   scoreToRepresentative: z.number().nullable(),
 });
@@ -112,6 +117,9 @@ export type ClusterMemberDto = z.infer<typeof clusterMemberSchema>;
 export const clusterSchema = z.object({
   id: z.number().int().positive(),
   repoId: z.number().int().positive(),
+  isClosed: z.boolean().default(false),
+  closedAtLocal: z.string().nullable().optional(),
+  closeReasonLocal: z.string().nullable().optional(),
   representativeThreadId: z.number().int().positive().nullable(),
   memberCount: z.number().int().nonnegative(),
   members: z.array(clusterMemberSchema),
@@ -139,6 +147,9 @@ export type RepoStatsDto = z.infer<typeof repoStatsSchema>;
 export const clusterSummarySchema = z.object({
   clusterId: z.number().int().positive(),
   displayTitle: z.string(),
+  isClosed: z.boolean().default(false),
+  closedAtLocal: z.string().nullable().optional(),
+  closeReasonLocal: z.string().nullable().optional(),
   totalCount: z.number().int().nonnegative(),
   issueCount: z.number().int().nonnegative(),
   pullRequestCount: z.number().int().nonnegative(),
@@ -221,6 +232,30 @@ export const refreshResponseSchema = z.object({
   cluster: clusterResultSchema.nullable(),
 });
 export type RefreshResponse = z.infer<typeof refreshResponseSchema>;
+
+export const closeThreadRequestSchema = z.object({
+  owner: z.string(),
+  repo: z.string(),
+  threadNumber: z.number().int().positive(),
+});
+export type CloseThreadRequest = z.infer<typeof closeThreadRequestSchema>;
+
+export const closeClusterRequestSchema = z.object({
+  owner: z.string(),
+  repo: z.string(),
+  clusterId: z.number().int().positive(),
+});
+export type CloseClusterRequest = z.infer<typeof closeClusterRequestSchema>;
+
+export const closeResponseSchema = z.object({
+  ok: z.boolean(),
+  repository: repositorySchema,
+  thread: threadSchema.nullable().optional(),
+  clusterId: z.number().int().positive().nullable().optional(),
+  clusterClosed: z.boolean().optional(),
+  message: z.string(),
+});
+export type CloseResponse = z.infer<typeof closeResponseSchema>;
 
 export const rerunActionSchema = z.enum(['summarize', 'embed', 'cluster']);
 export type RerunAction = z.infer<typeof rerunActionSchema>;

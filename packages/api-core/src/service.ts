@@ -5,6 +5,7 @@ import { IterableMapper } from '@shutterstock/p-map-iterable';
 import {
   actionResponseSchema,
   authorThreadsResponseSchema,
+  closeResponseSchema,
   clusterDetailResponseSchema,
   clusterResultSchema,
   clusterSummariesResponseSchema,
@@ -20,6 +21,7 @@ import {
   type ActionRequest,
   type ActionResponse,
   type AuthorThreadsResponse,
+  type CloseResponse,
   type ClusterDetailResponse,
   type ClusterDto,
   type ClusterResultDto,
@@ -65,6 +67,9 @@ type ThreadRow = {
   number: number;
   kind: 'issue' | 'pull_request';
   state: string;
+  closed_at_gh: string | null;
+  closed_at_local: string | null;
+  close_reason_local: string | null;
   title: string;
   body: string | null;
   author_login: string | null;
@@ -161,6 +166,9 @@ export type TuiRepoStats = {
 export type TuiClusterSummary = {
   clusterId: number;
   displayTitle: string;
+  isClosed: boolean;
+  closedAtLocal: string | null;
+  closeReasonLocal: string | null;
   totalCount: number;
   issueCount: number;
   pullRequestCount: number;
@@ -175,6 +183,7 @@ export type TuiClusterMember = {
   id: number;
   number: number;
   kind: 'issue' | 'pull_request';
+  isClosed: boolean;
   title: string;
   updatedAtGh: string | null;
   htmlUrl: string;
@@ -185,6 +194,9 @@ export type TuiClusterMember = {
 export type TuiClusterDetail = {
   clusterId: number;
   displayTitle: string;
+  isClosed: boolean;
+  closedAtLocal: string | null;
+  closeReasonLocal: string | null;
   totalCount: number;
   issueCount: number;
   pullRequestCount: number;
@@ -256,6 +268,10 @@ function parseIso(value: string | null | undefined): number | null {
   if (!value) return null;
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? null : parsed;
+}
+
+function isEffectivelyClosed(row: { state: string; closed_at_local: string | null }): boolean {
+  return row.state !== 'open' || row.closed_at_local !== null;
 }
 
 function isMissingGitHubResourceError(error: unknown): boolean {
@@ -387,6 +403,10 @@ function threadToDto(row: ThreadRow, clusterId?: number | null): ThreadDto {
     number: row.number,
     kind: row.kind,
     state: row.state,
+    isClosed: isEffectivelyClosed(row),
+    closedAtGh: row.closed_at_gh ?? null,
+    closedAtLocal: row.closed_at_local ?? null,
+    closeReasonLocal: row.close_reason_local ?? null,
     title: row.title,
     body: row.body,
     authorLogin: row.author_login,
@@ -494,7 +514,7 @@ export class GHCrawlService {
     return repositoriesResponseSchema.parse({ repositories: rows.map(repositoryToDto) });
   }
 
-  listThreads(params: { owner: string; repo: string; kind?: 'issue' | 'pull_request'; numbers?: number[] }): ThreadsResponse {
+  listThreads(params: { owner: string; repo: string; kind?: 'issue' | 'pull_request'; numbers?: number[]; includeClosed?: boolean }): ThreadsResponse {
     const repository = this.requireRepository(params.owner, params.repo);
     const clusterIds = new Map<number, number>();
     const clusterRows = this.db
@@ -509,8 +529,11 @@ export class GHCrawlService {
       .all(repository.id, repository.id) as Array<{ thread_id: number; cluster_id: number }>;
     for (const row of clusterRows) clusterIds.set(row.thread_id, row.cluster_id);
 
-    let sql = "select * from threads where repo_id = ? and state = 'open'";
+    let sql = 'select * from threads where repo_id = ?';
     const args: Array<string | number> = [repository.id];
+    if (!params.includeClosed) {
+      sql += " and state = 'open' and closed_at_local is null";
+    }
     if (params.kind) {
       sql += ' and kind = ?';
       args.push(params.kind);
@@ -542,7 +565,7 @@ export class GHCrawlService {
     });
   }
 
-  listAuthorThreads(params: { owner: string; repo: string; login: string }): AuthorThreadsResponse {
+  listAuthorThreads(params: { owner: string; repo: string; login: string; includeClosed?: boolean }): AuthorThreadsResponse {
     const repository = this.requireRepository(params.owner, params.repo);
     const normalizedLogin = params.login.trim();
     if (!normalizedLogin) {
@@ -570,7 +593,8 @@ export class GHCrawlService {
       .prepare(
         `select *
          from threads
-         where repo_id = ? and state = 'open' and lower(author_login) = lower(?)
+         where repo_id = ? and lower(author_login) = lower(?)
+           ${params.includeClosed ? '' : "and state = 'open' and closed_at_local is null"}
          order by updated_at_gh desc, number desc`,
       )
       .all(repository.id, normalizedLogin) as ThreadRow[];
@@ -597,8 +621,7 @@ export class GHCrawlService {
              and se.cluster_run_id = ?
              and lower(t1.author_login) = lower(?)
              and lower(t2.author_login) = lower(?)
-             and t1.state = 'open'
-             and t2.state = 'open'`,
+             ${params.includeClosed ? '' : "and t1.state = 'open' and t1.closed_at_local is null and t2.state = 'open' and t2.closed_at_local is null"}`,
         )
         .all(repository.id, latestRun.id, normalizedLogin, normalizedLogin) as Array<{
         left_thread_id: number;
@@ -647,6 +670,74 @@ export class GHCrawlService {
         thread: threadToDto(row, clusterIds.get(row.id) ?? null),
         strongestSameAuthorMatch: strongestByThread.get(row.id) ?? null,
       })),
+    });
+  }
+
+  closeThreadLocally(params: { owner: string; repo: string; threadNumber: number }): CloseResponse {
+    const repository = this.requireRepository(params.owner, params.repo);
+    const row = this.db
+      .prepare('select * from threads where repo_id = ? and number = ? limit 1')
+      .get(repository.id, params.threadNumber) as ThreadRow | undefined;
+    if (!row) {
+      throw new Error(`Thread #${params.threadNumber} was not found for ${repository.fullName}.`);
+    }
+
+    const closedAt = nowIso();
+    this.db
+      .prepare(
+        `update threads
+         set closed_at_local = ?,
+             close_reason_local = 'manual',
+             updated_at = ?
+         where id = ?`,
+      )
+      .run(closedAt, closedAt, row.id);
+    this.parsedEmbeddingCache.delete(repository.id);
+
+    const clusterIds = this.getLatestRunClusterIdsForThread(repository.id, row.id);
+    const clusterClosed = this.reconcileClusterCloseState(repository.id, clusterIds) > 0;
+    const updated = this.db.prepare('select * from threads where id = ? limit 1').get(row.id) as ThreadRow;
+
+    return closeResponseSchema.parse({
+      ok: true,
+      repository,
+      thread: threadToDto(updated),
+      clusterId: clusterIds[0] ?? null,
+      clusterClosed,
+      message: `Marked ${updated.kind} #${updated.number} closed locally.`,
+    });
+  }
+
+  closeClusterLocally(params: { owner: string; repo: string; clusterId: number }): CloseResponse {
+    const repository = this.requireRepository(params.owner, params.repo);
+    const latestRun = this.getLatestClusterRun(repository.id);
+    if (!latestRun) {
+      throw new Error(`No completed cluster run found for ${repository.fullName}.`);
+    }
+
+    const row = this.db
+      .prepare('select id from clusters where repo_id = ? and cluster_run_id = ? and id = ? limit 1')
+      .get(repository.id, latestRun.id, params.clusterId) as { id: number } | undefined;
+    if (!row) {
+      throw new Error(`Cluster ${params.clusterId} was not found for ${repository.fullName}.`);
+    }
+
+    const closedAt = nowIso();
+    this.db
+      .prepare(
+        `update clusters
+         set closed_at_local = ?,
+             close_reason_local = 'manual'
+         where id = ?`,
+      )
+      .run(closedAt, row.id);
+
+    return closeResponseSchema.parse({
+      ok: true,
+      repository,
+      clusterId: row.id,
+      clusterClosed: true,
+      message: `Marked cluster ${row.id} closed locally.`,
     });
   }
 
@@ -752,6 +843,10 @@ export class GHCrawlService {
           })
         : 0;
       const threadsClosed = threadsClosedFromClosedSweep + threadsClosedFromDirectReconcile;
+      this.parsedEmbeddingCache.delete(repoId);
+      if (threadsClosed > 0) {
+        this.reconcileClusterCloseState(repoId);
+      }
       const finishedAt = nowIso();
       const reconciledOpenCloseAt = shouldSweepClosedOverlap || shouldReconcileMissingOpenThreads ? finishedAt : null;
       const nextSyncCursor: SyncCursorState = {
@@ -1054,7 +1149,7 @@ export class GHCrawlService {
            from documents_fts
            join documents d on d.id = documents_fts.rowid
            join threads t on t.id = d.thread_id
-           where t.repo_id = ? and t.state = 'open' and documents_fts match ?
+         where t.repo_id = ? and t.state = 'open' and t.closed_at_local is null and documents_fts match ?
            order by rank
            limit ?`,
         )
@@ -1079,7 +1174,7 @@ export class GHCrawlService {
       ? (this.db
           .prepare(
             `select * from threads
-             where repo_id = ? and state = 'open' and id in (${[...candidateIds].map(() => '?').join(',')})
+             where repo_id = ? and state = 'open' and closed_at_local is null and id in (${[...candidateIds].map(() => '?').join(',')})
              order by updated_at_gh desc, number desc`,
           )
           .all(repository.id, ...candidateIds) as ThreadRow[])
@@ -1210,7 +1305,7 @@ export class GHCrawlService {
     });
   }
 
-  listClusters(params: { owner: string; repo: string }): ClustersResponse {
+  listClusters(params: { owner: string; repo: string; includeClosed?: boolean }): ClustersResponse {
     const repository = this.requireRepository(params.owner, params.repo);
     const latestRun = this.db
       .prepare("select id from cluster_runs where repo_id = ? and status = 'completed' order by id desc limit 1")
@@ -1223,7 +1318,8 @@ export class GHCrawlService {
     const rows = this.db
       .prepare(
         `select c.id, c.repo_id, c.representative_thread_id, c.member_count,
-                cm.thread_id, cm.score_to_representative, t.number, t.kind, t.title
+                c.closed_at_local, c.close_reason_local,
+                cm.thread_id, cm.score_to_representative, t.number, t.kind, t.title, t.state, t.closed_at_local as thread_closed_at_local
          from clusters c
          left join cluster_members cm on cm.cluster_id = c.id
          left join threads t on t.id = cm.thread_id
@@ -1235,11 +1331,15 @@ export class GHCrawlService {
         repo_id: number;
         representative_thread_id: number | null;
         member_count: number;
+        closed_at_local: string | null;
+        close_reason_local: string | null;
         thread_id: number | null;
         score_to_representative: number | null;
         number: number | null;
         kind: 'issue' | 'pull_request' | null;
         title: string | null;
+        state: string | null;
+        thread_closed_at_local: string | null;
       }>;
 
     const clusters = new Map<number, ClusterDto>();
@@ -1247,6 +1347,9 @@ export class GHCrawlService {
       const cluster = clusters.get(row.id) ?? {
         id: row.id,
         repoId: row.repo_id,
+        isClosed: row.close_reason_local !== null,
+        closedAtLocal: row.closed_at_local,
+        closeReasonLocal: row.close_reason_local,
         representativeThreadId: row.representative_thread_id,
         memberCount: row.member_count,
         members: [],
@@ -1256,6 +1359,7 @@ export class GHCrawlService {
           threadId: row.thread_id,
           number: row.number,
           kind: row.kind,
+          isClosed: row.state !== null && isEffectivelyClosed({ state: row.state, closed_at_local: row.thread_closed_at_local }),
           title: row.title,
           scoreToRepresentative: row.score_to_representative,
         });
@@ -1263,9 +1367,14 @@ export class GHCrawlService {
       clusters.set(row.id, cluster);
     }
 
+    const clusterValues = Array.from(clusters.values()).map((cluster) => ({
+      ...cluster,
+      isClosed: cluster.isClosed || (cluster.memberCount > 0 && cluster.members.every((member) => member.isClosed)),
+    }));
+
     return clustersResponseSchema.parse({
       repository,
-      clusters: Array.from(clusters.values()),
+      clusters: clusterValues.filter((cluster) => (params.includeClosed ? true : !cluster.isClosed)),
     });
   }
 
@@ -1333,6 +1442,7 @@ export class GHCrawlService {
     limit?: number;
     sort?: TuiClusterSortMode;
     search?: string;
+    includeClosed?: boolean;
   }): ClusterSummariesResponse {
     const snapshot = this.getTuiSnapshot({
       owner: params.owner,
@@ -1340,6 +1450,7 @@ export class GHCrawlService {
       minSize: params.minSize,
       sort: params.sort,
       search: params.search,
+      includeClosedClusters: params.includeClosed === true,
     });
     const clusters = params.limit ? snapshot.clusters.slice(0, params.limit) : snapshot.clusters;
     return clusterSummariesResponseSchema.parse({
@@ -1348,6 +1459,9 @@ export class GHCrawlService {
       clusters: clusters.map((cluster) => ({
         clusterId: cluster.clusterId,
         displayTitle: cluster.displayTitle,
+        isClosed: cluster.isClosed,
+        closedAtLocal: cluster.closedAtLocal,
+        closeReasonLocal: cluster.closeReasonLocal,
         totalCount: cluster.totalCount,
         issueCount: cluster.issueCount,
         pullRequestCount: cluster.pullRequestCount,
@@ -1365,11 +1479,13 @@ export class GHCrawlService {
     clusterId: number;
     memberLimit?: number;
     bodyChars?: number;
+    includeClosed?: boolean;
   }): ClusterDetailResponse {
     const snapshot = this.getTuiSnapshot({
       owner: params.owner,
       repo: params.repo,
       minSize: 0,
+      includeClosedClusters: params.includeClosed === true,
     });
     const cluster = snapshot.clusters.find((item) => item.clusterId === params.clusterId);
     if (!cluster) {
@@ -1404,6 +1520,9 @@ export class GHCrawlService {
       cluster: {
         clusterId: cluster.clusterId,
         displayTitle: cluster.displayTitle,
+        isClosed: cluster.isClosed,
+        closedAtLocal: cluster.closedAtLocal,
+        closeReasonLocal: cluster.closeReasonLocal,
         totalCount: cluster.totalCount,
         issueCount: cluster.issueCount,
         pullRequestCount: cluster.pullRequestCount,
@@ -1422,6 +1541,7 @@ export class GHCrawlService {
     minSize?: number;
     sort?: TuiClusterSortMode;
     search?: string;
+    includeClosedClusters?: boolean;
   }): TuiSnapshot {
     const repository = this.requireRepository(params.owner, params.repo);
     const stats = this.getTuiRepoStats(repository.id);
@@ -1430,7 +1550,9 @@ export class GHCrawlService {
       return { repository, stats, clusters: [] };
     }
 
+    const includeClosedClusters = params.includeClosedClusters ?? true;
     const clusters = this.listRawTuiClusters(repository.id, latestRun.id)
+      .filter((cluster) => (includeClosedClusters ? true : !cluster.isClosed))
       .filter((cluster) => cluster.totalCount >= (params.minSize ?? 10))
       .filter((cluster) => {
         const search = params.search?.trim().toLowerCase();
@@ -1460,7 +1582,7 @@ export class GHCrawlService {
 
     const rows = this.db
       .prepare(
-        `select t.id, t.number, t.kind, t.title, t.updated_at_gh, t.html_url, t.labels_json, cm.score_to_representative
+        `select t.id, t.number, t.kind, t.state, t.closed_at_local, t.title, t.updated_at_gh, t.html_url, t.labels_json, cm.score_to_representative
          from cluster_members cm
          join threads t on t.id = cm.thread_id
          where cm.cluster_id = ?
@@ -1473,6 +1595,8 @@ export class GHCrawlService {
         id: number;
         number: number;
         kind: 'issue' | 'pull_request';
+        state: string;
+        closed_at_local: string | null;
         title: string;
         updated_at_gh: string | null;
         html_url: string;
@@ -1483,6 +1607,9 @@ export class GHCrawlService {
     return {
       clusterId: summary.clusterId,
       displayTitle: summary.displayTitle,
+      isClosed: summary.isClosed,
+      closedAtLocal: summary.closedAtLocal,
+      closeReasonLocal: summary.closeReasonLocal,
       totalCount: summary.totalCount,
       issueCount: summary.issueCount,
       pullRequestCount: summary.pullRequestCount,
@@ -1494,6 +1621,7 @@ export class GHCrawlService {
         id: row.id,
         number: row.number,
         kind: row.kind,
+        isClosed: isEffectivelyClosed(row),
         title: row.title,
         updatedAtGh: row.updated_at_gh,
         htmlUrl: row.html_url,
@@ -1513,11 +1641,11 @@ export class GHCrawlService {
     const repository = this.requireRepository(params.owner, params.repo);
     const row = params.threadId
       ? ((this.db
-          .prepare('select * from threads where repo_id = ? and id = ? and state = \'open\' limit 1')
+          .prepare('select * from threads where repo_id = ? and id = ? limit 1')
           .get(repository.id, params.threadId) as ThreadRow | undefined) ?? null)
       : params.threadNumber
         ? ((this.db
-            .prepare('select * from threads where repo_id = ? and number = ? and state = \'open\' limit 1')
+            .prepare('select * from threads where repo_id = ? and number = ? limit 1')
             .get(repository.id, params.threadNumber) as ThreadRow | undefined) ?? null)
         : null;
 
@@ -1715,7 +1843,7 @@ export class GHCrawlService {
       .prepare(
         `select kind, count(*) as count
          from threads
-         where repo_id = ? and state = 'open'
+         where repo_id = ? and state = 'open' and closed_at_local is null
          group by kind`,
       )
       .all(repoId) as Array<{ kind: 'issue' | 'pull_request'; count: number }>;
@@ -1748,12 +1876,100 @@ export class GHCrawlService {
     );
   }
 
+  private getLatestRunClusterIdsForThread(repoId: number, threadId: number): number[] {
+    const latestRun = this.getLatestClusterRun(repoId);
+    if (!latestRun) {
+      return [];
+    }
+    return (
+      this.db
+        .prepare(
+          `select cm.cluster_id
+           from cluster_members cm
+           join clusters c on c.id = cm.cluster_id
+           where c.repo_id = ? and c.cluster_run_id = ? and cm.thread_id = ?
+           order by cm.cluster_id asc`,
+        )
+        .all(repoId, latestRun.id, threadId) as Array<{ cluster_id: number }>
+    ).map((row) => row.cluster_id);
+  }
+
+  private reconcileClusterCloseState(repoId: number, clusterIds?: number[]): number {
+    const latestRun = this.getLatestClusterRun(repoId);
+    if (!latestRun) {
+      return 0;
+    }
+
+    const resolvedClusterIds =
+      clusterIds && clusterIds.length > 0
+        ? Array.from(new Set(clusterIds))
+        : (
+            this.db
+              .prepare('select id from clusters where repo_id = ? and cluster_run_id = ? order by id asc')
+              .all(repoId, latestRun.id) as Array<{ id: number }>
+          ).map((row) => row.id);
+    if (resolvedClusterIds.length === 0) {
+      return 0;
+    }
+
+    const summarize = this.db.prepare(
+      `select
+          c.id,
+          c.close_reason_local,
+          count(*) as member_count,
+          sum(case when t.state != 'open' or t.closed_at_local is not null then 1 else 0 end) as closed_member_count
+       from clusters c
+       join cluster_members cm on cm.cluster_id = c.id
+       join threads t on t.id = cm.thread_id
+       where c.id = ?
+       group by c.id, c.close_reason_local`,
+    );
+    const markClosed = this.db.prepare(
+      `update clusters
+       set closed_at_local = coalesce(closed_at_local, ?),
+           close_reason_local = 'all_members_closed'
+       where id = ?`,
+    );
+    const clearClosed = this.db.prepare(
+      `update clusters
+       set closed_at_local = null,
+           close_reason_local = null
+       where id = ? and close_reason_local = 'all_members_closed'`,
+    );
+
+    let changed = 0;
+    for (const clusterId of resolvedClusterIds) {
+      const row = summarize.get(clusterId) as
+        | {
+            id: number;
+            close_reason_local: string | null;
+            member_count: number;
+            closed_member_count: number;
+          }
+        | undefined;
+      if (!row || row.close_reason_local === 'manual') {
+        continue;
+      }
+      if (row.member_count > 0 && row.closed_member_count >= row.member_count) {
+        const result = markClosed.run(nowIso(), clusterId);
+        changed += result.changes;
+        continue;
+      }
+      const cleared = clearClosed.run(clusterId);
+      changed += cleared.changes;
+    }
+
+    return changed;
+  }
+
   private listRawTuiClusters(repoId: number, clusterRunId: number): TuiClusterSummary[] {
     const rows = this.db
       .prepare(
         `select
             c.id as cluster_id,
             c.member_count,
+            c.closed_at_local,
+            c.close_reason_local,
             c.representative_thread_id,
             rt.number as representative_number,
             rt.kind as representative_kind,
@@ -1761,6 +1977,7 @@ export class GHCrawlService {
             max(coalesce(t.updated_at_gh, t.updated_at)) as latest_updated_at,
             sum(case when t.kind = 'issue' then 1 else 0 end) as issue_count,
             sum(case when t.kind = 'pull_request' then 1 else 0 end) as pull_request_count,
+            sum(case when t.state != 'open' or t.closed_at_local is not null then 1 else 0 end) as closed_member_count,
             group_concat(lower(coalesce(t.title, '')), ' ') as search_text
          from clusters c
          left join threads rt on rt.id = c.representative_thread_id
@@ -1778,6 +1995,8 @@ export class GHCrawlService {
       .all(repoId, clusterRunId) as Array<{
         cluster_id: number;
         member_count: number;
+        closed_at_local: string | null;
+        close_reason_local: string | null;
         representative_thread_id: number | null;
         representative_number: number | null;
         representative_kind: 'issue' | 'pull_request' | null;
@@ -1785,12 +2004,16 @@ export class GHCrawlService {
         latest_updated_at: string | null;
         issue_count: number;
         pull_request_count: number;
+        closed_member_count: number;
         search_text: string | null;
       }>;
 
     return rows.map((row) => ({
       clusterId: row.cluster_id,
       displayTitle: row.representative_title ?? `Cluster ${row.cluster_id}`,
+      isClosed: row.close_reason_local !== null || row.closed_member_count >= row.member_count,
+      closedAtLocal: row.closed_at_local,
+      closeReasonLocal: row.close_reason_local,
       totalCount: row.member_count,
       issueCount: row.issue_count,
       pullRequestCount: row.pull_request_count,
@@ -1993,6 +2216,7 @@ export class GHCrawlService {
          from threads
          where repo_id = ?
            and state = 'open'
+           and closed_at_local is null
            and (last_pulled_at is null or last_pulled_at < ?)
          order by number asc`,
       )
@@ -2075,6 +2299,7 @@ export class GHCrawlService {
          from threads
          where repo_id = ?
            and state = 'open'
+           and closed_at_local is null
            and (last_pulled_at is null or last_pulled_at < ?)
          order by number asc`,
       )
@@ -2465,11 +2690,12 @@ export class GHCrawlService {
   private loadStoredEmbeddings(repoId: number): StoredEmbeddingRow[] {
     return this.db
       .prepare(
-        `select t.id, t.repo_id, t.number, t.kind, t.state, t.title, t.body, t.author_login, t.html_url, t.labels_json,
+        `select t.id, t.repo_id, t.number, t.kind, t.state, t.closed_at_gh, t.closed_at_local, t.close_reason_local,
+                t.title, t.body, t.author_login, t.html_url, t.labels_json,
                 t.updated_at_gh, t.first_pulled_at, t.last_pulled_at, e.source_kind, e.embedding_json
          from threads t
          join document_embeddings e on e.thread_id = t.id
-         where t.repo_id = ? and t.state = 'open' and e.model = ?
+         where t.repo_id = ? and t.state = 'open' and t.closed_at_local is null and e.model = ?
          order by t.number asc, e.source_kind asc`,
       )
       .all(repoId, this.config.embedModel) as StoredEmbeddingRow[];
@@ -2522,7 +2748,9 @@ export class GHCrawlService {
            and se.cluster_run_id = ?
            and (se.left_thread_id = ? or se.right_thread_id = ?)
            and t1.state = 'open'
+           and t1.closed_at_local is null
            and t2.state = 'open'
+           and t2.closed_at_local is null
          order by se.score desc
          limit ?`,
       )
@@ -2547,7 +2775,7 @@ export class GHCrawlService {
     let sql =
       `select t.id, t.number, t.title, t.body
        from threads t
-       where t.repo_id = ? and t.state = 'open'`;
+       where t.repo_id = ? and t.state = 'open' and t.closed_at_local is null`;
     const args: Array<string | number> = [repoId];
     if (threadNumber) {
       sql += ' and t.number = ?';
@@ -2595,7 +2823,7 @@ export class GHCrawlService {
       `select s.thread_id, s.summary_kind, s.summary_text
        from document_summaries s
        join threads t on t.id = s.thread_id
-       where t.repo_id = ? and t.state = 'open' and s.model = ?`;
+       where t.repo_id = ? and t.state = 'open' and t.closed_at_local is null and s.model = ?`;
     const args: Array<number | string> = [repoId, this.config.summaryModel];
     if (threadNumber) {
       sql += ' and t.number = ?';

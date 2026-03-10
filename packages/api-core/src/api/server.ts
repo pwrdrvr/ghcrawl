@@ -1,6 +1,6 @@
 import http from 'node:http';
 
-import { actionRequestSchema, refreshRequestSchema } from '@ghcrawl/api-contract';
+import { actionRequestSchema, closeClusterRequestSchema, closeThreadRequestSchema, refreshRequestSchema } from '@ghcrawl/api-contract';
 import { ZodError } from 'zod';
 
 import { GHCrawlService, parseRepoParams } from '../service.js';
@@ -51,7 +51,8 @@ export function createApiServer(service: GHCrawlService): http.Server {
                 .map((value) => Number(value.trim()))
                 .filter((value) => Number.isSafeInteger(value) && value > 0)
             : undefined;
-        sendJson(res, 200, service.listThreads({ ...params, kind, numbers }));
+        const includeClosed = url.searchParams.get('includeClosed') === 'true';
+        sendJson(res, 200, service.listThreads({ ...params, kind, numbers, includeClosed }));
         return;
       }
 
@@ -62,7 +63,8 @@ export function createApiServer(service: GHCrawlService): http.Server {
           sendJson(res, 400, { error: 'Missing login parameter' });
           return;
         }
-        sendJson(res, 200, service.listAuthorThreads({ ...params, login }));
+        const includeClosed = url.searchParams.get('includeClosed') === 'true';
+        sendJson(res, 200, service.listAuthorThreads({ ...params, login, includeClosed }));
         return;
       }
 
@@ -108,7 +110,8 @@ export function createApiServer(service: GHCrawlService): http.Server {
 
       if (req.method === 'GET' && url.pathname === '/clusters') {
         const params = parseRepoParams(url);
-        sendJson(res, 200, service.listClusters(params));
+        const includeClosed = url.searchParams.get('includeClosed') === 'true';
+        sendJson(res, 200, service.listClusters({ ...params, includeClosed }));
         return;
       }
 
@@ -119,6 +122,7 @@ export function createApiServer(service: GHCrawlService): http.Server {
         const minSizeValue = url.searchParams.get('minSize');
         const limitValue = url.searchParams.get('limit');
         const search = url.searchParams.get('search') ?? undefined;
+        const includeClosed = url.searchParams.get('includeClosed') === 'true';
         sendJson(
           res,
           200,
@@ -128,6 +132,7 @@ export function createApiServer(service: GHCrawlService): http.Server {
             limit: limitValue ? Number(limitValue) : undefined,
             sort,
             search,
+            includeClosed,
           }),
         );
         return;
@@ -147,6 +152,7 @@ export function createApiServer(service: GHCrawlService): http.Server {
         }
         const memberLimitValue = url.searchParams.get('memberLimit');
         const bodyCharsValue = url.searchParams.get('bodyChars');
+        const includeClosed = url.searchParams.get('includeClosed') === 'true';
         sendJson(
           res,
           200,
@@ -155,6 +161,7 @@ export function createApiServer(service: GHCrawlService): http.Server {
             clusterId,
             memberLimit: memberLimitValue ? Number(memberLimitValue) : undefined,
             bodyChars: bodyCharsValue ? Number(bodyCharsValue) : undefined,
+            includeClosed,
           }),
         );
         return;
@@ -169,6 +176,18 @@ export function createApiServer(service: GHCrawlService): http.Server {
       if (req.method === 'POST' && url.pathname === '/actions/refresh') {
         const body = refreshRequestSchema.parse(await readBody(req));
         sendJson(res, 200, await service.refreshRepository(body));
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/actions/close-thread') {
+        const body = closeThreadRequestSchema.parse(await readBody(req));
+        sendJson(res, 200, service.closeThreadLocally(body));
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/actions/close-cluster') {
+        const body = closeClusterRequestSchema.parse(await readBody(req));
+        sendJson(res, 200, service.closeClusterLocally(body));
         return;
       }
 

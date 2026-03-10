@@ -1,6 +1,9 @@
 import {
   actionRequestSchema,
   actionResponseSchema,
+  closeClusterRequestSchema,
+  closeResponseSchema,
+  closeThreadRequestSchema,
   authorThreadsResponseSchema,
   clusterDetailResponseSchema,
   clusterSummariesResponseSchema,
@@ -13,6 +16,7 @@ import {
   threadsResponseSchema,
   type ActionRequest,
   type ActionResponse,
+  type CloseResponse,
   type AuthorThreadsResponse,
   type ClusterDetailResponse,
   type ClusterSummariesResponse,
@@ -29,10 +33,10 @@ import {
 export type GitcrawlClient = {
   health: () => Promise<HealthResponse>;
   listRepositories: () => Promise<RepositoriesResponse>;
-  listThreads: (params: { owner: string; repo: string; kind?: 'issue' | 'pull_request'; numbers?: number[] }) => Promise<ThreadsResponse>;
-  listAuthorThreads: (params: { owner: string; repo: string; login: string }) => Promise<AuthorThreadsResponse>;
+  listThreads: (params: { owner: string; repo: string; kind?: 'issue' | 'pull_request'; numbers?: number[]; includeClosed?: boolean }) => Promise<ThreadsResponse>;
+  listAuthorThreads: (params: { owner: string; repo: string; login: string; includeClosed?: boolean }) => Promise<AuthorThreadsResponse>;
   search: (params: { owner: string; repo: string; query: string; mode?: SearchMode }) => Promise<SearchResponse>;
-  listClusters: (params: { owner: string; repo: string }) => Promise<ClustersResponse>;
+  listClusters: (params: { owner: string; repo: string; includeClosed?: boolean }) => Promise<ClustersResponse>;
   listClusterSummaries: (params: {
     owner: string;
     repo: string;
@@ -40,6 +44,7 @@ export type GitcrawlClient = {
     limit?: number;
     sort?: 'recent' | 'size';
     search?: string;
+    includeClosed?: boolean;
   }) => Promise<ClusterSummariesResponse>;
   getClusterDetail: (params: {
     owner: string;
@@ -47,9 +52,12 @@ export type GitcrawlClient = {
     clusterId: number;
     memberLimit?: number;
     bodyChars?: number;
+    includeClosed?: boolean;
   }) => Promise<ClusterDetailResponse>;
   refresh: (request: RefreshRequest) => Promise<RefreshResponse>;
   rerun: (request: ActionRequest) => Promise<ActionResponse>;
+  closeThread: (request: { owner: string; repo: string; threadNumber: number }) => Promise<CloseResponse>;
+  closeCluster: (request: { owner: string; repo: string; clusterId: number }) => Promise<CloseResponse>;
 };
 
 type FetchLike = typeof fetch;
@@ -79,11 +87,13 @@ export function createGitcrawlClient(baseUrl: string, fetchImpl: FetchLike = fet
       const search = new URLSearchParams({ owner: params.owner, repo: params.repo });
       if (params.kind) search.set('kind', params.kind);
       if (params.numbers && params.numbers.length > 0) search.set('numbers', params.numbers.join(','));
+      if (params.includeClosed) search.set('includeClosed', 'true');
       const res = await fetchImpl(`${normalized}/threads?${search.toString()}`);
       return readJson(res, threadsResponseSchema);
     },
     async listAuthorThreads(params) {
       const search = new URLSearchParams({ owner: params.owner, repo: params.repo, login: params.login });
+      if (params.includeClosed) search.set('includeClosed', 'true');
       const res = await fetchImpl(`${normalized}/author-threads?${search.toString()}`);
       return readJson(res, authorThreadsResponseSchema);
     },
@@ -99,6 +109,7 @@ export function createGitcrawlClient(baseUrl: string, fetchImpl: FetchLike = fet
     },
     async listClusters(params) {
       const search = new URLSearchParams({ owner: params.owner, repo: params.repo });
+      if (params.includeClosed) search.set('includeClosed', 'true');
       const res = await fetchImpl(`${normalized}/clusters?${search.toString()}`);
       return readJson(res, clustersResponseSchema);
     },
@@ -108,6 +119,7 @@ export function createGitcrawlClient(baseUrl: string, fetchImpl: FetchLike = fet
       if (params.limit !== undefined) search.set('limit', String(params.limit));
       if (params.sort) search.set('sort', params.sort);
       if (params.search) search.set('search', params.search);
+      if (params.includeClosed) search.set('includeClosed', 'true');
       const res = await fetchImpl(`${normalized}/cluster-summaries?${search.toString()}`);
       return readJson(res, clusterSummariesResponseSchema);
     },
@@ -119,6 +131,7 @@ export function createGitcrawlClient(baseUrl: string, fetchImpl: FetchLike = fet
       });
       if (params.memberLimit !== undefined) search.set('memberLimit', String(params.memberLimit));
       if (params.bodyChars !== undefined) search.set('bodyChars', String(params.bodyChars));
+      if (params.includeClosed) search.set('includeClosed', 'true');
       const res = await fetchImpl(`${normalized}/cluster-detail?${search.toString()}`);
       return readJson(res, clusterDetailResponseSchema);
     },
@@ -139,6 +152,24 @@ export function createGitcrawlClient(baseUrl: string, fetchImpl: FetchLike = fet
         body: JSON.stringify(body),
       });
       return readJson(res, actionResponseSchema);
+    },
+    async closeThread(request) {
+      const body = closeThreadRequestSchema.parse(request);
+      const res = await fetchImpl(`${normalized}/actions/close-thread`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return readJson(res, closeResponseSchema);
+    },
+    async closeCluster(request) {
+      const body = closeClusterRequestSchema.parse(request);
+      const res = await fetchImpl(`${normalized}/actions/close-cluster`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return readJson(res, closeResponseSchema);
     },
   };
 }

@@ -107,6 +107,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     : { sortMode: 'recent' as TuiClusterSortMode, minClusterSize: 10 as TuiMinSizeFilter };
   let sortMode: TuiClusterSortMode = initialPreference.sortMode;
   let minSize: TuiMinSizeFilter = initialPreference.minClusterSize;
+  let showClosed = true;
   let search = '';
   let snapshot: TuiSnapshot | null = null;
   let clusterDetail: TuiClusterDetail | null = null;
@@ -183,7 +184,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       }
       selectedClusterId = cluster.clusterId;
       clusterDetail = loadClusterDetail(cluster.clusterId);
-      memberRows = buildMemberRows(clusterDetail);
+      memberRows = buildMemberRows(clusterDetail, { includeClosedMembers: showClosed });
       selectedMemberThreadId = threadId;
       memberIndex = findSelectableIndex(memberRows, selectedMemberThreadId);
       loadSelectedThreadDetail(false);
@@ -219,12 +220,13 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       minSize,
       sort: sortMode,
       search,
+      includeClosedClusters: showClosed,
     });
     selectedClusterId = preserveSelectedId(snapshot.clusters.map((cluster) => cluster.clusterId), previousClusterId);
 
     if (selectedClusterId !== null) {
       clusterDetail = loadClusterDetail(selectedClusterId);
-      memberRows = buildMemberRows(clusterDetail);
+      memberRows = buildMemberRows(clusterDetail, { includeClosedMembers: showClosed });
       selectedMemberThreadId = preserveSelectedId(
         memberRows.filter((row) => row.selectable).map((row) => row.threadId),
         previousMemberId,
@@ -277,13 +279,14 @@ export async function startTui(params: StartTuiParams): Promise<void> {
         ? `#${snapshot.stats.latestClusterRunId} ${formatRelativeTime(snapshot.stats.latestClusterRunFinishedAt ?? null)}`
         : 'never';
     widgets.header.setContent(
-      `{bold}${repoLabel}{/bold}  {cyan-fg}${snapshot?.stats.openPullRequestCount ?? 0} PR{/cyan-fg}  {green-fg}${snapshot?.stats.openIssueCount ?? 0} issues{/green-fg}  GH:${ghStatus}  Emb:${embedStatus}  Cl:${clusterStatus}  sort:${sortMode}  min:${minSize === 0 ? 'all' : `${minSize}+`}  filter:${search || 'none'}`,
+      `{bold}${repoLabel}{/bold}  {cyan-fg}${snapshot?.stats.openPullRequestCount ?? 0} PR{/cyan-fg}  {green-fg}${snapshot?.stats.openIssueCount ?? 0} issues{/green-fg}  GH:${ghStatus}  Emb:${embedStatus}  Cl:${clusterStatus}  sort:${sortMode}  min:${minSize === 0 ? 'all' : `${minSize}+`}  closed:${showClosed ? 'shown' : 'hidden'}  filter:${search || 'none'}`,
     );
 
     const clusterItems = snapshot
       ? snapshot.clusters.map((cluster) => {
           const updated = cluster.latestUpdatedAt ? cluster.latestUpdatedAt.slice(5, 16).replace('T', ' ') : 'unknown';
-          return `${String(cluster.totalCount).padStart(3, ' ')}  C${String(cluster.clusterId).padStart(5, ' ')}  ${String(cluster.pullRequestCount).padStart(2, ' ')}P/${String(cluster.issueCount).padStart(2, ' ')}I  ${updated}  ${cluster.displayTitle}`;
+          const label = `${String(cluster.totalCount).padStart(3, ' ')}  C${String(cluster.clusterId).padStart(5, ' ')}  ${String(cluster.pullRequestCount).padStart(2, ' ')}P/${String(cluster.issueCount).padStart(2, ' ')}I  ${updated}  ${cluster.displayTitle}`;
+          return cluster.isClosed ? `{gray-fg}${escapeBlessedText(label)}{/gray-fg}` : escapeBlessedText(label);
         })
       : ['Pick a repository with p'];
     widgets.clusters.setItems(clusterItems);
@@ -307,7 +310,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       footerLines.unshift('');
     }
     footerLines.push(
-      `${status}  |  jobs:${activeJobs}  |  Tab focus  j/k move-or-scroll  PgUp/PgDn scroll  p repos  u author  g update  s sort  f min  / filter  r refresh  o open  q quit`,
+      `${status}  |  jobs:${activeJobs}  |  Tab focus  j/k move-or-scroll  PgUp/PgDn scroll  p repos  u author  g update  s sort  f min  x closed  / filter  r refresh  o open  q quit`,
     );
     widgets.footer.setContent(footerLines.join('\n'));
     widgets.screen.render();
@@ -406,7 +409,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       selectedClusterId = snapshot.clusters[nextIndex]?.clusterId ?? null;
       if (selectedClusterId !== null) {
         clusterDetail = loadClusterDetail(selectedClusterId);
-        memberRows = buildMemberRows(clusterDetail);
+        memberRows = buildMemberRows(clusterDetail, { includeClosedMembers: showClosed });
         selectedMemberThreadId = preserveSelectedId(
           memberRows.filter((row) => row.selectable).map((row) => row.threadId),
           null,
@@ -764,6 +767,12 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     status = `Min size: ${minSize === 0 ? 'all' : `${minSize}+`}`;
     refreshAll(false);
   });
+  widgets.screen.key(['x'], () => {
+    if (modalOpen) return;
+    showClosed = !showClosed;
+    status = showClosed ? 'Showing closed clusters and members' : 'Hiding closed clusters and members';
+    refreshAll(true);
+  });
   widgets.screen.key(['/'], () => {
     if (modalOpen) return;
     promptFilter();
@@ -827,7 +836,7 @@ function createWidgets(owner: string, repo: string): Widgets {
     parent: screen,
     border: 'line',
     label: ' Clusters ',
-    tags: false,
+    tags: true,
     keys: false,
     style: {
       border: { fg: '#5bc0eb' },
@@ -840,7 +849,7 @@ function createWidgets(owner: string, repo: string): Widgets {
     parent: screen,
     border: 'line',
     label: ' Members ',
-    tags: false,
+    tags: true,
     keys: false,
     style: {
       border: { fg: '#9bc53d' },
@@ -900,6 +909,9 @@ export function renderDetailPane(
       ? ` (#${clusterDetail.representativeNumber} representative ${clusterDetail.representativeKind === 'pull_request' ? 'pr' : 'issue'})`
       : '';
   const labels = thread.labels.length > 0 ? escapeBlessedText(thread.labels.join(', ')) : 'none';
+  const closedLabel = thread.isClosed
+    ? `{bold}Closed:{/bold} ${escapeBlessedText(thread.closedAtLocal ?? thread.closedAtGh ?? 'yes')} ${thread.closeReasonLocal ? `(${escapeBlessedText(thread.closeReasonLocal)})` : ''}`.trimEnd()
+    : '{bold}Closed:{/bold} no';
   const summaries = Object.entries(threadDetail.summaries)
     .map(([key, value]) => `{bold}${key}:{/bold}\n${escapeBlessedText(value)}`)
     .join('\n\n');
@@ -917,6 +929,7 @@ export function renderDetailPane(
     `{bold}${thread.kind} #${thread.number}{/bold}  ${escapeBlessedText(thread.title)}`,
     '',
     `{bold}Author:{/bold} ${escapeBlessedText(thread.authorLogin ?? 'unknown')}`,
+    closedLabel,
     `{bold}Updated:{/bold} ${thread.updatedAtGh ?? 'unknown'}`,
     `{bold}Labels:{/bold} ${labels}`,
     `{bold}URL:{/bold} ${escapeBlessedText(thread.htmlUrl)}`,

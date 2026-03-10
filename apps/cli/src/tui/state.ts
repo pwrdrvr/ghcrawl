@@ -46,10 +46,12 @@ export function preserveSelectedId(ids: number[], selectedId: number | null): nu
   return ids[0] ?? null;
 }
 
-export function buildMemberRows(detail: TuiClusterDetail | null): MemberListRow[] {
+export function buildMemberRows(detail: TuiClusterDetail | null, options?: { includeClosedMembers?: boolean }): MemberListRow[] {
   if (!detail) return [];
-  const issues = detail.members.filter((member) => member.kind === 'issue');
-  const pullRequests = detail.members.filter((member) => member.kind === 'pull_request');
+  const includeClosedMembers = options?.includeClosedMembers ?? true;
+  const visibleMembers = includeClosedMembers ? detail.members : detail.members.filter((member) => !member.isClosed);
+  const issues = visibleMembers.filter((member) => member.kind === 'issue');
+  const pullRequests = visibleMembers.filter((member) => member.kind === 'pull_request');
   const rows: MemberListRow[] = [];
 
   if (issues.length > 0) {
@@ -57,7 +59,7 @@ export function buildMemberRows(detail: TuiClusterDetail | null): MemberListRow[
     for (const issue of issues) {
       rows.push({
         key: `thread-${issue.id}`,
-        label: formatMemberLabel(issue.number, issue.title, issue.updatedAtGh),
+        label: formatMemberLabel(issue.number, issue.title, issue.updatedAtGh, issue.isClosed),
         selectable: true,
         threadId: issue.id,
       });
@@ -69,7 +71,7 @@ export function buildMemberRows(detail: TuiClusterDetail | null): MemberListRow[
     for (const pullRequest of pullRequests) {
       rows.push({
         key: `thread-${pullRequest.id}`,
-        label: formatMemberLabel(pullRequest.number, pullRequest.title, pullRequest.updatedAtGh),
+        label: formatMemberLabel(pullRequest.number, pullRequest.title, pullRequest.updatedAtGh, pullRequest.isClosed),
         selectable: true,
         threadId: pullRequest.id,
       });
@@ -115,7 +117,12 @@ function compareClusters(left: TuiClusterSummary, right: TuiClusterSummary, sort
   return rightTime - leftTime || right.totalCount - left.totalCount || left.clusterId - right.clusterId;
 }
 
-function formatMemberLabel(number: number, title: string, updatedAtGh: string | null): string {
+function formatMemberLabel(number: number, title: string, updatedAtGh: string | null, isClosed: boolean): string {
   const updated = updatedAtGh ? updatedAtGh.slice(5, 16).replace('T', ' ') : 'unknown';
-  return `#${number}  ${updated}  ${title}`;
+  const label = escapeBlessedInline(`#${number}  ${updated}  ${title}`);
+  return isClosed ? `{gray-fg}${label}{/gray-fg}` : label;
+}
+
+function escapeBlessedInline(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/\{/g, '\\{').replace(/\}/g, '\\}');
 }

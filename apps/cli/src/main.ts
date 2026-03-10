@@ -17,6 +17,8 @@ type CommandName =
   | 'refresh'
   | 'threads'
   | 'author'
+  | 'close-thread'
+  | 'close-cluster'
   | 'summarize'
   | 'purge-comments'
   | 'embed'
@@ -42,12 +44,14 @@ function usage(devMode = false): string {
     '  version',
     '  sync <owner/repo> [--since <iso|duration>] [--limit <count>] [--include-comments] [--full-reconcile]',
     '  refresh <owner/repo> [--no-sync] [--no-embed] [--no-cluster]',
-    '  threads <owner/repo> [--numbers <n,n,...>] [--kind issue|pull_request]',
-    '  author <owner/repo> --login <user>',
+    '  threads <owner/repo> [--numbers <n,n,...>] [--kind issue|pull_request] [--include-closed]',
+    '  author <owner/repo> --login <user> [--include-closed]',
+    '  close-thread <owner/repo> --number <thread>',
+    '  close-cluster <owner/repo> --id <cluster-id>',
     '  embed <owner/repo> [--number <thread>]',
     '  cluster <owner/repo> [--k <count>] [--threshold <score>]',
-    '  clusters <owner/repo> [--min-size <count>] [--limit <count>] [--sort recent|size] [--search <text>]',
-    '  cluster-detail <owner/repo> --id <cluster-id> [--member-limit <count>] [--body-chars <count>]',
+    '  clusters <owner/repo> [--min-size <count>] [--limit <count>] [--sort recent|size] [--search <text>] [--include-closed]',
+    '  cluster-detail <owner/repo> --id <cluster-id> [--member-limit <count>] [--body-chars <count>] [--include-closed]',
     '  search <owner/repo> --query <text> [--mode keyword|semantic|hybrid]',
     '  neighbors <owner/repo> --number <thread> [--limit <count>] [--threshold <score>]',
     '  tui [owner/repo]',
@@ -97,6 +101,7 @@ export function parseRepoFlags(args: string[]): { owner: string; repo: string; v
       limit: { type: 'string' },
       'include-comments': { type: 'boolean' },
       'full-reconcile': { type: 'boolean' },
+      'include-closed': { type: 'boolean' },
       number: { type: 'string' },
       numbers: { type: 'string' },
       login: { type: 'string' },
@@ -338,6 +343,7 @@ export async function run(argv: string[], stdout: NodeJS.WritableStream = proces
           repo,
           kind,
           numbers: typeof values.numbers === 'string' ? parsePositiveIntegerList('numbers', values.numbers) : undefined,
+          includeClosed: values['include-closed'] === true,
         });
         stdout.write(`${JSON.stringify(result, null, 2)}\n`);
         return;
@@ -351,6 +357,33 @@ export async function run(argv: string[], stdout: NodeJS.WritableStream = proces
           owner,
           repo,
           login: values.login,
+          includeClosed: values['include-closed'] === true,
+        });
+        stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return;
+      }
+      case 'close-thread': {
+        const { owner, repo, values } = parseRepoFlags(rest);
+        if (typeof values.number !== 'string') {
+          throw new Error('Missing --number');
+        }
+        const result = getService().closeThreadLocally({
+          owner,
+          repo,
+          threadNumber: parsePositiveInteger('number', values.number),
+        });
+        stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return;
+      }
+      case 'close-cluster': {
+        const { owner, repo, values } = parseRepoFlags(rest);
+        if (typeof values.id !== 'string') {
+          throw new Error('Missing --id');
+        }
+        const result = getService().closeClusterLocally({
+          owner,
+          repo,
+          clusterId: parsePositiveInteger('id', values.id),
         });
         stdout.write(`${JSON.stringify(result, null, 2)}\n`);
         return;
@@ -411,6 +444,7 @@ export async function run(argv: string[], stdout: NodeJS.WritableStream = proces
           limit: typeof values.limit === 'string' ? parsePositiveInteger('limit', values.limit) : undefined,
           sort,
           search: typeof values.search === 'string' ? values.search : undefined,
+          includeClosed: values['include-closed'] === true,
         });
         stdout.write(`${JSON.stringify(result, null, 2)}\n`);
         return;
@@ -432,6 +466,7 @@ export async function run(argv: string[], stdout: NodeJS.WritableStream = proces
             typeof values['body-chars'] === 'string'
               ? parsePositiveInteger('body-chars', values['body-chars'])
               : undefined,
+          includeClosed: values['include-closed'] === true,
         });
         stdout.write(`${JSON.stringify(result, null, 2)}\n`);
         return;

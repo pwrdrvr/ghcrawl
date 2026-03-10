@@ -232,4 +232,20 @@ export function migrate(db: SqliteDatabase): void {
   if (!threadColumns.has('last_pulled_at')) {
     db.exec('alter table threads add column last_pulled_at text');
   }
+  if (!threadColumns.has('closed_at_local')) {
+    db.exec('alter table threads add column closed_at_local text');
+  }
+  if (!threadColumns.has('close_reason_local')) {
+    db.exec('alter table threads add column close_reason_local text');
+  }
+
+  const clusterColumns = new Set(
+    (db.prepare('pragma table_info(clusters)').all() as Array<{ name: string }>).map((column) => column.name),
+  );
+  if (!clusterColumns.has('closed_at_local')) {
+    db.exec('alter table clusters add column closed_at_local text');
+  }
+  if (!clusterColumns.has('close_reason_local')) {
+    db.exec('alter table clusters add column close_reason_local text');
+  }
 }
