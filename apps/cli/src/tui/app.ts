@@ -327,7 +327,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       `${status}  |  jobs:${activeJobs}  |  h/? help  g update  p repos  u author  / filter  s sort  f min  l layout  x closed`,
     );
     footerLines.push(
-      `Tab focus  j/k move-or-scroll  PgUp/PgDn scroll  r refresh  o open  q quit`,
+      `Tab focus  arrows move-or-scroll  PgUp/PgDn page  r refresh  o open  q quit`,
     );
     widgets.footer.setContent(footerLines.join('\n'));
     widgets.screen.render();
@@ -414,15 +414,22 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     }
   };
 
-  const moveSelection = (delta: -1 | 1): void => {
+  const moveSelection = (delta: -1 | 1, options?: { steps?: number; wrap?: boolean }): void => {
     if (!snapshot) return;
+    const steps = Math.max(1, options?.steps ?? 1);
+    const wrap = options?.wrap ?? true;
     if (focusPane === 'clusters') {
       if (snapshot.clusters.length === 0) return;
       const currentIndex = Math.max(
         0,
         snapshot.clusters.findIndex((cluster) => cluster.clusterId === selectedClusterId),
       );
-      const nextIndex = (currentIndex + delta + snapshot.clusters.length) % snapshot.clusters.length;
+      let nextIndex = currentIndex + delta * steps;
+      if (wrap) {
+        nextIndex = ((nextIndex % snapshot.clusters.length) + snapshot.clusters.length) % snapshot.clusters.length;
+      } else {
+        nextIndex = Math.max(0, Math.min(snapshot.clusters.length - 1, nextIndex));
+      }
       selectedClusterId = snapshot.clusters[nextIndex]?.clusterId ?? null;
       if (selectedClusterId !== null) {
         clusterDetail = loadClusterDetail(selectedClusterId);
@@ -442,13 +449,34 @@ export async function startTui(params: StartTuiParams): Promise<void> {
 
     if (focusPane === 'members') {
       if (memberRows.length === 0) return;
-      memberIndex = moveSelectableIndex(memberRows, memberIndex < 0 ? 0 : memberIndex, delta);
+      let nextIndex = memberIndex < 0 ? 0 : memberIndex;
+      for (let index = 0; index < steps; index += 1) {
+        const candidateIndex = moveSelectableIndex(memberRows, nextIndex, delta);
+        if (!wrap && candidateIndex === nextIndex) {
+          break;
+        }
+        nextIndex = candidateIndex;
+      }
+      memberIndex = nextIndex;
       selectedMemberThreadId = selectedThreadIdFromRow(memberRows, memberIndex);
       loadSelectedThreadDetail(false);
       resetDetailScroll();
       status = selectedMemberThreadId !== null ? `Selected #${threadDetail?.thread.number ?? '?'}` : 'No selectable member';
       render();
     }
+  };
+
+  const getFocusedListPageSize = (): number => {
+    const listHeight = focusPane === 'clusters' ? Number(widgets.clusters.height) : Number(widgets.members.height);
+    return Math.max(1, listHeight - 4);
+  };
+
+  const pageFocusedPane = (delta: -1 | 1): void => {
+    if (focusPane === 'detail') {
+      scrollDetail(delta * 12);
+      return;
+    }
+    moveSelection(delta, { steps: getFocusedListPageSize(), wrap: false });
   };
 
   const promptFilter = (): void => {
@@ -736,15 +764,15 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   widgets.screen.key(['C-c'], () => {
     widgets.screen.destroy();
   });
-  widgets.screen.key(['tab'], () => {
+  widgets.screen.key(['tab', 'right'], () => {
     if (modalOpen) return;
     updateFocus(cycleFocusPane(focusPane, 1));
   });
-  widgets.screen.key(['S-tab'], () => {
+  widgets.screen.key(['S-tab', 'left'], () => {
     if (modalOpen) return;
     updateFocus(cycleFocusPane(focusPane, -1));
   });
-  widgets.screen.key(['j', 'down'], () => {
+  widgets.screen.key(['down'], () => {
     if (modalOpen) return;
     if (focusPane === 'detail') {
       scrollDetail(3);
@@ -752,7 +780,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     }
     moveSelection(1);
   });
-  widgets.screen.key(['k', 'up'], () => {
+  widgets.screen.key(['up'], () => {
     if (modalOpen) return;
     if (focusPane === 'detail') {
       scrollDetail(-3);
@@ -762,11 +790,11 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   });
   widgets.screen.key(['pageup'], () => {
     if (modalOpen) return;
-    scrollDetail(-12);
+    pageFocusedPane(-1);
   });
   widgets.screen.key(['pagedown'], () => {
     if (modalOpen) return;
-    scrollDetail(12);
+    pageFocusedPane(1);
   });
   widgets.screen.key(['home'], () => {
     if (modalOpen) return;
@@ -1076,10 +1104,10 @@ export function buildHelpContent(): string {
     '',
     '{bold}Navigation{/bold}',
     'Tab / Shift-Tab  cycle focus across clusters, members, and detail',
-    'j / k             move selection, or scroll detail when detail is focused',
-    'Up / Down         same as j / k',
+    'Left / Right      cycle focus backward or forward across panes',
+    'Up / Down         move selection, or scroll detail when detail is focused',
     'Enter             clusters -> members, members -> detail',
-    'PgUp / PgDn       scroll detail or this help popup faster',
+    'PgUp / PgDn       page through the focused pane or this help popup faster',
     'Home / End        jump to the top or bottom of detail or help',
     '',
     '{bold}Views And Filters{/bold}',
@@ -1104,7 +1132,7 @@ export function buildHelpContent(): string {
     '{bold}Notes{/bold}',
     'Clusters show C<clusterId> so the cluster id is easy to copy into CLI or skill flows.',
     'The footer only shows the short command list. Open help to see the full list.',
-    'This popup scrolls. Use j/k, arrows, PgUp/PgDn, Home, and End if it does not fit.',
+    'This popup scrolls. Use arrows, PgUp/PgDn, Home, and End if it does not fit.',
   ].join('\n');
 }
 
@@ -1146,7 +1174,7 @@ async function promptHelp(screen: blessed.Widgets.Screen): Promise<void> {
     bottom: 1,
     left: 'center',
     tags: false,
-    content: 'Scroll with j/k, arrows, PgUp/PgDn, Home, End. Press Esc, q, h, ?, or Enter to close.',
+    content: 'Scroll with arrows, PgUp/PgDn, Home, End. Press Esc, q, h, ?, or Enter to close.',
     style: { fg: 'black', bg: '#5bc0eb' },
   });
 
@@ -1225,7 +1253,7 @@ async function promptUpdatePipelineSelection(
     style: { fg: 'white', bg: '#101522' },
     content:
       'Usually you want all three. Run order is fixed: GitHub sync/reconcile -> embeddings -> clusters.\n' +
-      'Toggle with space, move with j/k or arrows, Enter to start, Esc to cancel.',
+      'Toggle with space, move with arrows, Enter to start, Esc to cancel.',
   });
 
   box.focus();
