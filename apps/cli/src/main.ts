@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 import { once } from 'node:events';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { parseArgs } from 'node:util';
+import { fileURLToPath } from 'node:url';
 
 import { createApiServer, GHCrawlService } from '@ghcrawl/api-core';
 import { runInitWizard } from './init-wizard.js';
@@ -9,6 +12,7 @@ import { startTui } from './tui/app.js';
 type CommandName =
   | 'init'
   | 'doctor'
+  | 'version'
   | 'sync'
   | 'refresh'
   | 'summarize'
@@ -23,6 +27,8 @@ type CommandName =
   | 'serve';
 
 type DoctorResult = Awaited<ReturnType<GHCrawlService['doctor']>>;
+type DoctorReport = DoctorResult & { version: string };
+const CLI_VERSION = loadCliVersion();
 
 function usage(devMode = false): string {
   const lines = [
@@ -31,6 +37,7 @@ function usage(devMode = false): string {
     'Commands:',
     '  init [--reconfigure]',
     '  doctor',
+    '  version',
     '  sync <owner/repo> [--since <iso|duration>] [--limit <count>] [--include-comments] [--full-reconcile]',
     '  refresh <owner/repo> [--no-sync] [--no-embed] [--no-cluster]',
     '  embed <owner/repo> [--number <thread>]',
@@ -183,9 +190,10 @@ function parsePositiveInteger(name: string, value: string): number {
   return parsed;
 }
 
-export function formatDoctorReport(result: DoctorResult): string {
+export function formatDoctorReport(result: DoctorReport): string {
   const lines = [
     'ghcrawl doctor',
+    `version: ${result.version}`,
     '',
     'Health',
     `  ok: ${formatBooleanStatus(result.health.ok)}`,
@@ -227,6 +235,10 @@ export async function run(argv: string[], stdout: NodeJS.WritableStream = proces
   const parsedGlobals = parseGlobalFlags(argv);
   const [commandRaw, ...rest] = parsedGlobals.argv;
   const command = commandRaw as CommandName | undefined;
+  if (commandRaw === '--version' || commandRaw === '-v') {
+    stdout.write(`${CLI_VERSION}\n`);
+    return;
+  }
   if (!command || commandRaw === '--help' || commandRaw === '-h' || commandRaw === 'help') {
     stdout.write(usage(parsedGlobals.devMode));
     return;
@@ -257,9 +269,16 @@ export async function run(argv: string[], stdout: NodeJS.WritableStream = proces
             json: { type: 'boolean' },
           },
         });
-        const result = await getService().doctor();
+        const result: DoctorReport = {
+          version: CLI_VERSION,
+          ...(await getService().doctor()),
+        };
         const shouldWriteJson = parsed.values.json === true || (stdout as NodeJS.WriteStream).isTTY !== true;
         stdout.write(shouldWriteJson ? `${JSON.stringify(result, null, 2)}\n` : formatDoctorReport(result));
+        return;
+      }
+      case 'version': {
+        stdout.write(`${CLI_VERSION}\n`);
         return;
       }
       case 'sync': {
@@ -446,4 +465,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     writeProgress(error instanceof Error ? error.message : String(error));
     process.exit(1);
   });
+}
+
+function loadCliVersion(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const packageJsonPath = path.resolve(here, '..', 'package.json');
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { version?: unknown };
+  return typeof packageJson.version === 'string' ? packageJson.version : '0.0.0';
 }

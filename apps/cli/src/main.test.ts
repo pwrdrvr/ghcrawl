@@ -17,6 +17,7 @@ test('run prints usage with no command', async () => {
 
   await run([], stdout);
   assert.match(output, /ghcrawl <command>/);
+  assert.match(output, /\n  version\n/);
   assert.match(output, /refresh <owner\/repo>/);
   assert.match(output, /clusters <owner\/repo>/);
   assert.match(output, /cluster-detail <owner\/repo>/);
@@ -35,6 +36,7 @@ test('run prints usage for help flag', async () => {
 
   await run(['--help'], stdout);
   assert.match(output, /ghcrawl <command>/);
+  assert.match(output, /\n  version\n/);
   assert.match(output, /refresh <owner\/repo>/);
   assert.match(output, /tui \[owner\/repo\]/);
   assert.doesNotMatch(output, /summarize <owner\/repo>/);
@@ -55,6 +57,32 @@ test('run prints advanced commands when dev mode is enabled', async () => {
   assert.match(output, /purge-comments <owner\/repo>/);
 });
 
+test('run prints version for version command', async () => {
+  let output = '';
+  const stdout = {
+    write(chunk: string) {
+      output += chunk;
+      return true;
+    },
+  } as unknown as NodeJS.WritableStream;
+
+  await run(['version'], stdout);
+  assert.match(output, /^\d+\.\d+\.\d+/);
+});
+
+test('run prints version for --version flag', async () => {
+  let output = '';
+  const stdout = {
+    write(chunk: string) {
+      output += chunk;
+      return true;
+    },
+  } as unknown as NodeJS.WritableStream;
+
+  await run(['--version'], stdout);
+  assert.match(output, /^\d+\.\d+\.\d+/);
+});
+
 test('run prints pretty doctor output on a tty', async () => {
   let output = '';
   const stdout = {
@@ -67,6 +95,7 @@ test('run prints pretty doctor output on a tty', async () => {
 
   await run(['doctor'], stdout);
   assert.match(output, /ghcrawl doctor/);
+  assert.match(output, /version: \d+\.\d+\.\d+/);
   assert.match(output, /Health/);
   assert.doesNotMatch(output, /^\s*\{/m);
 });
@@ -82,6 +111,7 @@ test('run prints json doctor output when explicitly requested', async () => {
   } as unknown as NodeJS.WritableStream;
 
   await run(['doctor', '--json'], stdout);
+  assert.match(output, /"version":/);
   assert.match(output, /"health"/);
   assert.match(output, /"github"/);
 });
@@ -142,6 +172,7 @@ test('formatLogLine prefixes ISO timestamps with millisecond resolution', () => 
 
 test('formatDoctorReport renders a human-readable health summary', () => {
   const rendered = formatDoctorReport({
+    version: '0.0.0',
     health: {
       ok: true,
       configPath: '/tmp/config.json',
@@ -168,6 +199,7 @@ test('formatDoctorReport renders a human-readable health summary', () => {
   });
 
   assert.match(rendered, /config path: \/tmp\/config\.json/);
+  assert.match(rendered, /version: 0\.0\.0/);
   assert.match(rendered, /GitHub/);
   assert.match(rendered, /OpenAI/);
   assert.match(rendered, /note: missing/);
