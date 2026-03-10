@@ -27,7 +27,7 @@ import {
 export type GitcrawlClient = {
   health: () => Promise<HealthResponse>;
   listRepositories: () => Promise<RepositoriesResponse>;
-  listThreads: (params: { owner: string; repo: string; kind?: 'issue' | 'pull_request' }) => Promise<ThreadsResponse>;
+  listThreads: (params: { owner: string; repo: string; kind?: 'issue' | 'pull_request'; numbers?: number[] }) => Promise<ThreadsResponse>;
   search: (params: { owner: string; repo: string; query: string; mode?: SearchMode }) => Promise<SearchResponse>;
   listClusters: (params: { owner: string; repo: string }) => Promise<ClustersResponse>;
   listClusterSummaries: (params: {
@@ -75,6 +75,7 @@ export function createGitcrawlClient(baseUrl: string, fetchImpl: FetchLike = fet
     async listThreads(params) {
       const search = new URLSearchParams({ owner: params.owner, repo: params.repo });
       if (params.kind) search.set('kind', params.kind);
+      if (params.numbers && params.numbers.length > 0) search.set('numbers', params.numbers.join(','));
       const res = await fetchImpl(`${normalized}/threads?${search.toString()}`);
       return readJson(res, threadsResponseSchema);
     },

@@ -492,7 +492,7 @@ export class GHCrawlService {
     return repositoriesResponseSchema.parse({ repositories: rows.map(repositoryToDto) });
   }
 
-  listThreads(params: { owner: string; repo: string; kind?: 'issue' | 'pull_request' }): ThreadsResponse {
+  listThreads(params: { owner: string; repo: string; kind?: 'issue' | 'pull_request'; numbers?: number[] }): ThreadsResponse {
     const repository = this.requireRepository(params.owner, params.repo);
     const clusterIds = new Map<number, number>();
     const clusterRows = this.db
@@ -513,11 +513,30 @@ export class GHCrawlService {
       sql += ' and kind = ?';
       args.push(params.kind);
     }
+    if (params.numbers && params.numbers.length > 0) {
+      const uniqueNumbers = Array.from(new Set(params.numbers.filter((value) => Number.isSafeInteger(value) && value > 0)));
+      if (uniqueNumbers.length === 0) {
+        return threadsResponseSchema.parse({
+          repository,
+          threads: [],
+        });
+      }
+      sql += ` and number in (${uniqueNumbers.map(() => '?').join(', ')})`;
+      args.push(...uniqueNumbers);
+    }
     sql += ' order by updated_at_gh desc, number desc';
     const rows = this.db.prepare(sql).all(...args) as ThreadRow[];
+    const orderedRows =
+      params.numbers && params.numbers.length > 0
+        ? (() => {
+            const byNumber = new Map(rows.map((row) => [row.number, row] as const));
+            const uniqueRequested = Array.from(new Set(params.numbers));
+            return uniqueRequested.map((number) => byNumber.get(number)).filter((row): row is ThreadRow => row !== undefined);
+          })()
+        : rows;
     return threadsResponseSchema.parse({
       repository,
-      threads: rows.map((row) => threadToDto(row, clusterIds.get(row.id) ?? null)),
+      threads: orderedRows.map((row) => threadToDto(row, clusterIds.get(row.id) ?? null)),
     });
   }
 

@@ -15,6 +15,7 @@ type CommandName =
   | 'version'
   | 'sync'
   | 'refresh'
+  | 'threads'
   | 'summarize'
   | 'purge-comments'
   | 'embed'
@@ -40,6 +41,7 @@ function usage(devMode = false): string {
     '  version',
     '  sync <owner/repo> [--since <iso|duration>] [--limit <count>] [--include-comments] [--full-reconcile]',
     '  refresh <owner/repo> [--no-sync] [--no-embed] [--no-cluster]',
+    '  threads <owner/repo> [--numbers <n,n,...>] [--kind issue|pull_request]',
     '  embed <owner/repo> [--number <thread>]',
     '  cluster <owner/repo> [--k <count>] [--threshold <score>]',
     '  clusters <owner/repo> [--min-size <count>] [--limit <count>] [--sort recent|size] [--search <text>]',
@@ -94,6 +96,7 @@ export function parseRepoFlags(args: string[]): { owner: string; repo: string; v
       'include-comments': { type: 'boolean' },
       'full-reconcile': { type: 'boolean' },
       number: { type: 'string' },
+      numbers: { type: 'string' },
       query: { type: 'string' },
       mode: { type: 'string' },
       k: { type: 'string' },
@@ -193,6 +196,17 @@ function parsePositiveInteger(name: string, value: string): number {
     throw new Error(`Invalid ${name}: ${value}`);
   }
   return parsed;
+}
+
+function parsePositiveIntegerList(name: string, value: string): number[] {
+  const parts = value
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length === 0) {
+    throw new Error(`Invalid ${name}: ${value}`);
+  }
+  return parts.map((part) => parsePositiveInteger(name, part));
 }
 
 export function formatDoctorReport(result: DoctorReport): string {
@@ -309,6 +323,18 @@ export async function run(argv: string[], stdout: NodeJS.WritableStream = proces
           embed: values['no-embed'] === true ? false : undefined,
           cluster: values['no-cluster'] === true ? false : undefined,
           onProgress: writeProgress,
+        });
+        stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return;
+      }
+      case 'threads': {
+        const { owner, repo, values } = parseRepoFlags(rest);
+        const kind = values.kind === 'issue' || values.kind === 'pull_request' ? values.kind : undefined;
+        const result = getService().listThreads({
+          owner,
+          repo,
+          kind,
+          numbers: typeof values.numbers === 'string' ? parsePositiveIntegerList('numbers', values.numbers) : undefined,
         });
         stdout.write(`${JSON.stringify(result, null, 2)}\n`);
         return;

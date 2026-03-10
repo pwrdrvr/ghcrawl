@@ -148,11 +148,14 @@ ghcrawl-op tui owner/repo
 These commands are intended more for scripts, bots, and agent integrations than for normal day-to-day terminal browsing:
 
 ```bash
+ghcrawl threads owner/repo --numbers 42,43,44
 ghcrawl cluster owner/repo
 ghcrawl clusters owner/repo --min-size 10 --limit 20
 ghcrawl cluster-detail owner/repo --id 123
 ghcrawl search owner/repo --query "download stalls"
 ```
+
+Use `threads --numbers ...` when you want several specific issue or PR records in one CLI call instead of paying process startup overhead repeatedly.
 
 ## Cost To Operate
 
@@ -179,6 +182,7 @@ The skill is built around the stable JSON CLI surface and is intentionally conse
 ```bash
 ghcrawl doctor --json
 ghcrawl refresh owner/repo
+ghcrawl threads owner/repo --numbers 42,43,44
 ghcrawl clusters owner/repo --min-size 10 --limit 20 --sort recent
 ghcrawl cluster-detail owner/repo --id 123 --member-limit 20 --body-chars 280
 ```

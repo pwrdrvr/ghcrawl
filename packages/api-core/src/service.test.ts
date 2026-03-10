@@ -236,6 +236,10 @@ test('syncRepository defaults to metadata-only mode, preserves thread kind, and 
     assert.match(messages.join('\n'), /metadata-only mode; skipping comment, review, and review-comment fetches/);
     assert.equal(service.listRepositories().repositories.length, 1);
     assert.equal(service.listThreads({ owner: 'openclaw', repo: 'openclaw' }).threads.length, 2);
+    assert.deepEqual(
+      service.listThreads({ owner: 'openclaw', repo: 'openclaw', numbers: [43, 42, 999] }).threads.map((thread) => thread.number),
+      [43, 42],
+    );
     assert.equal(listIssueCommentCalls, 0);
     assert.equal(listPullReviewCalls, 0);
     assert.equal(listPullReviewCommentCalls, 0);

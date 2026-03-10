@@ -13,6 +13,22 @@ Use this first. Treat the result as a gate:
 - If GitHub/OpenAI auth is missing or unhealthy, stay read-only.
 - If GitHub/OpenAI auth is healthy, API-backed commands are available, but still require explicit user direction.
 
+Do not call this automatically on every skill invocation. Use it when:
+
+- the user explicitly asked for API-backed work
+- or a read-only request failed and local setup/auth may be the reason
+
+### `ghcrawl threads owner/repo --numbers <n,n,...>`
+
+Bulk read path for specific issue/PR numbers from the local DB.
+
+Use this when you need several specific thread records in one invoke instead of running one CLI call per number.
+
+Useful flags:
+
+- `--numbers 42,43,44`
+- `--kind issue|pull_request`
+
 ### `ghcrawl refresh owner/repo`
 
 Runs the staged pipeline in fixed order:
@@ -99,6 +115,7 @@ If `ghcrawl` is not installed globally:
 
 ```bash
 pnpm --filter ghcrawl cli doctor --json
+pnpm --filter ghcrawl cli threads owner/repo --numbers 42,43,44
 pnpm --filter ghcrawl cli refresh owner/repo
 pnpm --filter ghcrawl cli clusters owner/repo --min-size 10 --limit 20 --sort recent
 pnpm --filter ghcrawl cli cluster-detail owner/repo --id 123 --member-limit 20 --body-chars 280
@@ -106,9 +123,10 @@ pnpm --filter ghcrawl cli cluster-detail owner/repo --id 123 --member-limit 20 -
 
 ## Suggested analysis flow
 
-1. `ghcrawl doctor --json`
-2. If auth is unavailable or the user did not ask for refresh work, stay read-only and use `clusters`
-3. Only if doctor is healthy and the user explicitly asked, run `ghcrawl refresh owner/repo`
-4. `ghcrawl clusters owner/repo --min-size 10 --limit 20 --sort recent`
-5. `ghcrawl cluster-detail owner/repo --id <cluster-id>`
-6. optionally `search` or `neighbors`
+1. Start read-only with `clusters`, `cluster-detail`, `threads`, `search`, or `neighbors`
+2. Only if API-backed work is needed or a read-only request failed, run `ghcrawl doctor --json`
+3. If auth is unavailable, stay read-only
+4. Only if doctor is healthy and the user explicitly asked, run `ghcrawl refresh owner/repo`
+5. `ghcrawl clusters owner/repo --min-size 10 --limit 20 --sort recent`
+6. `ghcrawl cluster-detail owner/repo --id <cluster-id>`
+7. optionally `threads`, `search`, or `neighbors`

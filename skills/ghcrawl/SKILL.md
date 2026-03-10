@@ -35,7 +35,27 @@ npx ghcrawl cli ...
 
 ## Core workflow
 
-### 1. Check local health
+### 1. Default read-only flow
+
+Do not run `doctor` on skill startup by default.
+
+Start with local read-only commands:
+
+Without explicit user direction to refresh data, prefer these local-only commands:
+
+```bash
+ghcrawl clusters owner/repo --min-size 10 --limit 20 --sort recent
+ghcrawl cluster-detail owner/repo --id 123 --member-limit 20 --body-chars 280
+ghcrawl threads owner/repo --numbers 42,43,44
+ghcrawl search owner/repo --query "download stalls" --mode hybrid
+ghcrawl neighbors owner/repo --number 42 --limit 10
+```
+
+These operate on the existing local SQLite dataset.
+
+Use `threads --numbers ...` when you need a batch of specific issue/PR records. Do not pay the CLI startup cost 10 times for 10 separate single-thread lookups.
+
+### 2. Check local health only when needed
 
 Run:
 
@@ -49,23 +69,15 @@ If the bin is unavailable, fall back to:
 pnpm --filter ghcrawl cli doctor --json
 ```
 
+Only do this when:
+
+- the user explicitly wants an API-backed operation such as `refresh`, `sync`, `embed`, or `cluster`
+- or a read-only request failed and you need to know whether the local install/config/auth state is broken
+
 Interpret the result like this:
 
 - If GitHub/OpenAI auth is missing or unhealthy, stay in read-only mode.
 - If GitHub/OpenAI auth is healthy, API-backed operations are available, but still require explicit user direction.
-
-### 2. Default read-only flow
-
-Without explicit user direction to refresh data, prefer these local-only commands:
-
-```bash
-ghcrawl clusters owner/repo --min-size 10 --limit 20 --sort recent
-ghcrawl cluster-detail owner/repo --id 123 --member-limit 20 --body-chars 280
-ghcrawl search owner/repo --query "download stalls" --mode hybrid
-ghcrawl neighbors owner/repo --number 42 --limit 10
-```
-
-These operate on the existing local SQLite dataset.
 
 ### 3. Refresh local data only when explicitly requested
 

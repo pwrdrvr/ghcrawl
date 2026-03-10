@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { clusterDetailResponseSchema, clusterSummariesResponseSchema, healthResponseSchema, neighborsResponseSchema } from '@ghcrawl/api-contract';
+import { clusterDetailResponseSchema, clusterSummariesResponseSchema, healthResponseSchema, neighborsResponseSchema, threadsResponseSchema } from '@ghcrawl/api-contract';
 
 import { createApiServer } from './server.js';
 import { GHCrawlService } from '../service.js';
@@ -142,6 +142,75 @@ test('neighbors endpoint returns contract payload', async () => {
     assert.equal(payload.thread.number, 42);
     assert.equal(payload.neighbors.length, 1);
     assert.equal(payload.neighbors[0].number, 43);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    service.close();
+  }
+});
+
+test('threads endpoint can filter by a bulk number list', async () => {
+  const service = new GHCrawlService({
+    config: {
+      workspaceRoot: process.cwd(),
+      configDir: '/tmp/ghcrawl-test',
+      configPath: '/tmp/ghcrawl-test/config.json',
+      configFileExists: true,
+      dbPath: ':memory:',
+      dbPathSource: 'config',
+      apiPort: 5179,
+      secretProvider: 'plaintext',
+      githubTokenSource: 'none',
+      openaiApiKeySource: 'none',
+      summaryModel: 'gpt-5-mini',
+      embedModel: 'text-embedding-3-large',
+      embedBatchSize: 8,
+      embedConcurrency: 10,
+      embedMaxUnread: 20,
+      openSearchIndex: 'ghcrawl-threads',
+      tuiPreferences: {},
+    },
+    github: {
+      checkAuth: async () => undefined,
+      getRepo: async () => ({}),
+      listRepositoryIssues: async () => [],
+      getIssue: async () => ({}),
+      getPull: async () => ({}),
+      listIssueComments: async () => [],
+      listPullReviews: async () => [],
+      listPullReviewComments: async () => [],
+    },
+  });
+
+  const now = '2026-03-09T00:00:00Z';
+  service.db
+    .prepare(
+      `insert into repositories (id, owner, name, full_name, github_repo_id, raw_json, updated_at)
+       values (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '1', '{}', now);
+  const insertThread = service.db.prepare(
+    `insert into threads (
+      id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
+      labels_json, assignees_json, raw_json, content_hash, is_draft, created_at_gh, updated_at_gh, closed_at_gh,
+      merged_at_gh, first_pulled_at, last_pulled_at, updated_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  insertThread.run(10, 1, '100', 42, 'issue', 'open', 'Downloader hangs', 'The transfer never finishes.', 'alice', 'User', 'https://github.com/openclaw/openclaw/issues/42', '[]', '[]', '{}', 'hash-42', 0, now, now, null, null, now, now, now);
+  insertThread.run(11, 1, '101', 43, 'pull_request', 'open', 'Fix downloader hang', 'Implements a fix.', 'bob', 'User', 'https://github.com/openclaw/openclaw/pull/43', '[]', '[]', '{}', 'hash-43', 0, now, now, null, null, now, now, now);
+  insertThread.run(12, 1, '102', 44, 'issue', 'open', 'Retry is broken', 'Retries never start.', 'carol', 'User', 'https://github.com/openclaw/openclaw/issues/44', '[]', '[]', '{}', 'hash-44', 0, now, now, null, null, now, now, now);
+
+  const server = createApiServer(service);
+  try {
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert(address && typeof address === 'object');
+
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/threads?owner=openclaw&repo=openclaw&numbers=44,42,999`,
+    );
+    assert.equal(response.status, 200);
+    const payload = threadsResponseSchema.parse((await response.json()) as unknown);
+    assert.deepEqual(payload.threads.map((thread) => thread.number), [44, 42]);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     service.close();

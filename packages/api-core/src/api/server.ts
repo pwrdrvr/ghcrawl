@@ -43,7 +43,15 @@ export function createApiServer(service: GHCrawlService): http.Server {
         const params = parseRepoParams(url);
         const kindParam = url.searchParams.get('kind');
         const kind = kindParam === 'issue' || kindParam === 'pull_request' ? kindParam : undefined;
-        sendJson(res, 200, service.listThreads({ ...params, kind }));
+        const numbersValue = url.searchParams.get('numbers');
+        const numbers =
+          numbersValue && numbersValue.trim().length > 0
+            ? numbersValue
+                .split(',')
+                .map((value) => Number(value.trim()))
+                .filter((value) => Number.isSafeInteger(value) && value > 0)
+            : undefined;
+        sendJson(res, 200, service.listThreads({ ...params, kind, numbers }));
         return;
       }
 
