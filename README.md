@@ -8,6 +8,15 @@ Current status:
 - SQLite is the canonical local store
 - the CLI hosts the only supported runtime in V1
 
+## Requirements
+
+For normal `gitcrawl` use you need both:
+
+- a GitHub personal access token
+- an OpenAI API key
+
+GitHub is required to crawl issue/PR data. OpenAI is required for embeddings and the maintainer clustering/search workflow. If you already have a populated local DB you can still browse it without live keys, but a fresh sync + embed + cluster run needs both.
+
 ## Quick start
 
 ```bash
@@ -31,6 +40,16 @@ pnpm op:tui
 pnpm op:exec -- sync openclaw/openclaw
 pnpm op:shell
 ```
+
+## Cost To Operate
+
+The main variable cost is OpenAI embeddings.
+
+On a real local run against roughly `12k` issues plus about `1.2x` related PR/issue inputs, `text-embedding-3-large` came out to about **$0.65 USD** total to embed the repo. Treat that as an approximate data point for something like `~14k` issue/PR inputs, not a hard guarantee.
+
+This screenshot is the reference point for that estimate:
+
+![OpenAI embeddings cost for a 12k-issue repo](./docs/images/openai-embeddings-12k-issue-repo.png)
 
 ## Root Helpers
 
