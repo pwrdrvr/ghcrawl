@@ -173,6 +173,13 @@ This repo ships an installable skill at [skills/ghcrawl/SKILL.md](./skills/ghcra
 
 For installation and usage conventions, point users at [vercel-labs/skills](https://github.com/vercel-labs/skills).
 
+Install the CLI first, then install the skill:
+
+```bash
+npm i -g ghcrawl
+npx skills add -g pwrdrvr/ghcrawl
+```
+
 The skill is built around the stable JSON CLI surface and is intentionally conservative:
 
 - default mode assumes no valid API keys and stays read-only
@@ -186,6 +193,12 @@ ghcrawl threads owner/repo --numbers 42,43,44
 ghcrawl clusters owner/repo --min-size 10 --limit 20 --sort recent
 ghcrawl cluster-detail owner/repo --id 123 --member-limit 20 --body-chars 280
 ```
+
+Video walkthrough:
+
+[![ghcrawl skill walkthrough](https://img.youtube.com/vi/xqgDcy3WDUI/hqdefault.jpg)](https://www.youtube.com/watch?v=xqgDcy3WDUI)
+
+GitHub README links cannot force a new tab, but clicking the preview above will open the YouTube walkthrough from the repo page.
 
 The agent and build contract for this repo lives in [SPEC.md](./SPEC.md).
 
