@@ -1575,7 +1575,7 @@ export class GHCrawlService {
       throw new Error(`No completed cluster run found for ${repository.fullName}. Run cluster first.`);
     }
 
-    const summary = this.listRawTuiClusters(repository.id, latestRun.id).find((cluster) => cluster.clusterId === params.clusterId);
+    const summary = this.getRawTuiClusterSummary(repository.id, latestRun.id, params.clusterId);
     if (!summary) {
       throw new Error(`Cluster ${params.clusterId} was not found for ${repository.fullName}.`);
     }
@@ -1987,6 +1987,8 @@ export class GHCrawlService {
          group by
            c.id,
            c.member_count,
+           c.closed_at_local,
+           c.close_reason_local,
            c.representative_thread_id,
            rt.number,
            rt.kind,
@@ -2023,6 +2025,77 @@ export class GHCrawlService {
       representativeKind: row.representative_kind,
       searchText: `${(row.representative_title ?? '').toLowerCase()} ${row.search_text ?? ''}`.trim(),
     }));
+  }
+
+  private getRawTuiClusterSummary(repoId: number, clusterRunId: number, clusterId: number): TuiClusterSummary | null {
+    const row = this.db
+      .prepare(
+        `select
+            c.id as cluster_id,
+            c.member_count,
+            c.closed_at_local,
+            c.close_reason_local,
+            c.representative_thread_id,
+            rt.number as representative_number,
+            rt.kind as representative_kind,
+            rt.title as representative_title,
+            max(coalesce(t.updated_at_gh, t.updated_at)) as latest_updated_at,
+            sum(case when t.kind = 'issue' then 1 else 0 end) as issue_count,
+            sum(case when t.kind = 'pull_request' then 1 else 0 end) as pull_request_count,
+            sum(case when t.state != 'open' or t.closed_at_local is not null then 1 else 0 end) as closed_member_count,
+            group_concat(lower(coalesce(t.title, '')), ' ') as search_text
+         from clusters c
+         left join threads rt on rt.id = c.representative_thread_id
+         join cluster_members cm on cm.cluster_id = c.id
+         join threads t on t.id = cm.thread_id
+         where c.repo_id = ? and c.cluster_run_id = ? and c.id = ?
+         group by
+           c.id,
+           c.member_count,
+           c.closed_at_local,
+           c.close_reason_local,
+           c.representative_thread_id,
+           rt.number,
+           rt.kind,
+           rt.title`,
+      )
+      .get(repoId, clusterRunId, clusterId) as
+      | {
+          cluster_id: number;
+          member_count: number;
+          closed_at_local: string | null;
+          close_reason_local: string | null;
+          representative_thread_id: number | null;
+          representative_number: number | null;
+          representative_kind: 'issue' | 'pull_request' | null;
+          representative_title: string | null;
+          latest_updated_at: string | null;
+          issue_count: number;
+          pull_request_count: number;
+          closed_member_count: number;
+          search_text: string | null;
+        }
+      | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      clusterId: row.cluster_id,
+      displayTitle: row.representative_title ?? `Cluster ${row.cluster_id}`,
+      isClosed: row.close_reason_local !== null || row.closed_member_count >= row.member_count,
+      closedAtLocal: row.closed_at_local,
+      closeReasonLocal: row.close_reason_local,
+      totalCount: row.member_count,
+      issueCount: row.issue_count,
+      pullRequestCount: row.pull_request_count,
+      latestUpdatedAt: row.latest_updated_at,
+      representativeThreadId: row.representative_thread_id,
+      representativeNumber: row.representative_number,
+      representativeKind: row.representative_kind,
+      searchText: `${(row.representative_title ?? '').toLowerCase()} ${row.search_text ?? ''}`.trim(),
+    };
   }
 
   private compareTuiClusterSummary(left: TuiClusterSummary, right: TuiClusterSummary, sort: TuiClusterSortMode): number {
