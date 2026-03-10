@@ -2,7 +2,7 @@
 
 `gitcrawl` is a local-first GitHub issue and pull request crawler for maintainers.
 
-<img src="./docs/images/gitcrawl-openclaw-demo.png" alt="gitcrawl OpenClaw demo" width="640" />
+<img src="./docs/images/gitcrawl-openclaw-social-preview.jpg" alt="gitcrawl OpenClaw demo" width="640" />
 
 ![gitcrawl TUI demo](./docs/images/gitcrawl-tui-demo.gif)
 
