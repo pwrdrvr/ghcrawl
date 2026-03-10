@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Node.js and dependencies
         uses: ./.github/actions/configure-nodejs
@@ -35,7 +35,7 @@ jobs:
     needs: install-deps
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Node.js and dependencies
         uses: ./.github/actions/configure-nodejs
@@ -49,7 +49,7 @@ jobs:
     needs: install-deps
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Node.js and dependencies
         uses: ./.github/actions/configure-nodejs
@@ -63,7 +63,7 @@ jobs:
     needs: install-deps
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Node.js and dependencies
         uses: ./.github/actions/configure-nodejs
@@ -83,7 +83,7 @@ jobs:
     needs: install-deps
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Node.js and dependencies
         uses: ./.github/actions/configure-nodejs
