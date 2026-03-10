@@ -94,7 +94,7 @@ function createScreen(options: Parameters<typeof blessed.screen>[0]): blessed.Wi
 }
 
 const ACTIVITY_LOG_LIMIT = 200;
-const FOOTER_LOG_LINES = 4;
+const FOOTER_LOG_LINES = 3;
 const UPDATE_TASK_ORDER: Array<keyof UpdateTaskSelection> = ['sync', 'embed', 'cluster'];
 
 export async function startTui(params: StartTuiParams): Promise<void> {
@@ -312,7 +312,10 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       footerLines.unshift('');
     }
     footerLines.push(
-      `${status}  |  jobs:${activeJobs}  |  Tab focus  j/k move-or-scroll  PgUp/PgDn scroll  p repos  u author  g update  s sort  f min  l layout  x closed  / filter  h/? help  r refresh  o open  q quit`,
+      `${status}  |  jobs:${activeJobs}  |  h/? help  g update  p repos  u author  / filter  s sort  f min  l layout  x closed`,
+    );
+    footerLines.push(
+      `Tab focus  j/k move-or-scroll  PgUp/PgDn scroll  r refresh  o open  q quit`,
     );
     widgets.footer.setContent(footerLines.join('\n'));
     widgets.screen.render();
