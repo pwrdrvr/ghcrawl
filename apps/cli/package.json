@@ -38,7 +38,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "cli": "node ./bin/ghcrawl.js",
-    "prepack": "pnpm --filter @ghcrawl/api-contract build && pnpm --filter @ghcrawl/api-core build && pnpm run build",
+    "prepack": "node ../../scripts/sync-package-readmes.mjs && pnpm --filter @ghcrawl/api-contract build && pnpm --filter @ghcrawl/api-core build && pnpm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --tsconfig tsconfig.runtime.json --test src/*.test.ts src/**/*.test.ts"
   },

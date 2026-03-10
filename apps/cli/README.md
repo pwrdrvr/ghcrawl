@@ -1,14 +1,36 @@
+<!-- This file is generated from the repository root README.md. Edit README.md and rerun scripts/sync-package-readmes.mjs. -->
+
 # ghcrawl
 
-`ghcrawl` is a local-first terminal UI and CLI for crawling GitHub issues and pull requests, generating embeddings, and clustering related work.
+[![CI](https://github.com/pwrdrvr/ghcrawl/actions/workflows/ci.yml/badge.svg)](https://github.com/pwrdrvr/ghcrawl/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/ghcrawl)](https://www.npmjs.com/package/ghcrawl)
+[![npm downloads](https://img.shields.io/npm/dm/ghcrawl)](https://www.npmjs.com/package/ghcrawl)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/pwrdrvr/ghcrawl/blob/main/LICENSE)
+
+`ghcrawl` is a local-first GitHub issue and pull request crawler for maintainers.
+
+![ghcrawl TUI demo](https://raw.githubusercontent.com/pwrdrvr/ghcrawl/main/docs/images/ghcrawl-tui-demo.gif)
 
 ## Install
+
+Install the published CLI package:
 
 ```bash
 npm install -g ghcrawl
 ```
 
-This package installs the `ghcrawl` command.
+That package exposes the `ghcrawl` command directly.
+
+If you are working from source or maintaining the repo, use [CONTRIBUTING.md](https://github.com/pwrdrvr/ghcrawl/blob/main/CONTRIBUTING.md).
+
+## Requirements
+
+Normal `ghcrawl` use needs both:
+
+- a GitHub personal access token
+- an OpenAI API key
+
+GitHub is required to crawl issue and PR data. OpenAI is required for embeddings and the maintainer clustering and search workflow. If you already have a populated local DB you can still browse it without live keys, but a fresh `sync` + `embed` + `cluster` or `refresh` run needs both.
 
 ## Quick Start
 
@@ -19,14 +41,192 @@ ghcrawl refresh owner/repo
 ghcrawl tui owner/repo
 ```
 
-## Documentation
+`ghcrawl init` runs the setup wizard. It can either:
 
-For the full project README, screenshots, setup guide, and release notes, see:
+- save plaintext keys in `~/.config/ghcrawl/config.json`
+- or guide you through a 1Password CLI (`op`) setup that keeps keys out of the config file
 
-- [GitHub repository](https://github.com/pwrdrvr/ghcrawl)
-- [Project README](https://github.com/pwrdrvr/ghcrawl#readme)
+`ghcrawl refresh owner/repo` is the main pipeline command. It pulls the latest open GitHub issues and pull requests, refreshes embeddings for changed items, and rebuilds the clusters you browse in the TUI.
 
-## Notes
+## Typical Commands
 
-- `ghcrawl` needs a GitHub API token and an OpenAI API key for normal sync/embed/cluster use.
-- The legacy `gitcrawl` command remains as a compatibility alias for now.
+```bash
+ghcrawl doctor
+ghcrawl refresh owner/repo
+ghcrawl tui owner/repo
+```
+
+`refresh`, `sync`, and `embed` call remote services and should be run intentionally.
+
+`cluster` does not call remote services, but it is still time consuming. On a repo with roughly `12k` issues and PRs, a full cluster rebuild can take around `10 minutes`.
+
+`clusters` explores the clusters already stored in the local SQLite database and is expected to be the fast, read-only inspection path.
+
+### Refresh Command Example
+
+```bash
+ghcrawl refresh owner/repo
+```
+
+![ghcrawl refresh demo](https://raw.githubusercontent.com/pwrdrvr/ghcrawl/main/docs/images/ghcrawl-refresh-demo.gif)
+
+## Controlling The Refresh Flow More Intentionally
+
+Most users should run `ghcrawl refresh owner/repo` and let it do the full pipeline in the right order.
+
+If you need tighter control, you can run the three stages yourself:
+
+```bash
+ghcrawl sync owner/repo     # pull the latest open issues and pull requests from GitHub
+ghcrawl embed owner/repo    # generate or refresh OpenAI embeddings for changed items
+ghcrawl cluster owner/repo  # rebuild local related-work clusters from the current vectors (local-only, but can take ~10 minutes on a ~12k issue/PR repo)
+```
+
+Run them in that order. `refresh` is just the safe convenience command that performs the same sequence for you.
+
+## Init And Doctor
+
+First run:
+
+```bash
+ghcrawl init
+ghcrawl doctor
+```
+
+`init` behavior:
+
+- prompts you to choose one of two secret-storage modes:
+  - `plaintext`: saves both keys to `~/.config/ghcrawl/config.json`
+  - `1Password CLI`: stores only vault and item metadata and tells you how to run `ghcrawl` through `op`
+- if you choose plaintext storage, init warns that anyone who can read that file can use your keys and that resulting API charges are your responsibility
+- if you choose 1Password CLI mode, init tells you to create a Secure Note with concealed fields named:
+  - `GITHUB_TOKEN`
+  - `OPENAI_API_KEY`
+
+GitHub token guidance:
+
+- recommended: fine-grained PAT scoped to the repositories you want to crawl
+- repository permissions:
+  - `Metadata: Read-only`
+  - `Issues: Read-only`
+  - `Pull requests: Read-only`
+- if you use a classic PAT and need private repositories, `repo` is the safe fallback scope
+
+`doctor` checks:
+
+- config file presence and path
+- local DB path wiring
+- GitHub token presence, token-shape validation, and a live auth smoke check
+- OpenAI key presence, key-shape validation, and a live auth smoke check
+- if init is configured for 1Password CLI but you forgot to run through your `op` wrapper, doctor tells you that explicitly
+
+### 1Password CLI Example
+
+If you choose 1Password CLI mode, create a 1Password Secure Note with concealed fields named exactly:
+
+- `GITHUB_TOKEN`
+- `OPENAI_API_KEY`
+
+Then add this wrapper to `~/.zshrc`:
+
+```bash
+ghcrawl-op() {
+  env GITHUB_TOKEN="$(op read 'op://Private/ghcrawl/GITHUB_TOKEN')" \
+      OPENAI_API_KEY="$(op read 'op://Private/ghcrawl/OPENAI_API_KEY')" \
+      ghcrawl "$@"
+}
+```
+
+Then use:
+
+```bash
+ghcrawl-op doctor
+ghcrawl-op refresh owner/repo
+ghcrawl-op tui owner/repo
+```
+
+## Using The CLI To Extract JSON Data
+
+These commands are intended more for scripts, bots, and agent integrations than for normal day-to-day terminal browsing:
+
+```bash
+ghcrawl threads owner/repo --numbers 42,43,44
+ghcrawl cluster owner/repo
+ghcrawl clusters owner/repo --min-size 10 --limit 20
+ghcrawl cluster-detail owner/repo --id 123
+ghcrawl search owner/repo --query "download stalls"
+```
+
+Use `threads --numbers ...` when you want several specific issue or PR records in one CLI call instead of paying process startup overhead repeatedly.
+
+## Cost To Operate
+
+The main variable cost is OpenAI embeddings.
+
+On a real local run against roughly `12k` issues plus about `1.2x` related PR and issue inputs, `text-embedding-3-large` came out to about **$0.65 USD** total to embed the repo. Treat that as an approximate data point for something like `~14k` issue and PR inputs, not a hard guarantee.
+
+This screenshot is the reference point for that estimate:
+
+![OpenAI embeddings cost for a 12k-issue repo](https://raw.githubusercontent.com/pwrdrvr/ghcrawl/main/docs/images/openai-embeddings-12k-issue-repo.png)
+
+## Agent Skill
+
+This repo ships an installable skill at [skills/ghcrawl/SKILL.md](https://github.com/pwrdrvr/ghcrawl/blob/main/skills/ghcrawl/SKILL.md).
+
+For installation and usage conventions, point users at [vercel-labs/skills](https://github.com/vercel-labs/skills).
+
+Install the CLI first, then install the skill:
+
+```bash
+npm i -g ghcrawl
+npx skills add -g pwrdrvr/ghcrawl
+```
+
+The skill is built around the stable JSON CLI surface and is intentionally conservative:
+
+- default mode assumes no valid API keys and stays read-only
+- API-backed operations only become available after `ghcrawl doctor --json` shows healthy auth
+- even then, `refresh`, `sync`, `embed`, and `cluster` should only run when the user explicitly asks for them
+
+```bash
+ghcrawl doctor --json
+ghcrawl refresh owner/repo
+ghcrawl threads owner/repo --numbers 42,43,44
+ghcrawl clusters owner/repo --min-size 10 --limit 20 --sort recent
+ghcrawl cluster-detail owner/repo --id 123 --member-limit 20 --body-chars 280
+```
+
+Video walkthrough:
+
+[![ghcrawl skill walkthrough](https://img.youtube.com/vi/xqgDcy3WDUI/hqdefault.jpg)](https://www.youtube.com/watch?v=xqgDcy3WDUI)
+
+GitHub README links cannot force a new tab, but clicking the preview above will open the YouTube walkthrough from the repo page.
+
+The agent and build contract for this repo lives in [SPEC.md](https://github.com/pwrdrvr/ghcrawl/blob/main/SPEC.md).
+
+## Current Caveats
+
+- `serve` starts the local HTTP API only. The web UI is not built yet.
+- `sync` only pulls open issues and PRs.
+- a plain `sync owner/repo` is incremental by default after the first full completed open scan for that repo
+- `sync` is metadata-only by default
+- `sync --include-comments` enables issue comments, PR reviews, and review comments for deeper context
+- `embed` defaults to `text-embedding-3-large`
+- `embed` generates separate vectors for `title` and `body`, and also uses stored summary text when present
+- `embed` stores an input hash per source kind and will not resubmit unchanged text for re-embedding
+- `sync --since` accepts ISO timestamps and relative durations like `15m`, `2h`, `7d`, and `1mo`
+- `sync --limit <count>` is the best smoke-test path on a busy repository
+- `tui` remembers sort order and min cluster size per repository in the persisted config file
+- if you add a brand-new repo from the TUI with `p`, ghcrawl runs sync -> embed -> cluster and opens that repo with min cluster size `1+`
+
+## Responsibility Attestation
+
+By operating `ghcrawl`, you accept that you, and any employer or organization you operate it for, are fully responsible for:
+
+- obtaining GitHub and OpenAI API keys through legitimate means
+- monitoring that your use of this tool complies with the agreements, usage terms, and platform policies that apply to those keys
+- storing those API keys securely
+- any misuse, theft, unexpected charges, or other consequences resulting from those keys being exposed or abused
+- monitoring spend and stopping or reconfiguring the tool if usage is higher than you intended
+
+The creators and contributors of `ghcrawl` accept no liability for API charges, account actions, policy violations, data loss, or misuse resulting from operation of this tool.
