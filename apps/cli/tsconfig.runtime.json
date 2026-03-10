@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": "../..",
+    "paths": {
+      "@ghcrawl/api-contract": ["packages/api-contract/src/index.ts"],
+      "@ghcrawl/api-core": ["packages/api-core/src/index.ts"]
+    }
+  }
+}

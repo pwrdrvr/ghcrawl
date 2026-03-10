@@ -40,7 +40,7 @@
     "build": "tsc -p tsconfig.build.json",
     "prepack": "pnpm --filter @ghcrawl/api-contract build && pnpm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/*.test.ts src/**/*.test.ts"
+    "test": "tsx --tsconfig tsconfig.test.json --test src/*.test.ts src/**/*.test.ts"
   },
   "dependencies": {
     "@ghcrawl/api-contract": "workspace:*",
