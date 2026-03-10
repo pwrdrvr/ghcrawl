@@ -48,6 +48,11 @@ function usage(devMode = false): string {
     '  neighbors <owner/repo> --number <thread> [--limit <count>] [--threshold <score>]',
     '  tui [owner/repo]',
     '  serve',
+    '',
+    'Notes:',
+    '  refresh/sync/embed call remote services and should be run intentionally.',
+    '  cluster is local-only but can still take ~10 minutes on a ~12k issue/PR repo.',
+    '  clusters reads the existing local cluster data and is intended to be fast.',
   ];
   if (devMode) {
     lines.push('', 'Advanced Commands:', '  summarize <owner/repo> [--number <thread>] [--include-comments]', '  purge-comments <owner/repo> [--number <thread>]');

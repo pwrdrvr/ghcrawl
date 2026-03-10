@@ -54,6 +54,12 @@ ghcrawl refresh owner/repo
 ghcrawl tui owner/repo
 ```
 
+`refresh`, `sync`, and `embed` call remote services and should be run intentionally.
+
+`cluster` does not call remote services, but it is still time consuming. On a repo with roughly `12k` issues and PRs, a full cluster rebuild can take around `10 minutes`.
+
+`clusters` explores the clusters already stored in the local SQLite database and is expected to be the fast, read-only inspection path.
+
 ### Refresh Command Example
 
 ```bash
@@ -71,7 +77,7 @@ If you need tighter control, you can run the three stages yourself:
 ```bash
 ghcrawl sync owner/repo     # pull the latest open issues and pull requests from GitHub
 ghcrawl embed owner/repo    # generate or refresh OpenAI embeddings for changed items
-ghcrawl cluster owner/repo  # rebuild local related-work clusters from the current vectors
+ghcrawl cluster owner/repo  # rebuild local related-work clusters from the current vectors (local-only, but can take ~10 minutes on a ~12k issue/PR repo)
 ```
 
 Run them in that order. `refresh` is just the safe convenience command that performs the same sequence for you.
@@ -164,7 +170,11 @@ This repo ships an installable skill at [skills/ghcrawl/SKILL.md](./skills/ghcra
 
 For installation and usage conventions, point users at [vercel-labs/skills](https://github.com/vercel-labs/skills).
 
-The skill is built around the stable JSON CLI surface:
+The skill is built around the stable JSON CLI surface and is intentionally conservative:
+
+- default mode assumes no valid API keys and stays read-only
+- API-backed operations only become available after `ghcrawl doctor --json` shows healthy auth
+- even then, `refresh`, `sync`, `embed`, and `cluster` should only run when the user explicitly asks for them
 
 ```bash
 ghcrawl doctor --json

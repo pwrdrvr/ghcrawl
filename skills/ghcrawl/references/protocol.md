@@ -8,6 +8,11 @@ Use the JSON CLI surface. Do not parse the TUI.
 
 Health and auth smoke check.
 
+Use this first. Treat the result as a gate:
+
+- If GitHub/OpenAI auth is missing or unhealthy, stay read-only.
+- If GitHub/OpenAI auth is healthy, API-backed commands are available, but still require explicit user direction.
+
 ### `ghcrawl refresh owner/repo`
 
 Runs the staged pipeline in fixed order:
@@ -21,6 +26,8 @@ Optional skips:
 - `--no-sync`
 - `--no-embed`
 - `--no-cluster`
+
+Do not run this unless the user explicitly asked for a refresh/rebuild.
 
 ### `ghcrawl clusters owner/repo`
 
@@ -48,6 +55,8 @@ Each cluster includes:
 - `representativeThreadId`
 - `representativeNumber`
 - `representativeKind`
+
+This is the normal read-only exploration command for existing local data.
 
 ### `ghcrawl cluster-detail owner/repo --id <cluster-id>`
 
@@ -98,7 +107,8 @@ pnpm --filter ghcrawl cli cluster-detail owner/repo --id 123 --member-limit 20 -
 ## Suggested analysis flow
 
 1. `ghcrawl doctor --json`
-2. `ghcrawl refresh owner/repo`
-3. `ghcrawl clusters owner/repo --min-size 10 --limit 20 --sort recent`
-4. `ghcrawl cluster-detail owner/repo --id <cluster-id>`
-5. optionally `search` or `neighbors`
+2. If auth is unavailable or the user did not ask for refresh work, stay read-only and use `clusters`
+3. Only if doctor is healthy and the user explicitly asked, run `ghcrawl refresh owner/repo`
+4. `ghcrawl clusters owner/repo --min-size 10 --limit 20 --sort recent`
+5. `ghcrawl cluster-detail owner/repo --id <cluster-id>`
+6. optionally `search` or `neighbors`

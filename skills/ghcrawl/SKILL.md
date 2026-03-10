@@ -10,6 +10,13 @@ Use `ghcrawl` as the machine-facing interface for local GitHub duplicate-cluster
 
 Do not scrape the TUI. Prefer JSON CLI output.
 
+The skill has two modes:
+
+- Default mode: assume there are no valid API keys and stay read-only.
+- API-enabled mode: only after `ghcrawl doctor --json` proves GitHub and OpenAI auth are configured and healthy.
+
+Even in API-enabled mode, never run `sync`, `embed`, `cluster`, or `refresh` unless the user explicitly asks for that work. Those commands can take a long time, consume paid API usage, and trigger rate limiting if used too often.
+
 ## When to use this skill
 
 - The user wants related issue/PR clusters for one repo.
@@ -42,9 +49,27 @@ If the bin is unavailable, fall back to:
 pnpm --filter ghcrawl cli doctor --json
 ```
 
-### 2. Refresh local data when needed
+Interpret the result like this:
 
-Use the staged pipeline command:
+- If GitHub/OpenAI auth is missing or unhealthy, stay in read-only mode.
+- If GitHub/OpenAI auth is healthy, API-backed operations are available, but still require explicit user direction.
+
+### 2. Default read-only flow
+
+Without explicit user direction to refresh data, prefer these local-only commands:
+
+```bash
+ghcrawl clusters owner/repo --min-size 10 --limit 20 --sort recent
+ghcrawl cluster-detail owner/repo --id 123 --member-limit 20 --body-chars 280
+ghcrawl search owner/repo --query "download stalls" --mode hybrid
+ghcrawl neighbors owner/repo --number 42 --limit 10
+```
+
+These operate on the existing local SQLite dataset.
+
+### 3. Refresh local data only when explicitly requested
+
+Only if the user explicitly asks to refresh or rebuild data, and doctor says auth is healthy, use:
 
 ```bash
 ghcrawl refresh owner/repo
@@ -63,7 +88,9 @@ ghcrawl refresh owner/repo --no-sync
 ghcrawl refresh owner/repo --no-cluster
 ```
 
-### 3. List clusters
+Do not decide on your own to run `cluster` just because it is local-only. It is still long-running and should be treated as an explicit user-directed operation.
+
+### 4. List clusters
 
 Use:
 
@@ -77,7 +104,7 @@ This returns:
 - freshness state
 - cluster summaries
 
-### 4. Inspect one cluster
+### 5. Inspect one cluster
 
 Use:
 
@@ -92,7 +119,7 @@ This returns:
 - a body snippet
 - stored summary fields when present
 
-### 5. Optional deeper inspection
+### 6. Optional deeper inspection
 
 Use search or neighbors as needed:
 
@@ -116,6 +143,7 @@ ghcrawl neighbors owner/repo --number 42 --limit 10
 - If freshness is stale, say that explicitly:
   - embeddings outdated
   - clusters outdated
+- If you stayed read-only because doctor was not healthy or the user did not explicitly request a refresh, say that explicitly.
 
 ## References
 
