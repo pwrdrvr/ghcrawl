@@ -714,7 +714,11 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     }
   };
 
-  widgets.screen.key(['q', 'C-c'], () => {
+  widgets.screen.key(['q'], () => {
+    if (modalOpen) return;
+    widgets.screen.destroy();
+  });
+  widgets.screen.key(['C-c'], () => {
     widgets.screen.destroy();
   });
   widgets.screen.key(['tab'], () => {
@@ -1232,7 +1236,7 @@ async function promptUpdatePipelineSelection(
       resolve(value);
     };
     const handleKeypress = (_char: string, key: blessed.Widgets.Events.IKeyEventArg): void => {
-      if (key.name === 'escape') {
+      if (key.name === 'escape' || key.name === 'q') {
         finish(null);
         return;
       }
@@ -1328,7 +1332,7 @@ async function promptAuthorThreadChoice(
       resolve(value);
     };
     const handleKeypress = (_char: string, key: blessed.Widgets.Events.IKeyEventArg): void => {
-      if (key.name === 'escape') {
+      if (key.name === 'escape' || key.name === 'q') {
         finish(null);
       }
     };
@@ -1387,7 +1391,7 @@ async function promptRepositoryChoice(
       resolve(value);
     };
     const handleKeypress = (_char: string, key: blessed.Widgets.Events.IKeyEventArg): void => {
-      if (key.name === 'escape') {
+      if (key.name === 'escape' || key.name === 'q') {
         finish(null);
         return;
       }
