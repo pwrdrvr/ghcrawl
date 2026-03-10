@@ -1,10 +1,10 @@
-# gitcrawl
+# ghcrawl
 
-`gitcrawl` is a local-first GitHub issue and pull request crawler for maintainers.
+`ghcrawl` is a local-first GitHub issue and pull request crawler for maintainers.
 
-<img src="./docs/images/gitcrawl-openclaw-social-preview.jpg" alt="gitcrawl OpenClaw demo" width="640" />
+<img src="./docs/images/ghcrawl-openclaw-social-preview.jpg" alt="ghcrawl OpenClaw demo" width="640" />
 
-![gitcrawl TUI demo](./docs/images/gitcrawl-tui-demo.gif)
+![ghcrawl TUI demo](./docs/images/ghcrawl-tui-demo.gif)
 
 ## Install
 
@@ -38,7 +38,7 @@ ghcrawl tui owner/repo
 
 `ghcrawl init` runs the setup wizard. It can either:
 
-- save plaintext keys in `~/.config/gitcrawl/config.json`
+- save plaintext keys in `~/.config/ghcrawl/config.json`
 - or guide you through a 1Password CLI (`op`) setup that keeps keys out of the config file
 
 ## Typical Commands
@@ -62,9 +62,9 @@ ghcrawl serve
 ghcrawl embed owner/repo
 ```
 
-<video src="./docs/images/gitcrawl-embed.mp4" controls muted playsinline></video>
+<video src="./docs/images/ghcrawl-embed.mp4" controls muted playsinline></video>
 
-If your Markdown renderer does not show the video inline, open [gitcrawl-embed.mp4](./docs/images/gitcrawl-embed.mp4) directly.
+If your Markdown renderer does not show the video inline, open [ghcrawl-embed.mp4](./docs/images/ghcrawl-embed.mp4) directly.
 
 ## Init And Doctor
 
@@ -78,8 +78,8 @@ ghcrawl doctor
 `init` behavior:
 
 - prompts you to choose one of two secret-storage modes:
-  - `plaintext`: saves both keys to `~/.config/gitcrawl/config.json`
-  - `1Password CLI`: stores only vault and item metadata and tells you how to run `gitcrawl` through `op`
+  - `plaintext`: saves both keys to `~/.config/ghcrawl/config.json`
+  - `1Password CLI`: stores only vault and item metadata and tells you how to run `ghcrawl` through `op`
 - if you choose plaintext storage, init warns that anyone who can read that file can use your keys and that resulting API charges are your responsibility
 - if you choose 1Password CLI mode, init tells you to create a Secure Note with concealed fields named:
   - `GITHUB_TOKEN`
@@ -134,7 +134,7 @@ This screenshot is the reference point for that estimate:
 
 ## Agent Skill
 
-This repo ships an installable skill at [skills/gitcrawl/SKILL.md](./skills/gitcrawl/SKILL.md).
+This repo ships an installable skill at [skills/ghcrawl/SKILL.md](./skills/ghcrawl/SKILL.md).
 
 For installation and usage conventions, point users at [vercel-labs/skills](https://github.com/vercel-labs/skills).
 
@@ -162,11 +162,11 @@ The agent and build contract for this repo lives in [SPEC.md](./SPEC.md).
 - `sync --since` accepts ISO timestamps and relative durations like `15m`, `2h`, `7d`, and `1mo`
 - `sync --limit <count>` is the best smoke-test path on a busy repository
 - `tui` remembers sort order and min cluster size per repository in the persisted config file
-- if you add a brand-new repo from the TUI with `p`, gitcrawl runs sync -> embed -> cluster and opens that repo with min cluster size `1+`
+- if you add a brand-new repo from the TUI with `p`, ghcrawl runs sync -> embed -> cluster and opens that repo with min cluster size `1+`
 
 ## Responsibility Attestation
 
-By operating `gitcrawl`, you accept that you, and any employer or organization you operate it for, are fully responsible for:
+By operating `ghcrawl`, you accept that you, and any employer or organization you operate it for, are fully responsible for:
 
 - obtaining GitHub and OpenAI API keys through legitimate means
 - monitoring that your use of this tool complies with the agreements, usage terms, and platform policies that apply to those keys
@@ -174,4 +174,4 @@ By operating `gitcrawl`, you accept that you, and any employer or organization y
 - any misuse, theft, unexpected charges, or other consequences resulting from those keys being exposed or abused
 - monitoring spend and stopping or reconfiguring the tool if usage is higher than you intended
 
-The creators and contributors of `gitcrawl` accept no liability for API charges, account actions, policy violations, data loss, or misuse resulting from operation of this tool.
+The creators and contributors of `ghcrawl` accept no liability for API charges, account actions, policy violations, data loss, or misuse resulting from operation of this tool.

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { readPersistedConfig, writePersistedConfig } from '@gitcrawl/api-core';
+import { readPersistedConfig, writePersistedConfig } from '@ghcrawl/api-core';
 
 import { runInitWizard, type InitPrompter } from './init-wizard.js';
 
@@ -36,7 +36,7 @@ function makePrompter(overrides: Partial<InitPrompter> = {}): InitPrompter {
 }
 
 test('runInitWizard skips prompting when config already has both API keys', async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gitcrawl-init-test-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-init-test-'));
   const env = makeTestEnv({ HOME: home });
   writePersistedConfig(
     {
@@ -57,7 +57,7 @@ test('runInitWizard skips prompting when config already has both API keys', asyn
 });
 
 test('runInitWizard prompts for missing keys and writes the config file', async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gitcrawl-init-test-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-init-test-'));
   const env = makeTestEnv({ HOME: home });
   const prompts: string[] = [];
 
@@ -82,7 +82,7 @@ test('runInitWizard prompts for missing keys and writes the config file', async 
 });
 
 test('runInitWizard can persist detected environment keys without prompting for secrets', async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gitcrawl-init-test-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-init-test-'));
   const env = makeTestEnv({
     HOME: home,
     GITHUB_TOKEN: 'ghp_envtoken1234567890',
@@ -105,7 +105,7 @@ test('runInitWizard can persist detected environment keys without prompting for 
 });
 
 test('runInitWizard can configure 1Password CLI metadata without persisting plaintext keys', async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gitcrawl-init-test-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-init-test-'));
   const env = makeTestEnv({ HOME: home });
   const notes: Array<{ title?: string; message: string }> = [];
   const confirms: string[] = [];
@@ -147,7 +147,7 @@ test('runInitWizard can configure 1Password CLI metadata without persisting plai
 });
 
 test('runInitWizard accepts empty 1Password vault and item input as defaults', async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gitcrawl-init-test-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-init-test-'));
   const env = makeTestEnv({ HOME: home });
 
   await runInitWizard({
@@ -166,7 +166,7 @@ test('runInitWizard accepts empty 1Password vault and item input as defaults', a
 });
 
 test('runInitWizard accepts undefined 1Password text responses as defaults', async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gitcrawl-init-test-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-init-test-'));
   const env = makeTestEnv({ HOME: home });
 
   await runInitWizard({

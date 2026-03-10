@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { buildMemberRows, cycleFocusPane, cycleMinSizeFilter, cycleSortMode, findSelectableIndex, moveSelectableIndex, preserveSelectedId, applyClusterFilters } from './state.js';
-import type { TuiClusterDetail, TuiClusterSummary } from '@gitcrawl/api-core';
+import type { TuiClusterDetail, TuiClusterSummary } from '@ghcrawl/api-core';
 
 test('cycleSortMode toggles recent and size', () => {
   assert.equal(cycleSortMode('recent'), 'size');

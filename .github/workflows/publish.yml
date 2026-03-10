@@ -45,11 +45,11 @@ jobs:
           //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
           EOF
 
-      - name: Publish @gitcrawl/api-contract
-        run: pnpm --filter @gitcrawl/api-contract publish --no-git-checks --access public
+      - name: Publish @ghcrawl/api-contract
+        run: pnpm --filter @ghcrawl/api-contract publish --no-git-checks --access public
 
-      - name: Publish @gitcrawl/api-core
-        run: pnpm --filter @gitcrawl/api-core publish --no-git-checks --access public
+      - name: Publish @ghcrawl/api-core
+        run: pnpm --filter @ghcrawl/api-core publish --no-git-checks --access public
 
       - name: Publish ghcrawl
         run: pnpm --filter ghcrawl publish --no-git-checks --access public

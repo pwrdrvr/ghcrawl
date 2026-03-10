@@ -1,20 +1,20 @@
 {
-  "name": "@gitcrawl/api-contract",
+  "name": "@ghcrawl/api-contract",
   "version": "0.0.0",
   "type": "module",
-  "description": "Gitcrawl shared transport contracts and validation schemas",
+  "description": "ghcrawl shared transport contracts and validation schemas",
   "author": "PwrDrvr LLC <harold@pwrdrvr.com>",
   "license": "MIT",
-  "homepage": "https://github.com/pwrdrvr/gitcrawl",
+  "homepage": "https://github.com/pwrdrvr/ghcrawl",
   "bugs": {
-    "url": "https://github.com/pwrdrvr/gitcrawl/issues"
+    "url": "https://github.com/pwrdrvr/ghcrawl/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/pwrdrvr/gitcrawl.git"
+    "url": "git+https://github.com/pwrdrvr/ghcrawl.git"
   },
   "keywords": [
-    "gitcrawl",
+    "ghcrawl",
     "api",
     "contracts",
     "zod"

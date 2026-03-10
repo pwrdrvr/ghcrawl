@@ -9,8 +9,8 @@ import type {
   TuiRepoStats,
   TuiSnapshot,
   TuiThreadDetail,
-} from '@gitcrawl/api-core';
-import { getTuiRepositoryPreference, writeTuiRepositoryPreference } from '@gitcrawl/api-core';
+} from '@ghcrawl/api-core';
+import { getTuiRepositoryPreference, writeTuiRepositoryPreference } from '@ghcrawl/api-core';
 import {
   buildMemberRows,
   cycleFocusPane,
@@ -218,8 +218,8 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     applyRect(widgets.detail, layout.detail);
     applyRect(widgets.footer, layout.footer);
 
-    widgets.screen.title = currentRepository.owner && currentRepository.repo ? `gitcrawl ${currentRepository.owner}/${currentRepository.repo}` : 'gitcrawl';
-    const repoLabel = snapshot?.repository.fullName ?? (currentRepository.owner && currentRepository.repo ? `${currentRepository.owner}/${currentRepository.repo}` : 'gitcrawl');
+    widgets.screen.title = currentRepository.owner && currentRepository.repo ? `ghcrawl ${currentRepository.owner}/${currentRepository.repo}` : 'ghcrawl';
+    const repoLabel = snapshot?.repository.fullName ?? (currentRepository.owner && currentRepository.repo ? `${currentRepository.owner}/${currentRepository.repo}` : 'ghcrawl');
     const ghStatus = formatRelativeTime(snapshot?.stats.lastGithubReconciliationAt ?? null);
     const embedAge = formatRelativeTime(snapshot?.stats.lastEmbedRefreshAt ?? null);
     const embedStatus =
@@ -736,7 +736,7 @@ function createWidgets(owner: string, repo: string): Widgets {
     fullUnicode: true,
     dockBorders: true,
     autoPadding: false,
-    title: owner && repo ? `gitcrawl ${owner}/${repo}` : 'gitcrawl',
+    title: owner && repo ? `ghcrawl ${owner}/${repo}` : 'ghcrawl',
   });
   const header = blessed.box({
     parent: screen,

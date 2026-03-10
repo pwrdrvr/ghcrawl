@@ -1,4 +1,4 @@
-# gitcrawl Protocol
+# ghcrawl Protocol
 
 Use the JSON CLI surface. Do not parse the TUI.
 

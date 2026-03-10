@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import type { TuiClusterDetail, TuiRepoStats, TuiThreadDetail } from '@gitcrawl/api-core';
+import type { TuiClusterDetail, TuiRepoStats, TuiThreadDetail } from '@ghcrawl/api-core';
 
 import {
   buildUpdatePipelineLabels,

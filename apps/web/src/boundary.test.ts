@@ -8,6 +8,6 @@ test('web package does not depend on api-core', () => {
     fs.readFileSync(path.join(import.meta.dirname, '..', 'package.json'), 'utf8'),
   ) as { dependencies?: Record<string, string> };
 
-  assert.equal(packageJson.dependencies?.['@gitcrawl/api-core'], undefined);
-  assert.equal(packageJson.dependencies?.['@gitcrawl/api-contract'], 'workspace:*');
+  assert.equal(packageJson.dependencies?.['@ghcrawl/api-core'], undefined);
+  assert.equal(packageJson.dependencies?.['@ghcrawl/api-contract'], 'workspace:*');
 });

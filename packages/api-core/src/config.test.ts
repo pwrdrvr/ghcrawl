@@ -16,7 +16,7 @@ import {
 } from './config.js';
 
 function makeTempHome(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'gitcrawl-config-test-'));
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-config-test-'));
 }
 
 function makeTestEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
@@ -30,7 +30,7 @@ function makeTestEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 
 test('loadConfig prefers persisted config and stores defaults under the user config directory', () => {
   const home = makeTempHome();
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'gitcrawl-workspace-'));
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-workspace-'));
   fs.writeFileSync(path.join(workspace, 'pnpm-workspace.yaml'), 'packages:\n  - "packages/*"\n');
   const env = {
     ...makeTestEnv(),
@@ -48,13 +48,13 @@ test('loadConfig prefers persisted config and stores defaults under the user con
   );
 
   const config = loadConfig({ cwd: workspace, env });
-  assert.equal(config.configPath, path.join(home, '.config', 'gitcrawl', 'config.json'));
+  assert.equal(config.configPath, path.join(home, '.config', 'ghcrawl', 'config.json'));
   assert.equal(config.configFileExists, true);
   assert.equal(config.apiPort, 6123);
   assert.equal(config.embedConcurrency, 12);
   assert.equal(config.githubTokenSource, 'config');
   assert.equal(config.openaiApiKeySource, 'config');
-  assert.equal(config.dbPath, path.join(home, '.config', 'gitcrawl', 'gitcrawl.db'));
+  assert.equal(config.dbPath, path.join(home, '.config', 'ghcrawl', 'ghcrawl.db'));
 });
 
 test('loadConfig lets environment variables override persisted config', () => {
@@ -82,7 +82,7 @@ test('loadConfig lets environment variables override persisted config', () => {
 });
 
 test('loadConfig falls back to repo .env.local when no persisted config exists', () => {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'gitcrawl-workspace-'));
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-workspace-'));
   fs.writeFileSync(path.join(workspace, 'pnpm-workspace.yaml'), 'packages:\n  - "packages/*"\n');
   fs.writeFileSync(
     path.join(workspace, '.env.local'),
@@ -102,11 +102,11 @@ test('loadConfig falls back to repo .env.local when no persisted config exists',
   assert.equal(config.apiPort, 6111);
 });
 
-test('loadConfig reuses an existing legacy workspace database when no explicit db path is configured', () => {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'gitcrawl-workspace-'));
+test('loadConfig reuses an existing workspace database when no explicit db path is configured', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-workspace-'));
   fs.writeFileSync(path.join(workspace, 'pnpm-workspace.yaml'), 'packages:\n  - "packages/*"\n');
   fs.mkdirSync(path.join(workspace, 'data'), { recursive: true });
-  fs.writeFileSync(path.join(workspace, 'data', 'gitcrawl.db'), '');
+  fs.writeFileSync(path.join(workspace, 'data', 'ghcrawl.db'), '');
 
   const config = loadConfig({
     cwd: workspace,
@@ -116,7 +116,7 @@ test('loadConfig reuses an existing legacy workspace database when no explicit d
     },
   });
 
-  assert.equal(config.dbPath, path.join(workspace, 'data', 'gitcrawl.db'));
+  assert.equal(config.dbPath, path.join(workspace, 'data', 'ghcrawl.db'));
 });
 
 test('writePersistedConfig creates a readable config file', () => {
@@ -144,7 +144,7 @@ test('writePersistedConfig creates a readable config file', () => {
 
 test('loadConfig restores op metadata and repository tui preferences', () => {
   const home = makeTempHome();
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'gitcrawl-workspace-'));
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-workspace-'));
   fs.writeFileSync(path.join(workspace, 'pnpm-workspace.yaml'), 'packages:\n  - "packages/*"\n');
   const env = {
     ...makeTestEnv(),
@@ -155,7 +155,7 @@ test('loadConfig restores op metadata and repository tui preferences', () => {
     {
       secretProvider: 'op',
       opVaultName: 'PwrDrvr LLC',
-      opItemName: 'gitcrawl',
+      opItemName: 'ghcrawl',
       tuiPreferences: {
         'openclaw/openclaw': {
           minClusterSize: 1,
@@ -169,7 +169,7 @@ test('loadConfig restores op metadata and repository tui preferences', () => {
   const config = loadConfig({ cwd: workspace, env });
   assert.equal(config.secretProvider, 'op');
   assert.equal(config.opVaultName, 'PwrDrvr LLC');
-  assert.equal(config.opItemName, 'gitcrawl');
+  assert.equal(config.opItemName, 'ghcrawl');
   assert.deepEqual(getTuiRepositoryPreference(config, 'openclaw', 'openclaw'), {
     minClusterSize: 1,
     sortMode: 'size',
@@ -178,7 +178,7 @@ test('loadConfig restores op metadata and repository tui preferences', () => {
 
 test('writeTuiRepositoryPreference persists sort and min cluster size by repository', () => {
   const home = makeTempHome();
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'gitcrawl-workspace-'));
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-workspace-'));
   fs.writeFileSync(path.join(workspace, 'pnpm-workspace.yaml'), 'packages:\n  - "packages/*"\n');
   const env = {
     ...makeTestEnv(),
@@ -213,7 +213,7 @@ test('getConfigPath uses APPDATA on Windows', () => {
     platform: 'win32',
   });
 
-  assert.equal(configPath, path.win32.resolve('C:\\Users\\example\\AppData\\Roaming', 'gitcrawl', 'config.json'));
+  assert.equal(configPath, path.win32.resolve('C:\\Users\\example\\AppData\\Roaming', 'ghcrawl', 'config.json'));
 });
 
 test('loadConfig rejects invalid port', () => {

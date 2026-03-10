@@ -1,5 +1,5 @@
 {
-  "name": "@gitcrawl/web",
+  "name": "@ghcrawl/web",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -9,6 +9,6 @@
     "test": "tsx --test src/*.test.ts src/**/*.test.ts"
   },
   "dependencies": {
-    "@gitcrawl/api-contract": "workspace:*"
+    "@ghcrawl/api-contract": "workspace:*"
   }
 }

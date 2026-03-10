@@ -1,10 +1,10 @@
 ---
-name: gitcrawl
-description: "Use a local gitcrawl install to refresh GitHub repo data, inspect duplicate clusters, and dump issue/PR summaries from the local SQLite dataset. Use when a user wants to triage related issues or PRs, inspect semantic clusters, or refresh one repo through gitcrawl's staged pipeline."
+name: ghcrawl
+description: "Use a local ghcrawl install to refresh GitHub repo data, inspect duplicate clusters, and dump issue/PR summaries from the local SQLite dataset. Use when a user wants to triage related issues or PRs, inspect semantic clusters, or refresh one repo through ghcrawl's staged pipeline."
 allowed-tools: Bash(ghcrawl:*), Bash(gitcrawl:*), Bash(pnpm:*), Read(*)
 ---
 
-# gitcrawl
+# ghcrawl
 
 Use `ghcrawl` as the machine-facing interface for local GitHub duplicate-cluster analysis.
 
@@ -13,8 +13,8 @@ Do not scrape the TUI. Prefer JSON CLI output.
 ## When to use this skill
 
 - The user wants related issue/PR clusters for one repo.
-- The user wants to refresh local gitcrawl data before analysis.
-- The user wants cluster summaries, cluster detail dumps, or nearest neighbors from a local gitcrawl database.
+- The user wants to refresh local ghcrawl data before analysis.
+- The user wants cluster summaries, cluster detail dumps, or nearest neighbors from a local ghcrawl database.
 
 ## Command preference
 

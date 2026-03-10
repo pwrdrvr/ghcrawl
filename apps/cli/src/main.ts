@@ -2,7 +2,7 @@
 import { once } from 'node:events';
 import { parseArgs } from 'node:util';
 
-import { createApiServer, GitcrawlService } from '@gitcrawl/api-core';
+import { createApiServer, GitcrawlService } from '@ghcrawl/api-core';
 import { runInitWizard } from './init-wizard.js';
 import { startTui } from './tui/app.js';
 

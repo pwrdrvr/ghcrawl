@@ -1,4 +1,4 @@
-# gitcrawl Spec
+# ghcrawl Spec
 
 This file is the build contract for an AI agent working in this repo.
 
@@ -14,7 +14,7 @@ This spec is intentionally concrete so an agent can keep shipping without re-ask
 
 ## Product Summary
 
-`gitcrawl` is a local-first maintainer tool for triaging duplicate or closely related GitHub issues and PRs.
+`ghcrawl` is a local-first maintainer tool for triaging duplicate or closely related GitHub issues and PRs.
 
 V1 scope:
 
@@ -42,8 +42,8 @@ These are settled unless the user explicitly changes them:
 - runtime: local-only
 - package manager: `pnpm`
 - config format: JSON
-- config location: `~/.config/gitcrawl/config.json`
-- DB location: `~/.config/gitcrawl/gitcrawl.db` unless a legacy workspace DB already exists
+- config location: `~/.config/ghcrawl/config.json`
+- DB location: `~/.config/ghcrawl/ghcrawl.db`
 - local API port default: `5179`
 - GitHub client: Octokit-based wrapper
 - embeddings model: `text-embedding-3-large`
@@ -60,20 +60,20 @@ These are settled unless the user explicitly changes them:
 
 An agent should assume:
 
-- repo path: `~/github/gitcrawl`
+- repo path: `~/github/ghcrawl`
 - shell: `zsh`
 - Node.js and `pnpm` are installed
 - maintainers may run via:
   - `pnpm ...` from the repo root
-  - installed `gitcrawl` bin
+  - installed `ghcrawl` bin
   - `op`-backed shell wrappers
 
 ### Key file paths
 
-- `~/.config/gitcrawl/config.json`
-- `~/.config/gitcrawl/gitcrawl.db`
-- `~/github/gitcrawl/SPEC.md`
-- `~/github/gitcrawl/skills/gitcrawl/SKILL.md`
+- `~/.config/ghcrawl/config.json`
+- `~/.config/ghcrawl/ghcrawl.db`
+- `~/github/ghcrawl/SPEC.md`
+- `~/github/ghcrawl/skills/ghcrawl/SKILL.md`
 
 ## Data Model Notes
 
@@ -139,7 +139,7 @@ The product must keep these machine-facing surfaces working:
 
 ## Agent Skill Contract
 
-`gitcrawl` should remain usable from installable agent skills.
+`ghcrawl` should remain usable from installable agent skills.
 
 That means:
 
@@ -158,7 +158,7 @@ That means:
 
 The installable skill lives in:
 
-- `skills/gitcrawl/`
+- `skills/ghcrawl/`
 
 ## Implementation Guidance
 
@@ -178,7 +178,7 @@ The installable skill lives in:
 
 ## Release Requirements
 
-- packaged CLI must expose a working `gitcrawl` bin
+- packaged CLI must expose a working `ghcrawl` bin
 - skill files must be included in git
 - README must document:
   - install

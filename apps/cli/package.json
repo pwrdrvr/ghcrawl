@@ -2,20 +2,19 @@
   "name": "ghcrawl",
   "version": "0.0.0",
   "type": "module",
-  "description": "Gitcrawl terminal UI and CLI runtime",
+  "description": "ghcrawl terminal UI and CLI runtime",
   "author": "PwrDrvr LLC <harold@pwrdrvr.com>",
   "license": "MIT",
-  "homepage": "https://github.com/pwrdrvr/gitcrawl",
+  "homepage": "https://github.com/pwrdrvr/ghcrawl",
   "bugs": {
-    "url": "https://github.com/pwrdrvr/gitcrawl/issues"
+    "url": "https://github.com/pwrdrvr/ghcrawl/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/pwrdrvr/gitcrawl.git"
+    "url": "git+https://github.com/pwrdrvr/ghcrawl.git"
   },
   "keywords": [
     "ghcrawl",
-    "gitcrawl",
     "github",
     "cli",
     "tui",
@@ -33,8 +32,8 @@
     "access": "public"
   },
   "bin": {
-    "ghcrawl": "./bin/gitcrawl.js",
-    "gitcrawl": "./bin/gitcrawl.js"
+    "ghcrawl": "./bin/ghcrawl.js",
+    "gitcrawl": "./bin/ghcrawl.js"
   },
   "scripts": {
     "cli": "tsx src/main.ts",
@@ -43,7 +42,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^0.11.0",
-    "@gitcrawl/api-core": "workspace:*",
+    "@ghcrawl/api-core": "workspace:*",
     "@types/blessed": "^0.1.27",
     "neo-blessed": "^0.2.0",
     "tsx": "^4.20.5"

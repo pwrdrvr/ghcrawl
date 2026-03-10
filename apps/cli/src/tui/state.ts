@@ -1,4 +1,4 @@
-import type { TuiClusterDetail, TuiClusterSortMode, TuiClusterSummary } from '@gitcrawl/api-core';
+import type { TuiClusterDetail, TuiClusterSortMode, TuiClusterSummary } from '@ghcrawl/api-core';
 
 export type TuiFocusPane = 'clusters' | 'members' | 'detail';
 export type TuiMinSizeFilter = 0 | 1 | 10 | 20 | 50;

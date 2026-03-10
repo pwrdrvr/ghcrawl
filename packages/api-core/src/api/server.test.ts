@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { clusterDetailResponseSchema, clusterSummariesResponseSchema, healthResponseSchema, neighborsResponseSchema } from '@gitcrawl/api-contract';
+import { clusterDetailResponseSchema, clusterSummariesResponseSchema, healthResponseSchema, neighborsResponseSchema } from '@ghcrawl/api-contract';
 
 import { createApiServer } from './server.js';
 import { GitcrawlService } from '../service.js';
@@ -10,8 +10,8 @@ test('health endpoint returns contract payload', async () => {
   const service = new GitcrawlService({
     config: {
       workspaceRoot: process.cwd(),
-      configDir: '/tmp/gitcrawl-test',
-      configPath: '/tmp/gitcrawl-test/config.json',
+      configDir: '/tmp/ghcrawl-test',
+      configPath: '/tmp/ghcrawl-test/config.json',
       configFileExists: true,
       dbPath: ':memory:',
       dbPathSource: 'config',
@@ -24,7 +24,7 @@ test('health endpoint returns contract payload', async () => {
       embedBatchSize: 8,
       embedConcurrency: 10,
       embedMaxUnread: 20,
-      openSearchIndex: 'gitcrawl-threads',
+      openSearchIndex: 'ghcrawl-threads',
       tuiPreferences: {},
     },
     github: {
@@ -60,8 +60,8 @@ test('neighbors endpoint returns contract payload', async () => {
   const service = new GitcrawlService({
     config: {
       workspaceRoot: process.cwd(),
-      configDir: '/tmp/gitcrawl-test',
-      configPath: '/tmp/gitcrawl-test/config.json',
+      configDir: '/tmp/ghcrawl-test',
+      configPath: '/tmp/ghcrawl-test/config.json',
       configFileExists: true,
       dbPath: ':memory:',
       dbPathSource: 'config',
@@ -74,7 +74,7 @@ test('neighbors endpoint returns contract payload', async () => {
       embedBatchSize: 8,
       embedConcurrency: 10,
       embedMaxUnread: 20,
-      openSearchIndex: 'gitcrawl-threads',
+      openSearchIndex: 'ghcrawl-threads',
       tuiPreferences: {},
     },
     github: {
@@ -152,8 +152,8 @@ test('server returns 400 for malformed request inputs', async () => {
   const service = new GitcrawlService({
     config: {
       workspaceRoot: process.cwd(),
-      configDir: '/tmp/gitcrawl-test',
-      configPath: '/tmp/gitcrawl-test/config.json',
+      configDir: '/tmp/ghcrawl-test',
+      configPath: '/tmp/ghcrawl-test/config.json',
       configFileExists: true,
       dbPath: ':memory:',
       dbPathSource: 'config',
@@ -166,7 +166,7 @@ test('server returns 400 for malformed request inputs', async () => {
       embedBatchSize: 8,
       embedConcurrency: 10,
       embedMaxUnread: 20,
-      openSearchIndex: 'gitcrawl-threads',
+      openSearchIndex: 'ghcrawl-threads',
       tuiPreferences: {},
     },
     github: {
@@ -206,8 +206,8 @@ test('cluster summary and detail endpoints return contract payloads', async () =
   const service = new GitcrawlService({
     config: {
       workspaceRoot: process.cwd(),
-      configDir: '/tmp/gitcrawl-test',
-      configPath: '/tmp/gitcrawl-test/config.json',
+      configDir: '/tmp/ghcrawl-test',
+      configPath: '/tmp/ghcrawl-test/config.json',
       configFileExists: true,
       dbPath: ':memory:',
       dbPathSource: 'config',
@@ -220,7 +220,7 @@ test('cluster summary and detail endpoints return contract payloads', async () =
       embedBatchSize: 8,
       embedConcurrency: 10,
       embedMaxUnread: 20,
-      openSearchIndex: 'gitcrawl-threads',
+      openSearchIndex: 'ghcrawl-threads',
       tuiPreferences: {},
     },
     github: {

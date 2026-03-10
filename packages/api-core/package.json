@@ -1,20 +1,20 @@
 {
-  "name": "@gitcrawl/api-core",
+  "name": "@ghcrawl/api-core",
   "version": "0.0.0",
   "type": "module",
-  "description": "Gitcrawl core library for GitHub sync, SQLite storage, embeddings, search, and clustering",
+  "description": "ghcrawl core library for GitHub sync, SQLite storage, embeddings, search, and clustering",
   "author": "PwrDrvr LLC <harold@pwrdrvr.com>",
   "license": "MIT",
-  "homepage": "https://github.com/pwrdrvr/gitcrawl",
+  "homepage": "https://github.com/pwrdrvr/ghcrawl",
   "bugs": {
-    "url": "https://github.com/pwrdrvr/gitcrawl/issues"
+    "url": "https://github.com/pwrdrvr/ghcrawl/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/pwrdrvr/gitcrawl.git"
+    "url": "git+https://github.com/pwrdrvr/ghcrawl.git"
   },
   "keywords": [
-    "gitcrawl",
+    "ghcrawl",
     "github",
     "sqlite",
     "openai",
@@ -41,7 +41,7 @@
     "test": "tsx --test src/*.test.ts src/**/*.test.ts"
   },
   "dependencies": {
-    "@gitcrawl/api-contract": "workspace:*",
+    "@ghcrawl/api-contract": "workspace:*",
     "@shutterstock/p-map-iterable": "^1.1.2",
     "@octokit/plugin-retry": "^8.0.3",
     "@octokit/plugin-throttling": "^11.0.1",

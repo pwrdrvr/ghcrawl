@@ -72,7 +72,7 @@ jobs:
         run: pnpm health
 
       - name: Print installed-bin usage from bin shim
-        run: node ./apps/cli/bin/gitcrawl.js --help
+        run: node ./apps/cli/bin/ghcrawl.js --help
 
       - name: Verify root passthrough usage
         run: pnpm cli --help

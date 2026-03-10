@@ -5,7 +5,7 @@ import {
   writePersistedConfig,
   isLikelyGitHubToken,
   isLikelyOpenAiApiKey,
-} from '@gitcrawl/api-core';
+} from '@ghcrawl/api-core';
 
 type InitSecretMode = 'plaintext' | 'op';
 
@@ -90,7 +90,7 @@ export async function runInitWizard(
       `Config file: ${current.configPath}`,
       '',
       'Secret storage modes:',
-      '- Plaintext config: writes both keys to ~/.config/gitcrawl/config.json',
+      '- Plaintext config: writes both keys to ~/.config/ghcrawl/config.json',
       '- 1Password CLI: keeps keys out of the config file and expects you to run ghcrawl through an op wrapper',
       '',
       'GitHub token recommendation:',
@@ -113,7 +113,7 @@ export async function runInitWizard(
     options: [
       {
         value: 'plaintext',
-        label: 'Store plaintext keys in ~/.config/gitcrawl/config.json',
+        label: 'Store plaintext keys in ~/.config/ghcrawl/config.json',
         hint: 'simpler, but you are responsible for any bills caused by misuse',
       },
       {
@@ -132,7 +132,7 @@ export async function runInitWizard(
     await prompter.note(
       [
         'Plaintext storage warning:',
-        '- gitcrawl will write both API keys to ~/.config/gitcrawl/config.json',
+        '- ghcrawl will write both API keys to ~/.config/ghcrawl/config.json',
         '- anyone who can read that file can use your keys',
         '- any OpenAI/API bills caused by misuse are your responsibility',
       ].join('\n'),
@@ -145,7 +145,7 @@ export async function runInitWizard(
       let usedDetectedGithub = false;
       if (detectedGithub && (!githubToken || reconfigure)) {
         const useDetected = await prompter.confirm({
-          message: 'Persist the detected GITHUB_TOKEN environment value to the gitcrawl config file?',
+          message: 'Persist the detected GITHUB_TOKEN environment value to the ghcrawl config file?',
           initialValue: true,
         });
         if (isCancel(useDetected)) {
@@ -182,7 +182,7 @@ export async function runInitWizard(
       let usedDetectedOpenAi = false;
       if (detectedOpenAi && (!openaiApiKey || reconfigure)) {
         const useDetected = await prompter.confirm({
-          message: 'Persist the detected OPENAI_API_KEY environment value to the gitcrawl config file?',
+          message: 'Persist the detected OPENAI_API_KEY environment value to the ghcrawl config file?',
           initialValue: true,
         });
         if (isCancel(useDetected)) {
@@ -304,7 +304,7 @@ export async function runInitWizard(
       '- You are responsible for obtaining and using GitHub and OpenAI API keys in compliance with the agreements and usage policies for those platforms.',
       '- You and any employer or organization you operate this tool for accept full responsibility for monitoring API usage, spend, and access.',
       '- You are fully responsible for storing your API keys securely and for any misuse, theft, or unexpected spend caused by those keys.',
-      '- The creators and contributors of gitcrawl accept no liability for API charges, account actions, data loss, or misuse resulting from operation of this tool.',
+      '- The creators and contributors of ghcrawl accept no liability for API charges, account actions, data loss, or misuse resulting from operation of this tool.',
     ].join('\n'),
     'Responsibility',
   );
@@ -318,6 +318,6 @@ export async function runInitWizard(
   }
 
   const result = writePersistedConfig(nextConfig, { cwd, env });
-  await prompter.outro(`Saved gitcrawl config to ${result.configPath}`);
+  await prompter.outro(`Saved ghcrawl config to ${result.configPath}`);
   return { configPath: result.configPath, changed };
 }

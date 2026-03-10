@@ -101,12 +101,12 @@ export function getConfigDir(options: LoadConfigOptions = {}): string {
   const platform = options.platform ?? process.platform;
   const pathModule = pathModuleForPlatform(platform);
   if (env.XDG_CONFIG_HOME) {
-    return pathModule.resolve(env.XDG_CONFIG_HOME, 'gitcrawl');
+    return pathModule.resolve(env.XDG_CONFIG_HOME, 'ghcrawl');
   }
   if (platform === 'win32' && env.APPDATA) {
-    return pathModule.resolve(env.APPDATA, 'gitcrawl');
+    return pathModule.resolve(env.APPDATA, 'ghcrawl');
   }
-  return pathModule.join(resolveHomeDirectory(env), '.config', 'gitcrawl');
+  return pathModule.join(resolveHomeDirectory(env), '.config', 'ghcrawl');
 }
 
 export function getConfigPath(options: LoadConfigOptions = {}): string {
@@ -221,9 +221,9 @@ function resolveConfiguredPath(configDir: string, value: string): string {
   return path.isAbsolute(value) ? value : path.resolve(configDir, value);
 }
 
-function getLegacyWorkspaceDbPath(workspaceRoot: string): string | null {
-  const legacyPath = path.join(workspaceRoot, 'data', 'gitcrawl.db');
-  return fs.existsSync(legacyPath) ? legacyPath : null;
+function getWorkspaceDbPath(workspaceRoot: string): string | null {
+  const workspacePath = path.join(workspaceRoot, 'data', 'ghcrawl.db');
+  return fs.existsSync(workspacePath) ? workspacePath : null;
 }
 
 function parseIntegerSetting(name: string, raw: string): number {
@@ -265,11 +265,11 @@ export function loadConfig(options: LoadConfigOptions = {}): GitcrawlConfig {
     { source: 'config', value: stored.data.dbPath },
     { source: 'dotenv', value: getString(dotenvValues.GITCRAWL_DB_PATH) },
   );
-  const legacyWorkspaceDbPath = configuredDbPath.value === undefined ? getLegacyWorkspaceDbPath(workspaceRoot) : null;
+  const workspaceDbPath = configuredDbPath.value === undefined ? getWorkspaceDbPath(workspaceRoot) : null;
   const dbPathValue =
-    legacyWorkspaceDbPath !== null
-      ? { source: 'default' as const, value: legacyWorkspaceDbPath }
-      : pickDefined<string>(configuredDbPath, { source: 'default', value: 'gitcrawl.db' });
+    workspaceDbPath !== null
+      ? { source: 'default' as const, value: workspaceDbPath }
+      : pickDefined<string>(configuredDbPath, { source: 'default', value: 'ghcrawl.db' });
   const apiPortValue = pickDefined<string | number>(
     { source: 'env', value: getString(env.GITCRAWL_API_PORT) },
     { source: 'config', value: stored.data.apiPort },
@@ -315,13 +315,13 @@ export function loadConfig(options: LoadConfigOptions = {}): GitcrawlConfig {
     { source: 'env', value: getString(env.GITCRAWL_OPENSEARCH_INDEX) },
     { source: 'config', value: stored.data.openSearchIndex },
     { source: 'dotenv', value: getString(dotenvValues.GITCRAWL_OPENSEARCH_INDEX) },
-    { source: 'default', value: 'gitcrawl-threads' },
+    { source: 'default', value: 'ghcrawl-threads' },
   );
 
   const dbPath =
     dbPathValue.value && path.isAbsolute(dbPathValue.value)
       ? dbPathValue.value
-      : resolveConfiguredPath(stored.configDir, dbPathValue.value ?? 'gitcrawl.db');
+      : resolveConfiguredPath(stored.configDir, dbPathValue.value ?? 'ghcrawl.db');
   const apiPort = parseIntegerSetting('GITCRAWL_API_PORT', String(apiPortValue.value ?? '5179'));
   const embedBatchSize = parseIntegerSetting('GITCRAWL_EMBED_BATCH_SIZE', String(embedBatchSizeValue.value ?? '8'));
   const embedConcurrency = parseIntegerSetting('GITCRAWL_EMBED_CONCURRENCY', String(embedConcurrencyValue.value ?? '10'));
@@ -348,7 +348,7 @@ export function loadConfig(options: LoadConfigOptions = {}): GitcrawlConfig {
     embedConcurrency,
     embedMaxUnread,
     openSearchUrl: openSearchUrl.value,
-    openSearchIndex: openSearchIndex.value ?? 'gitcrawl-threads',
+    openSearchIndex: openSearchIndex.value ?? 'ghcrawl-threads',
     tuiPreferences: stored.data.tuiPreferences ?? {},
   };
 }

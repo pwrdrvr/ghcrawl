@@ -71,7 +71,7 @@ function formatResetTime(resetSeconds: string | null | undefined): string | null
 }
 
 export function makeGitHubClient(options: RequestOptions): GitHubClient {
-  const userAgent = options.userAgent ?? 'gitcrawl';
+  const userAgent = options.userAgent ?? 'ghcrawl';
   const timeoutMs = options.timeoutMs ?? 30_000;
   const pageDelayMs = options.pageDelayMs ?? 5000;
   const BaseOctokit = Octokit.plugin(retry, throttling);

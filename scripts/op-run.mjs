@@ -10,17 +10,17 @@ function resolveHomeDirectory(env) {
 
 function getConfigPath(env = process.env) {
   if (env.XDG_CONFIG_HOME) {
-    return path.resolve(env.XDG_CONFIG_HOME, 'gitcrawl', 'config.json');
+    return path.resolve(env.XDG_CONFIG_HOME, 'ghcrawl', 'config.json');
   }
   if (process.platform === 'win32' && env.APPDATA) {
-    return path.resolve(env.APPDATA, 'gitcrawl', 'config.json');
+    return path.resolve(env.APPDATA, 'ghcrawl', 'config.json');
   }
-  return path.join(resolveHomeDirectory(env), '.config', 'gitcrawl', 'config.json');
+  return path.join(resolveHomeDirectory(env), '.config', 'ghcrawl', 'config.json');
 }
 
 function readConfig(configPath) {
   if (!fs.existsSync(configPath)) {
-    throw new Error(`Missing gitcrawl config at ${configPath}. Run pnpm bootstrap first.`);
+    throw new Error(`Missing ghcrawl config at ${configPath}. Run pnpm bootstrap first.`);
   }
   return JSON.parse(fs.readFileSync(configPath, 'utf8'));
 }
@@ -28,7 +28,7 @@ function readConfig(configPath) {
 function requireOpConfig(config, configPath) {
   if (config.secretProvider !== 'op') {
     throw new Error(
-      `gitcrawl is not configured for 1Password CLI in ${configPath}. Re-run pnpm bootstrap and choose the 1Password CLI option.`,
+      `ghcrawl is not configured for 1Password CLI in ${configPath}. Re-run pnpm bootstrap and choose the 1Password CLI option.`,
     );
   }
   if (!config.opVaultName || !config.opItemName) {

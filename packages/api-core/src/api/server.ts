@@ -1,6 +1,6 @@
 import http from 'node:http';
 
-import { actionRequestSchema, refreshRequestSchema } from '@gitcrawl/api-contract';
+import { actionRequestSchema, refreshRequestSchema } from '@ghcrawl/api-contract';
 import { ZodError } from 'zod';
 
 import { GitcrawlService, parseRepoParams } from '../service.js';

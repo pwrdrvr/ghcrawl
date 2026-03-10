@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
 const workspaceRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const tempRoot = mkdtempSync(path.join(os.tmpdir(), 'gitcrawl-pack-smoke-'));
+const tempRoot = mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-pack-smoke-'));
 const tarballDir = path.join(tempRoot, 'tarballs');
 const installDir = path.join(tempRoot, 'install');
 
@@ -36,7 +36,7 @@ try {
     path.join(installDir, 'package.json'),
     `${JSON.stringify(
       {
-        name: 'gitcrawl-pack-smoke',
+        name: 'ghcrawl-pack-smoke',
         private: true,
         version: '0.0.0',
         packageManager: 'npm@10.9.2',

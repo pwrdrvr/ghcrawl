@@ -35,7 +35,7 @@ import {
   type SyncResultDto,
   type ThreadDto,
   type ThreadsResponse,
-} from '@gitcrawl/api-contract';
+} from '@ghcrawl/api-contract';
 
 import { buildClusters } from './cluster/build.js';
 import {

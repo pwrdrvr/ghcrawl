@@ -6,8 +6,8 @@ import { GitcrawlService } from './service.js';
 function makeTestConfig(overrides: Partial<GitcrawlService['config']> = {}): GitcrawlService['config'] {
   return {
     workspaceRoot: process.cwd(),
-    configDir: '/tmp/gitcrawl-test',
-    configPath: '/tmp/gitcrawl-test/config.json',
+    configDir: '/tmp/ghcrawl-test',
+    configPath: '/tmp/ghcrawl-test/config.json',
     configFileExists: true,
     dbPath: ':memory:',
     dbPathSource: 'config',
@@ -22,7 +22,7 @@ function makeTestConfig(overrides: Partial<GitcrawlService['config']> = {}): Git
     embedBatchSize: 2,
     embedConcurrency: 2,
     embedMaxUnread: 4,
-    openSearchIndex: 'gitcrawl-threads',
+    openSearchIndex: 'ghcrawl-threads',
     ...overrides,
   };
 }
@@ -71,7 +71,7 @@ test('doctor reports config path and successful auth smoke checks', async () => 
 
   try {
     const result = await service.doctor();
-    assert.equal(result.health.configPath, '/tmp/gitcrawl-test/config.json');
+    assert.equal(result.health.configPath, '/tmp/ghcrawl-test/config.json');
     assert.equal(result.github.formatOk, true);
     assert.equal(result.github.authOk, true);
     assert.equal(result.openai.formatOk, true);
@@ -123,7 +123,7 @@ test('doctor explains when secrets are expected from 1Password CLI env injection
       openaiApiKeySource: 'none',
       secretProvider: 'op',
       opVaultName: 'PwrDrvr LLC',
-      opItemName: 'gitcrawl',
+      opItemName: 'ghcrawl',
     }),
   });
 

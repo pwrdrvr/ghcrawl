@@ -139,7 +139,7 @@ test('formatDoctorReport renders a human-readable health summary', () => {
       ok: true,
       configPath: '/tmp/config.json',
       configFileExists: true,
-      dbPath: '/tmp/gitcrawl.db',
+      dbPath: '/tmp/ghcrawl.db',
       apiPort: 5179,
       githubConfigured: true,
       openaiConfigured: true,
@@ -166,7 +166,7 @@ test('formatDoctorReport renders a human-readable health summary', () => {
   assert.match(rendered, /note: missing/);
 });
 
-test('published cli package exposes ghcrawl and gitcrawl bin shims', () => {
+test('published cli package exposes ghcrawl and compatibility gitcrawl bin shims', () => {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const packageJsonPath = path.resolve(here, '..', 'package.json');
   const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { bin?: Record<string, string> };
@@ -175,7 +175,7 @@ test('published cli package exposes ghcrawl and gitcrawl bin shims', () => {
 
   assert.equal(typeof ghcrawlBinPath, 'string');
   assert.equal(typeof gitcrawlBinPath, 'string');
-  assert.equal(ghcrawlBinPath, './bin/gitcrawl.js');
-  assert.equal(gitcrawlBinPath, './bin/gitcrawl.js');
+  assert.equal(ghcrawlBinPath, './bin/ghcrawl.js');
+  assert.equal(gitcrawlBinPath, './bin/ghcrawl.js');
   assert.equal(existsSync(path.resolve(here, '..', ghcrawlBinPath)), true);
 });

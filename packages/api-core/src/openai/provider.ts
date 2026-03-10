@@ -43,7 +43,7 @@ export class OpenAiProvider implements AiProvider {
   }
 
   async summarizeThread(params: { model: string; text: string }): Promise<{ summary: SummaryResult; usage?: SummaryUsage }> {
-    const format = zodTextFormat(summarySchema, 'gitcrawl_thread_summary');
+    const format = zodTextFormat(summarySchema, 'ghcrawl_thread_summary');
     let lastError: Error | null = null;
 
     for (const [attemptIndex, maxOutputTokens] of [500, 900, 1400].entries()) {

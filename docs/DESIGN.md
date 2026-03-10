@@ -2,7 +2,7 @@
 
 ## Intent
 
-`gitcrawl` is a local-first GitHub issue and pull request crawler for maintainers. It ingests repository discussion state into local storage, enriches it with LLM summaries and embeddings, and surfaces similarity clusters so maintainers can see which PRs and issues are really about the same problem area.
+`ghcrawl` is a local-first GitHub issue and pull request crawler for maintainers. It ingests repository discussion state into local storage, enriches it with LLM summaries and embeddings, and surfaces similarity clusters so maintainers can see which PRs and issues are really about the same problem area.
 
 The target user is a maintainer running the tool locally. V1 does not need hosted deployment, multi-user auth, or cloud infrastructure.
 
@@ -57,7 +57,7 @@ Do not copy `dupcanon`'s Postgres-first runtime, close-planning workflow, or app
   - `apps/cli`
   - `apps/web` as a deferred placeholder
 - Runtime: Node.js + TypeScript
-- CLI: single `gitcrawl` command with subcommands, following the `discrawl` UX pattern
+- CLI: single `ghcrawl` command with subcommands, following the `discrawl` UX pattern
 - Local DB: SQLite
 - API server: local HTTP server mounted in-process by the CLI
 - UI: future React + Vite app using `shadcn/ui` primitives with a custom visual system
@@ -68,7 +68,7 @@ Do not copy `dupcanon`'s Postgres-first runtime, close-planning workflow, or app
 
 ## Current kNN Decision
 
-For the current corpus size, `gitcrawl` should use exact local similarity only.
+For the current corpus size, `ghcrawl` should use exact local similarity only.
 
 - store embeddings in SQLite
 - load embeddings for the active repository into process memory
@@ -96,14 +96,14 @@ Reasoning:
 Primary interface should feel like `discrawl`:
 
 ```bash
-gitcrawl init
-gitcrawl doctor
-gitcrawl sync --owner openclaw --repo openclaw
-gitcrawl summarize --since 30d
-gitcrawl embed --since 30d
-gitcrawl cluster --open-only
-gitcrawl search "download stalls on large files"
-gitcrawl serve
+ghcrawl init
+ghcrawl doctor
+ghcrawl sync --owner openclaw --repo openclaw
+ghcrawl summarize --since 30d
+ghcrawl embed --since 30d
+ghcrawl cluster --open-only
+ghcrawl search "download stalls on large files"
+ghcrawl serve
 ```
 
 Recommended initial commands:
@@ -123,7 +123,7 @@ V1 does not run a permanent daemon.
 
 - `apps/cli` is the only supported runtime entrypoint
 - the CLI calls `packages/api-core` directly for command execution
-- `gitcrawl serve` mounts the same core services behind a local HTTP API
+- `ghcrawl serve` mounts the same core services behind a local HTTP API
 - future web code must talk to that HTTP API through `packages/api-contract`
 - browser code must never access SQLite, GitHub, or OpenAI directly
 
@@ -135,7 +135,7 @@ Environment variables:
 
 - `GITHUB_TOKEN`
 - `OPENAI_API_KEY`
-- `GITCRAWL_DB_PATH` with default `data/gitcrawl.db`
+- `GITCRAWL_DB_PATH` with default `data/ghcrawl.db`
 - `GITCRAWL_API_PORT` with default `5179`
 - `GITCRAWL_SUMMARY_MODEL` with default `gpt-5-mini`
 - `GITCRAWL_EMBED_MODEL` with default `text-embedding-3-small`
@@ -439,7 +439,7 @@ The first UI can be intentionally plain, but it is explicitly deferred until the
 Recommended initial layout:
 
 ```text
-gitcrawl/
+ghcrawl/
   packages/
     api-core/
       src/
