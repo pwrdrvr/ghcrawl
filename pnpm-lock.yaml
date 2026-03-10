@@ -12,8 +12,8 @@ importers:
         specifier: ^7.6.13
         version: 7.6.13
       '@types/node':
-        specifier: ^24.3.0
-        version: 24.12.0
+        specifier: ^25.4.0
+        version: 25.4.0
       tsx:
         specifier: ^4.20.5
         version: 4.21.0
@@ -369,6 +369,9 @@ packages:
   '@types/node@24.12.0':
     resolution: {integrity: sha512-GYDxsZi3ChgmckRT9HPU0WEhKLP08ev/Yfcq2AstjrDASOYCSXeyjDsHg4v5t4jOj7cyDX3vmprafKlWIG9MXQ==}
 
+  '@types/node@25.4.0':
+    resolution: {integrity: sha512-9wLpoeWuBlcbBpOY3XmzSTG3oscB6xjBEEtn+pYXTfhyXhIxC5FsBer2KTopBlvKEiW9l13po9fq+SJY/5lkhw==}
+
   aggregate-error@3.1.0:
     resolution: {integrity: sha512-4I7Td01quW/RpocfNayFdFVk1qSuoh0E7JrbRJ16nH01HhKFQ88INq9Sd+nd72zqRySlr9BmDA8xlEJ6vJMrYA==}
     engines: {node: '>=8'}
@@ -580,6 +583,9 @@ packages:
 
   undici-types@7.16.0:
     resolution: {integrity: sha512-Zz+aZWSj8LE6zoxD+xrjh4VfkIG8Ya6LvYkZqtUQGJPZjYl53ypCaUwWqo7eI0x66KBGeRo+mlBEkMSeSZ38Nw==}
+
+  undici-types@7.18.2:
+    resolution: {integrity: sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==}
 
   universal-github-app-jwt@2.2.2:
     resolution: {integrity: sha512-dcmbeSrOdTnsjGjUfAlqNDJrhxXizjAz94ija9Qw8YkZ1uu0d+GoZzyH+Jb9tIIqvGsadUfwg+22k5aDqqwzbw==}
@@ -843,7 +849,7 @@ snapshots:
 
   '@types/better-sqlite3@7.6.13':
     dependencies:
-      '@types/node': 24.12.0
+      '@types/node': 25.4.0
 
   '@types/blessed@0.1.27':
     dependencies:
@@ -852,6 +858,10 @@ snapshots:
   '@types/node@24.12.0':
     dependencies:
       undici-types: 7.16.0
+
+  '@types/node@25.4.0':
+    dependencies:
+      undici-types: 7.18.2
 
   aggregate-error@3.1.0:
     dependencies:
@@ -1082,6 +1092,8 @@ snapshots:
   typescript@5.9.3: {}
 
   undici-types@7.16.0: {}
+
+  undici-types@7.18.2: {}
 
   universal-github-app-jwt@2.2.2: {}
 
