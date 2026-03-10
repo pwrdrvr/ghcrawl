@@ -248,4 +248,10 @@ export function migrate(db: SqliteDatabase): void {
   if (!clusterColumns.has('close_reason_local')) {
     db.exec('alter table clusters add column close_reason_local text');
   }
+
+  db.exec('create index if not exists idx_threads_repo_number on threads(repo_id, number)');
+  db.exec('create index if not exists idx_document_summaries_thread_model on document_summaries(thread_id, model)');
+  db.exec('create index if not exists idx_cluster_runs_repo_status_id on cluster_runs(repo_id, status, id)');
+  db.exec('create index if not exists idx_clusters_repo_run_id on clusters(repo_id, cluster_run_id, id)');
+  db.exec('create index if not exists idx_cluster_members_thread_cluster on cluster_members(thread_id, cluster_id)');
 }
