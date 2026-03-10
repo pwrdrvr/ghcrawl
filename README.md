@@ -230,6 +230,7 @@ The agent and build contract for this repo lives in [SPEC.md](./SPEC.md).
 - `sync --limit <count>` is the best smoke-test path on a busy repository
 - `tui` remembers sort order and min cluster size per repository in the persisted config file
 - the TUI shows locally closed threads and clusters in gray; press `x` to hide or show them
+- on wide screens, press `l` to toggle between three columns and a wider cluster list with members/detail stacked on the right
 - if you add a brand-new repo from the TUI with `p`, ghcrawl runs sync -> embed -> cluster and opens that repo with min cluster size `1+`
 
 ## Responsibility Attestation

@@ -160,6 +160,7 @@ test('loadConfig restores op metadata and repository tui preferences', () => {
         'openclaw/openclaw': {
           minClusterSize: 1,
           sortMode: 'size',
+          wideLayout: 'right-stack',
         },
       },
     },
@@ -173,6 +174,7 @@ test('loadConfig restores op metadata and repository tui preferences', () => {
   assert.deepEqual(getTuiRepositoryPreference(config, 'openclaw', 'openclaw'), {
     minClusterSize: 1,
     sortMode: 'size',
+    wideLayout: 'right-stack',
   });
 });
 
@@ -191,16 +193,19 @@ test('writeTuiRepositoryPreference persists sort and min cluster size by reposit
     repo: 'openclaw',
     minClusterSize: 1,
     sortMode: 'size',
+    wideLayout: 'right-stack',
   });
 
   const reloaded = loadConfig({ cwd: workspace, env });
   assert.deepEqual(getTuiRepositoryPreference(reloaded, 'openclaw', 'openclaw'), {
     minClusterSize: 1,
     sortMode: 'size',
+    wideLayout: 'right-stack',
   });
   assert.deepEqual(getTuiRepositoryPreference(reloaded, 'other', 'repo'), {
     minClusterSize: 10,
     sortMode: 'recent',
+    wideLayout: 'columns',
   });
 });
 

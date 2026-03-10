@@ -8,10 +8,12 @@ export type ConfigValueSource = 'env' | 'config' | 'dotenv' | 'default' | 'none'
 export type SecretProvider = 'plaintext' | 'op';
 export type TuiSortPreference = 'recent' | 'size';
 export type TuiMinClusterSize = 0 | 1 | 10 | 20 | 50;
+export type TuiWideLayoutPreference = 'columns' | 'right-stack';
 
 export type TuiRepositoryPreference = {
   minClusterSize: TuiMinClusterSize;
   sortMode: TuiSortPreference;
+  wideLayout: TuiWideLayoutPreference;
 };
 
 export type PersistedGitcrawlConfig = {
@@ -160,6 +162,10 @@ function getTuiMinClusterSize(value: unknown): TuiMinClusterSize | undefined {
   return value === 0 || value === 1 || value === 10 || value === 20 || value === 50 ? value : undefined;
 }
 
+function getTuiWideLayoutPreference(value: unknown): TuiWideLayoutPreference | undefined {
+  return value === 'columns' || value === 'right-stack' ? value : undefined;
+}
+
 function getTuiPreferences(value: unknown): Record<string, TuiRepositoryPreference> | undefined {
   if (!value || typeof value !== 'object') {
     return undefined;
@@ -173,10 +179,11 @@ function getTuiPreferences(value: unknown): Record<string, TuiRepositoryPreferen
     const record = preference as Record<string, unknown>;
     const minClusterSize = getTuiMinClusterSize(record.minClusterSize);
     const sortMode = getTuiSortPreference(record.sortMode);
+    const wideLayout = getTuiWideLayoutPreference(record.wideLayout) ?? 'columns';
     if (minClusterSize === undefined || sortMode === undefined) {
       continue;
     }
-    preferences[fullName] = { minClusterSize, sortMode };
+    preferences[fullName] = { minClusterSize, sortMode, wideLayout };
   }
 
   return preferences;
@@ -367,12 +374,12 @@ export function ensureRuntimeDirs(config: GitcrawlConfig): void {
 }
 
 export function getTuiRepositoryPreference(config: GitcrawlConfig, owner: string, repo: string): TuiRepositoryPreference {
-  return config.tuiPreferences[`${owner}/${repo}`] ?? { minClusterSize: 10, sortMode: 'recent' };
+  return config.tuiPreferences[`${owner}/${repo}`] ?? { minClusterSize: 10, sortMode: 'recent', wideLayout: 'columns' };
 }
 
 export function writeTuiRepositoryPreference(
   config: GitcrawlConfig,
-  params: { owner: string; repo: string; minClusterSize: TuiMinClusterSize; sortMode: TuiSortPreference },
+  params: { owner: string; repo: string; minClusterSize: TuiMinClusterSize; sortMode: TuiSortPreference; wideLayout: TuiWideLayoutPreference },
 ): { configPath: string } {
   const fullName = `${params.owner}/${params.repo}`;
   const nextPreferences = {
@@ -380,6 +387,7 @@ export function writeTuiRepositoryPreference(
     [fullName]: {
       minClusterSize: params.minClusterSize,
       sortMode: params.sortMode,
+      wideLayout: params.wideLayout,
     },
   };
   config.tuiPreferences = nextPreferences;

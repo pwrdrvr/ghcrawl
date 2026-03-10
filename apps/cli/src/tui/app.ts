@@ -9,6 +9,7 @@ import type {
   TuiRepoStats,
   TuiSnapshot,
   TuiThreadDetail,
+  TuiWideLayoutPreference,
 } from '@ghcrawl/api-core';
 import { getTuiRepositoryPreference, writeTuiRepositoryPreference } from '@ghcrawl/api-core';
 import {
@@ -104,9 +105,10 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   let focusPane: TuiFocusPane = 'clusters';
   const initialPreference = selectedRepository
     ? getTuiRepositoryPreference(params.service.config, currentRepository.owner, currentRepository.repo)
-    : { sortMode: 'recent' as TuiClusterSortMode, minClusterSize: 10 as TuiMinSizeFilter };
+    : { sortMode: 'recent' as TuiClusterSortMode, minClusterSize: 10 as TuiMinSizeFilter, wideLayout: 'columns' as TuiWideLayoutPreference };
   let sortMode: TuiClusterSortMode = initialPreference.sortMode;
   let minSize: TuiMinSizeFilter = initialPreference.minClusterSize;
+  let wideLayout: TuiWideLayoutPreference = initialPreference.wideLayout;
   let showClosed = true;
   let search = '';
   let snapshot: TuiSnapshot | null = null;
@@ -259,7 +261,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   const render = (): void => {
     const width = widgets.screen.width as number;
     const height = widgets.screen.height as number;
-    const layout = computeTuiLayout(width, height);
+    const layout = computeTuiLayout(width, height, wideLayout);
     applyRect(widgets.header, layout.header);
     applyRect(widgets.clusters, layout.clusters);
     applyRect(widgets.members, layout.members);
@@ -279,7 +281,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
         ? `#${snapshot.stats.latestClusterRunId} ${formatRelativeTime(snapshot.stats.latestClusterRunFinishedAt ?? null)}`
         : 'never';
     widgets.header.setContent(
-      `{bold}${repoLabel}{/bold}  {cyan-fg}${snapshot?.stats.openPullRequestCount ?? 0} PR{/cyan-fg}  {green-fg}${snapshot?.stats.openIssueCount ?? 0} issues{/green-fg}  GH:${ghStatus}  Emb:${embedStatus}  Cl:${clusterStatus}  sort:${sortMode}  min:${minSize === 0 ? 'all' : `${minSize}+`}  closed:${showClosed ? 'shown' : 'hidden'}  filter:${search || 'none'}`,
+      `{bold}${repoLabel}{/bold}  {cyan-fg}${snapshot?.stats.openPullRequestCount ?? 0} PR{/cyan-fg}  {green-fg}${snapshot?.stats.openIssueCount ?? 0} issues{/green-fg}  GH:${ghStatus}  Emb:${embedStatus}  Cl:${clusterStatus}  sort:${sortMode}  min:${minSize === 0 ? 'all' : `${minSize}+`}  layout:${wideLayout === 'columns' ? 'cols' : 'stack'}  closed:${showClosed ? 'shown' : 'hidden'}  filter:${search || 'none'}`,
     );
 
     const clusterItems = snapshot
@@ -310,7 +312,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       footerLines.unshift('');
     }
     footerLines.push(
-      `${status}  |  jobs:${activeJobs}  |  Tab focus  j/k move-or-scroll  PgUp/PgDn scroll  p repos  u author  g update  s sort  f min  x closed  / filter  r refresh  o open  q quit`,
+      `${status}  |  jobs:${activeJobs}  |  Tab focus  j/k move-or-scroll  PgUp/PgDn scroll  p repos  u author  g update  s sort  f min  l layout  x closed  / filter  r refresh  o open  q quit`,
     );
     widgets.footer.setContent(footerLines.join('\n'));
     widgets.screen.render();
@@ -561,6 +563,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       repo: currentRepository.repo,
       minClusterSize: minSize,
       sortMode,
+      wideLayout,
     });
   };
 
@@ -575,6 +578,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     const preference = getTuiRepositoryPreference(params.service.config, target.owner, target.repo);
     minSize = overrides?.minClusterSize ?? preference.minClusterSize;
     sortMode = overrides?.sortMode ?? preference.sortMode;
+    wideLayout = preference.wideLayout;
     persistRepositoryPreference();
     clearCaches();
     search = '';
@@ -766,6 +770,13 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     persistRepositoryPreference();
     status = `Min size: ${minSize === 0 ? 'all' : `${minSize}+`}`;
     refreshAll(false);
+  });
+  widgets.screen.key(['l'], () => {
+    if (modalOpen) return;
+    wideLayout = wideLayout === 'columns' ? 'right-stack' : 'columns';
+    persistRepositoryPreference();
+    status = `Layout: ${wideLayout === 'columns' ? 'three columns' : 'wide left + stacked right'}`;
+    render();
   });
   widgets.screen.key(['x'], () => {
     if (modalOpen) return;
@@ -1315,6 +1326,7 @@ async function runColdStartSetup(
       repo: target.repo,
       minClusterSize: 1,
       sortMode: 'recent',
+      wideLayout: 'columns',
     });
     log?.log('[setup] initial setup complete');
     return true;

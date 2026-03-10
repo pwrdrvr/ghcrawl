@@ -1,4 +1,5 @@
-export type TuiLayoutMode = 'wide' | 'stacked';
+export type TuiWideLayoutMode = 'columns' | 'right-stack';
+export type TuiLayoutMode = 'wide-columns' | 'wide-right-stack' | 'stacked';
 
 export type TuiPaneRect = {
   top: number;
@@ -16,7 +17,7 @@ export type TuiLayout = {
   footer: TuiPaneRect;
 };
 
-export function computeTuiLayout(width: number, height: number): TuiLayout {
+export function computeTuiLayout(width: number, height: number, wideMode: TuiWideLayoutMode = 'columns'): TuiLayout {
   const safeWidth = Math.max(60, width);
   const safeHeight = Math.max(16, height);
   const footerHeight = 5;
@@ -26,11 +27,25 @@ export function computeTuiLayout(width: number, height: number): TuiLayout {
   const footer = { top: safeHeight - footerHeight, left: 0, width: safeWidth, height: footerHeight };
 
   if (safeWidth >= 140) {
+    if (wideMode === 'right-stack') {
+      const leftWidth = Math.floor(safeWidth * 0.44);
+      const rightWidth = safeWidth - leftWidth;
+      const membersHeight = Math.max(6, Math.floor(contentHeight * 0.42));
+      const detailHeight = Math.max(6, contentHeight - membersHeight);
+      return {
+        mode: 'wide-right-stack',
+        header,
+        clusters: { top: contentTop, left: 0, width: leftWidth, height: contentHeight },
+        members: { top: contentTop, left: leftWidth, width: rightWidth, height: membersHeight },
+        detail: { top: contentTop + membersHeight, left: leftWidth, width: rightWidth, height: detailHeight },
+        footer,
+      };
+    }
     const leftWidth = Math.floor(safeWidth * 0.34);
     const middleWidth = Math.floor(safeWidth * 0.30);
     const rightWidth = safeWidth - leftWidth - middleWidth;
     return {
-      mode: 'wide',
+      mode: 'wide-columns',
       header,
       clusters: { top: contentTop, left: 0, width: leftWidth, height: contentHeight },
       members: { top: contentTop, left: leftWidth, width: middleWidth, height: contentHeight },
