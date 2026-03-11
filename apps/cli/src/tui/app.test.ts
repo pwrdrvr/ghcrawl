@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import type { TuiClusterDetail, TuiRepoStats, TuiThreadDetail } from '@ghcrawl/api-core';
 
 import {
+  buildRefreshCliArgs,
   buildHelpContent,
   buildUpdatePipelineLabels,
   describeUpdateTask,
@@ -187,7 +188,7 @@ test('buildHelpContent includes the full key command list', () => {
   assert.match(content, /Left \/ Right\s+cycle focus backward or forward across panes/);
   assert.match(content, /Up \/ Down\s+move selection, or scroll detail when detail is focused/);
   assert.match(content, /#\s+jump directly to an issue or PR number/);
-  assert.match(content, /g\s+open the staged update pipeline/);
+  assert.match(content, /g\s+start the staged update pipeline in the background/);
   assert.match(content, /p\s+open the repository browser/);
   assert.match(content, /u\s+show all open threads for the selected author/);
   assert.match(content, /l\s+toggle wide layout/);
@@ -196,4 +197,17 @@ test('buildHelpContent includes the full key command list', () => {
   assert.match(content, /q\s+quit the TUI/);
   assert.doesNotMatch(content, /j \/ k/);
   assert.match(content, /This popup scrolls\./);
+});
+
+test('buildRefreshCliArgs maps the staged selection to refresh skip flags', () => {
+  assert.deepEqual(buildRefreshCliArgs({ owner: 'openclaw', repo: 'openclaw' }, { sync: true, embed: true, cluster: true }), [
+    'refresh',
+    'openclaw/openclaw',
+  ]);
+  assert.deepEqual(buildRefreshCliArgs({ owner: 'openclaw', repo: 'openclaw' }, { sync: false, embed: true, cluster: false }), [
+    'refresh',
+    'openclaw/openclaw',
+    '--no-sync',
+    '--no-cluster',
+  ]);
 });
