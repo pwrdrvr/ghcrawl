@@ -18,17 +18,28 @@ import type {
 } from '@ghcrawl/api-core';
 import { getTuiRepositoryPreference, writeTuiRepositoryPreference } from '@ghcrawl/api-core';
 import {
+  filterCommands,
+  formatCommandLabel,
+  resolveCommands,
+  selectCommandFromQuery,
+  type TuiCommandDefinition,
+  type TuiResolvedCommand,
+} from './commands.js';
+import {
   buildMemberRows,
   cycleFocusPane,
   cycleMinSizeFilter,
   cycleSortMode,
   findSelectableIndex,
+  getScreenDefinition,
+  getScreenFocusOrder,
   moveSelectableIndex,
   preserveSelectedId,
   selectedThreadIdFromRow,
   type MemberListRow,
   type TuiFocusPane,
   type TuiMinSizeFilter,
+  type TuiScreenId,
 } from './state.js';
 import { computeTuiLayout } from './layout.js';
 
@@ -67,6 +78,10 @@ type Widgets = {
   members: blessed.Widgets.ListElement;
   detail: blessed.Widgets.BoxElement;
   footer: blessed.Widgets.BoxElement;
+  commandPalette: blessed.Widgets.BoxElement;
+  commandInput: blessed.Widgets.BoxElement;
+  commandList: blessed.Widgets.ListElement;
+  commandHint: blessed.Widgets.BoxElement;
 };
 
 type ThreadDetailCacheEntry = {
@@ -94,6 +109,22 @@ type BackgroundRefreshJob = {
   stdoutBuffer: string;
   terminatedByUser: boolean;
   exitPromise: Promise<BackgroundJobResult>;
+};
+
+type TuiCommandContext = {
+  activeScreen: TuiScreenId;
+  currentRepository: RepositoryTarget;
+  hasSnapshot: boolean;
+  hasSelectedThread: boolean;
+  hasActiveJobs: boolean;
+};
+
+type CommandPaletteState = {
+  open: boolean;
+  query: string;
+  selectedIndex: number;
+  previousFocusPane: TuiFocusPane;
+  previousScreen: TuiScreenId;
 };
 
 export function resolveBlessedTerminal(env: NodeJS.ProcessEnv = process.env): string | undefined {
@@ -147,6 +178,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   let currentRepository = selectedRepository ?? { owner: '', repo: '' };
   const widgets = createWidgets(currentRepository.owner, currentRepository.repo);
 
+  let activeScreen: TuiScreenId = 'clusters';
   let focusPane: TuiFocusPane = 'clusters';
   const initialPreference = selectedRepository
     ? getTuiRepositoryPreference(params.service.config, currentRepository.owner, currentRepository.repo)
@@ -175,6 +207,24 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   let activeJob: BackgroundRefreshJob | null = null;
   let modalOpen = false;
   let exitRequested = false;
+  let commandDefinitions: TuiCommandDefinition<TuiCommandContext>[] = [];
+  let commandPalette: CommandPaletteState = {
+    open: false,
+    query: '',
+    selectedIndex: 0,
+    previousFocusPane: focusPane,
+    previousScreen: activeScreen,
+  };
+
+  const hasActiveJobs = (): boolean => activeJob !== null;
+  const hasBlockingOverlay = (): boolean => modalOpen || commandPalette.open;
+  const buildCommandContext = (): TuiCommandContext => ({
+    activeScreen,
+    currentRepository,
+    hasSnapshot: snapshot !== null,
+    hasSelectedThread: selectedMemberThreadId !== null && threadDetail?.thread.htmlUrl !== undefined,
+    hasActiveJobs: hasActiveJobs(),
+  });
 
   const clearCaches = (): void => {
     clusterDetailCache.clear();
@@ -190,7 +240,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     }
 
     clusterIndexById = new Map();
-    clusterItems = snapshot.clusters.map((cluster, index) => {
+    clusterItems = snapshot.clusters.map((cluster: TuiSnapshot['clusters'][number], index: number) => {
       clusterIndexById.set(cluster.clusterId, index);
       const updated = formatClusterDateColumn(cluster.latestUpdatedAt);
       const label = `${String(cluster.totalCount).padStart(3, ' ')}  C${String(cluster.clusterId).padStart(5, ' ')}  ${String(cluster.pullRequestCount).padStart(2, ' ')}P/${String(cluster.issueCount).padStart(2, ' ')}I  ${updated}  ${cluster.displayTitle}`;
@@ -254,7 +304,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     }
 
     const selectFromSnapshot = (): boolean => {
-      const cluster = snapshot?.clusters.find((item) => item.clusterId === clusterId) ?? null;
+      const cluster = snapshot?.clusters.find((item: TuiSnapshot['clusters'][number]) => item.clusterId === clusterId) ?? null;
       if (!cluster) {
         return false;
       }
@@ -304,7 +354,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       search,
       includeClosedClusters: showClosed,
     });
-    selectedClusterId = preserveSelectedId(snapshot.clusters.map((cluster) => cluster.clusterId), previousClusterId);
+    selectedClusterId = preserveSelectedId(snapshot.clusters.map((cluster: TuiSnapshot['clusters'][number]) => cluster.clusterId), previousClusterId);
     rebuildClusterItems();
 
     if (selectedClusterId !== null) {
@@ -320,7 +370,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
           includeClosedClusters: showClosed,
         });
         rebuildClusterItems();
-        selectedClusterId = preserveSelectedId(snapshot.clusters.map((cluster) => cluster.clusterId), null);
+        selectedClusterId = preserveSelectedId(snapshot.clusters.map((cluster: TuiSnapshot['clusters'][number]) => cluster.clusterId), null);
         clusterDetail = selectedClusterId !== null ? loadClusterDetail(selectedClusterId) : null;
       }
     }
@@ -345,8 +395,11 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     render();
   };
 
+  const getDefaultFocusPane = (): TuiFocusPane => getScreenFocusOrder(activeScreen)[0] ?? 'detail';
+
   const updateFocus = (nextFocus: TuiFocusPane): void => {
-    focusPane = nextFocus;
+    const allowedFocus = getScreenFocusOrder(activeScreen);
+    focusPane = allowedFocus.includes(nextFocus) ? nextFocus : getDefaultFocusPane();
     if (focusPane === 'detail' && selectedMemberThreadId !== null) {
       loadSelectedThreadDetail(true);
     }
@@ -354,6 +407,21 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     if (focusPane === 'members') widgets.members.focus();
     if (focusPane === 'detail') widgets.detail.focus();
     render();
+  };
+
+  const switchScreen = (nextScreen: TuiScreenId): void => {
+    if (activeScreen === nextScreen) {
+      status = `Already in ${getScreenDefinition(nextScreen).label}`;
+      render();
+      return;
+    }
+    activeScreen = nextScreen;
+    focusPane = getDefaultFocusPane();
+    status =
+      nextScreen === 'users'
+        ? 'Switched to User Explorer. Data-specific user browsing will land in a follow-up.'
+        : 'Switched to Clusters Explorer';
+    updateFocus(getDefaultFocusPane());
   };
 
   const render = (): void => {
@@ -368,6 +436,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
 
     widgets.screen.title = currentRepository.owner && currentRepository.repo ? `ghcrawl ${currentRepository.owner}/${currentRepository.repo}` : 'ghcrawl';
     const repoLabel = snapshot?.repository.fullName ?? (currentRepository.owner && currentRepository.repo ? `${currentRepository.owner}/${currentRepository.repo}` : 'ghcrawl');
+    const screenDefinition = getScreenDefinition(activeScreen);
     const ghStatus = formatRelativeTime(snapshot?.stats.lastGithubReconciliationAt ?? null);
     const embedAge = formatRelativeTime(snapshot?.stats.lastEmbedRefreshAt ?? null);
     const embedStatus =
@@ -379,18 +448,32 @@ export async function startTui(params: StartTuiParams): Promise<void> {
         ? `#${snapshot.stats.latestClusterRunId} ${formatRelativeTime(snapshot.stats.latestClusterRunFinishedAt ?? null)}`
         : 'never';
     widgets.header.setContent(
-      `{bold}${repoLabel}{/bold}  {cyan-fg}${snapshot?.stats.openPullRequestCount ?? 0} PR{/cyan-fg}  {green-fg}${snapshot?.stats.openIssueCount ?? 0} issues{/green-fg}  GH:${ghStatus}  Emb:${embedStatus}  Cl:${clusterStatus}  sort:${sortMode}  min:${minSize === 0 ? 'all' : `${minSize}+`}  layout:${wideLayout === 'columns' ? 'cols' : 'stack'}  closed:${showClosed ? 'shown' : 'hidden'}  filter:${search || 'none'}`,
+      `{bold}${repoLabel}{/bold}  view:${escapeBlessedText(screenDefinition.label)}  {cyan-fg}${snapshot?.stats.openPullRequestCount ?? 0} PR{/cyan-fg}  {green-fg}${snapshot?.stats.openIssueCount ?? 0} issues{/green-fg}  GH:${ghStatus}  Emb:${embedStatus}  Cl:${clusterStatus}  sort:${sortMode}  min:${minSize === 0 ? 'all' : `${minSize}+`}  layout:${wideLayout === 'columns' ? 'cols' : 'stack'}  closed:${showClosed ? 'shown' : 'hidden'}  filter:${search || 'none'}`,
     );
 
-    const clusterIndex = snapshot && selectedClusterId !== null ? Math.max(0, clusterIndexById.get(selectedClusterId) ?? -1) : 0;
-    widgets.clusters.select(clusterIndex);
-
-    widgets.members.setItems(memberRows.length > 0 ? memberRows.map((row) => row.label) : ['No members']);
-    if (memberIndex >= 0) {
-      widgets.members.select(memberIndex);
+    if (activeScreen === 'clusters') {
+      widgets.clusters.setLabel(' Clusters ');
+      widgets.members.setLabel(' Members ');
+      widgets.detail.setLabel(' Detail ');
+      const clusterIndex = snapshot && selectedClusterId !== null ? Math.max(0, clusterIndexById.get(selectedClusterId) ?? -1) : 0;
+      widgets.clusters.setItems(clusterItems);
+      widgets.clusters.select(clusterIndex);
+      widgets.members.setItems(memberRows.length > 0 ? memberRows.map((row) => row.label) : ['No members']);
+      if (memberIndex >= 0) {
+        widgets.members.select(memberIndex);
+      }
+      widgets.detail.setContent(renderDetailPane(threadDetail, clusterDetail, focusPane));
+    } else {
+      widgets.clusters.setLabel(' Users ');
+      widgets.members.setLabel(' Threads ');
+      widgets.detail.setLabel(' Explorer ');
+      widgets.clusters.setItems(['User Explorer is reserved for the next TUI screen.']);
+      widgets.clusters.select(0);
+      widgets.members.setItems(['Use /clusters to return to the current cluster workflow.']);
+      widgets.members.select(0);
+      widgets.detail.setContent(renderUserExplorerPlaceholder(currentRepository));
     }
 
-    widgets.detail.setContent(renderDetailPane(threadDetail, clusterDetail, focusPane));
     updatePaneStyles(widgets, focusPane);
     const activeJobs = [syncJobRunning ? 'sync' : null, embedJobRunning ? 'embed' : null, clusterJobRunning ? 'cluster' : null]
       .filter(Boolean)
@@ -400,13 +483,16 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     while (footerLines.length < FOOTER_LOG_LINES) {
       footerLines.unshift('');
     }
-    footerLines.push(
-      `${status}  |  jobs:${activeJobs}  |  h/? help  # jump  g update  p repos  u author  / filter  s sort  f min  l layout  x closed`,
-    );
-    footerLines.push(
-      `Tab focus  arrows move-or-scroll  PgUp/PgDn page  r refresh  o open  q quit`,
-    );
+    const footerHints = buildFooterCommandHints(activeScreen);
+    footerLines.push(`${status}  |  jobs:${activeJobs}  |  ${footerHints[0]}`);
+    footerLines.push(footerHints[1]);
     widgets.footer.setContent(footerLines.join('\n'));
+    renderCommandPaletteOverlay(widgets, {
+      width,
+      footerTop: layout.footer.top,
+      palette: commandPalette,
+      commands: filterCommands(resolveCommands(commandDefinitions, buildCommandContext()), commandPalette.query),
+    });
     widgets.screen.render();
   };
 
@@ -548,6 +634,9 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   };
 
   const moveSelection = (delta: -1 | 1, options?: { steps?: number; wrap?: boolean }): void => {
+    if (activeScreen !== 'clusters') {
+      return;
+    }
     if (!snapshot) return;
     const steps = Math.max(1, options?.steps ?? 1);
     const wrap = options?.wrap ?? true;
@@ -615,7 +704,115 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     moveSelection(delta, { steps: getFocusedListPageSize(), wrap: false });
   };
 
+  const requireClustersScreen = (actionLabel: string): boolean => {
+    if (activeScreen === 'clusters') {
+      return true;
+    }
+    status = `${actionLabel} is only available in Clusters Explorer`;
+    render();
+    return false;
+  };
+
+  const closeCommandPalette = (options?: { restoreFocus?: boolean }): void => {
+    if (!commandPalette.open) return;
+    const restoreFocus = options?.restoreFocus ?? false;
+    commandPalette = {
+      open: false,
+      query: '',
+      selectedIndex: 0,
+      previousFocusPane: commandPalette.previousFocusPane,
+      previousScreen: commandPalette.previousScreen,
+    };
+    if (restoreFocus) {
+      if (activeScreen !== commandPalette.previousScreen) {
+        focusPane = getDefaultFocusPane();
+      } else {
+        focusPane = commandPalette.previousFocusPane;
+      }
+      updateFocus(focusPane);
+      return;
+    }
+    render();
+  };
+
+  const openCommandPalette = (): void => {
+    if (modalOpen) return;
+    commandPalette = {
+      open: true,
+      query: '',
+      selectedIndex: 0,
+      previousFocusPane: focusPane,
+      previousScreen: activeScreen,
+    };
+    render();
+  };
+
+  const getFilteredCommands = (): TuiResolvedCommand<TuiCommandContext>[] =>
+    filterCommands(resolveCommands(commandDefinitions, buildCommandContext()), commandPalette.query);
+
+  const moveCommandPaletteSelection = (delta: -1 | 1): void => {
+    const filtered = getFilteredCommands();
+    if (filtered.length === 0) return;
+    commandPalette.selectedIndex =
+      ((commandPalette.selectedIndex + delta) % filtered.length + filtered.length) % filtered.length;
+    render();
+  };
+
+  const executeCommandFromPalette = (): void => {
+    const command = selectCommandFromQuery(resolveCommands(commandDefinitions, buildCommandContext()), commandPalette.query, commandPalette.selectedIndex);
+    if (!command) {
+      status = 'No matching command';
+      render();
+      return;
+    }
+    if (!command.enabled) {
+      status = command.reason ?? `/${command.definition.slash} is not available yet`;
+      render();
+      return;
+    }
+    closeCommandPalette();
+    command.definition.execute();
+  };
+
+  const updateCommandPaletteQuery = (value: string): void => {
+    commandPalette.query = value;
+    commandPalette.selectedIndex = 0;
+    render();
+  };
+
+  const handleCommandPaletteKeypress = (char: string, key: blessed.Widgets.Events.IKeyEventArg): void => {
+    if (!commandPalette.open) return;
+    if (key.name === 'escape') {
+      closeCommandPalette({ restoreFocus: true });
+      return;
+    }
+    if (key.name === 'up') {
+      moveCommandPaletteSelection(-1);
+      return;
+    }
+    if (key.name === 'down') {
+      moveCommandPaletteSelection(1);
+      return;
+    }
+    if (key.name === 'enter') {
+      executeCommandFromPalette();
+      return;
+    }
+    if (key.name === 'backspace' || key.name === 'delete') {
+      updateCommandPaletteQuery(commandPalette.query.slice(0, -1));
+      return;
+    }
+    if (key.name === 'space') {
+      updateCommandPaletteQuery(`${commandPalette.query} `);
+      return;
+    }
+    if (char && !key.ctrl && !key.meta && !key.shift && char.length === 1 && char >= ' ') {
+      updateCommandPaletteQuery(`${commandPalette.query}${char}`);
+    }
+  };
+
   const promptFilter = (): void => {
+    if (!requireClustersScreen('Filtering')) return;
     modalOpen = true;
     const prompt = blessed.prompt({
       parent: widgets.screen,
@@ -644,6 +841,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   };
 
   const promptThreadJump = (): void => {
+    if (!requireClustersScreen('Jumping to threads')) return;
     if (modalOpen) return;
     modalOpen = true;
     const prompt = blessed.prompt({
@@ -693,6 +891,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   };
 
   const openSelectedThread = (): void => {
+    if (!requireClustersScreen('Opening threads')) return;
     const url = threadDetail?.thread.htmlUrl;
     if (!url) {
       status = 'No thread selected to open';
@@ -705,6 +904,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   };
 
   const promptAuthorThreads = (): void => {
+    if (!requireClustersScreen('Author browsing')) return;
     if (modalOpen) return;
     const authorLogin = threadDetail?.thread.authorLogin?.trim() ?? '';
     if (!authorLogin) {
@@ -850,8 +1050,6 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       }
     })();
   };
-
-  const hasActiveJobs = (): boolean => activeJob !== null;
 
   const persistRepositoryPreference = (): void => {
     writeTuiRepositoryPreference(params.service.config, {
@@ -1004,22 +1202,199 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     }
   };
 
+  const cycleSortAction = (): void => {
+    if (!requireClustersScreen('Sorting clusters')) return;
+    sortMode = cycleSortMode(sortMode);
+    persistRepositoryPreference();
+    status = `Sort: ${sortMode}`;
+    refreshAll(false);
+  };
+
+  const cycleMinSizeAction = (): void => {
+    if (!requireClustersScreen('Changing the minimum size filter')) return;
+    minSize = cycleMinSizeFilter(minSize);
+    persistRepositoryPreference();
+    status = `Min size: ${minSize === 0 ? 'all' : `${minSize}+`}`;
+    refreshAll(false);
+  };
+
+  const toggleLayoutAction = (): void => {
+    wideLayout = wideLayout === 'columns' ? 'right-stack' : 'columns';
+    persistRepositoryPreference();
+    status = `Layout: ${wideLayout === 'columns' ? 'three columns' : 'wide left + stacked right'}`;
+    render();
+  };
+
+  const toggleClosedAction = (): void => {
+    if (!requireClustersScreen('Toggling closed clusters')) return;
+    showClosed = !showClosed;
+    status = showClosed ? 'Showing closed clusters and members' : 'Hiding closed clusters and members';
+    refreshAll(true);
+  };
+
+  const refreshAction = (): void => {
+    status = 'Refreshing';
+    refreshAll(true);
+  };
+
+  const focusForwardAction = (): void => {
+    updateFocus(cycleFocusPane(focusPane, 1, getScreenFocusOrder(activeScreen)));
+  };
+
+  const focusBackwardAction = (): void => {
+    updateFocus(cycleFocusPane(focusPane, -1, getScreenFocusOrder(activeScreen)));
+  };
+
+  commandDefinitions = [
+    {
+      id: 'view.clusters',
+      slash: 'clusters',
+      label: 'Clusters Explorer',
+      description: 'Switch to the issue and PR cluster explorer.',
+      aliases: ['cluster', 'home'],
+      execute: () => switchScreen('clusters'),
+    },
+    {
+      id: 'view.users',
+      slash: 'users',
+      label: 'User Explorer',
+      description: 'Switch to the user explorer screen.',
+      aliases: ['user'],
+      execute: () => switchScreen('users'),
+    },
+    {
+      id: 'view.filter',
+      slash: 'filter',
+      label: 'Filter clusters',
+      description: 'Filter clusters by title and member text.',
+      screens: ['clusters'],
+      execute: () => promptFilter(),
+    },
+    {
+      id: 'view.refresh',
+      slash: 'refresh',
+      label: 'Refresh view',
+      description: 'Reload the current local TUI view from SQLite.',
+      aliases: ['reload'],
+      execute: () => refreshAction(),
+    },
+    {
+      id: 'view.layout',
+      slash: 'layout',
+      label: 'Toggle layout',
+      description: 'Switch between wide columns and stacked-right layout.',
+      aliases: ['wide'],
+      execute: () => toggleLayoutAction(),
+    },
+    {
+      id: 'view.toggle-closed',
+      slash: 'toggle-closed',
+      label: 'Toggle closed items',
+      description: 'Show or hide locally closed clusters and members.',
+      screens: ['clusters'],
+      aliases: ['closed'],
+      execute: () => toggleClosedAction(),
+    },
+    {
+      id: 'view.sort',
+      slash: 'sort',
+      label: 'Cycle sort mode',
+      description: 'Toggle cluster ordering between recent and size.',
+      screens: ['clusters'],
+      execute: () => cycleSortAction(),
+    },
+    {
+      id: 'view.min-size',
+      slash: 'min-size',
+      label: 'Cycle minimum cluster size',
+      description: 'Rotate through the minimum cluster size presets.',
+      screens: ['clusters'],
+      aliases: ['min'],
+      execute: () => cycleMinSizeAction(),
+    },
+    {
+      id: 'data.repos',
+      slash: 'repos',
+      label: 'Browse repositories',
+      description: 'Open the repository browser or sync a new repository.',
+      aliases: ['repo'],
+      getAvailability: () => (hasActiveJobs() ? { enabled: false, reason: 'blocked while jobs are running' } : { enabled: true }),
+      execute: () => browseRepositories(),
+    },
+    {
+      id: 'data.update',
+      slash: 'update',
+      label: 'Run update pipeline',
+      description: 'Start the staged GitHub, embed, and cluster refresh flow.',
+      aliases: ['refresh-pipeline'],
+      getAvailability: () => (hasActiveJobs() ? { enabled: false, reason: 'already running' } : { enabled: true }),
+      execute: () => promptUpdatePipeline(),
+    },
+    {
+      id: 'data.open',
+      slash: 'open',
+      label: 'Open selected thread',
+      description: 'Open the selected issue or PR in your browser.',
+      screens: ['clusters'],
+      getAvailability: () => ({ enabled: selectedMemberThreadId !== null, reason: 'select a thread first' }),
+      execute: () => openSelectedThread(),
+    },
+    {
+      id: 'data.author',
+      slash: 'author',
+      label: 'Browse selected author',
+      description: 'Show the selected author’s open threads.',
+      screens: ['clusters'],
+      getAvailability: () => ({
+        enabled: Boolean(threadDetail?.thread.authorLogin?.trim()),
+        reason: 'select a thread with an author login',
+      }),
+      execute: () => promptAuthorThreads(),
+    },
+    {
+      id: 'data.jump',
+      slash: 'jump',
+      label: 'Jump to issue or PR',
+      description: 'Jump directly to a thread number.',
+      screens: ['clusters'],
+      aliases: ['thread'],
+      execute: () => promptThreadJump(),
+    },
+    {
+      id: 'utility.help',
+      slash: 'help',
+      label: 'Help',
+      description: 'Open the TUI help popup.',
+      aliases: ['?'],
+      execute: () => openHelp(),
+    },
+    {
+      id: 'utility.quit',
+      slash: 'quit',
+      label: 'Quit',
+      description: 'Quit the TUI.',
+      aliases: ['exit'],
+      execute: () => requestQuit(),
+    },
+  ];
+
   widgets.screen.key(['q'], () => {
+    if (commandPalette.open) return;
     requestQuit();
   });
   widgets.screen.key(['C-c'], () => {
     requestQuit();
   });
   widgets.screen.key(['tab', 'right'], () => {
-    if (modalOpen) return;
-    updateFocus(cycleFocusPane(focusPane, 1));
+    if (hasBlockingOverlay()) return;
+    focusForwardAction();
   });
   widgets.screen.key(['S-tab', 'left'], () => {
-    if (modalOpen) return;
-    updateFocus(cycleFocusPane(focusPane, -1));
+    if (hasBlockingOverlay()) return;
+    focusBackwardAction();
   });
   widgets.screen.key(['down'], () => {
-    if (modalOpen) return;
+    if (hasBlockingOverlay()) return;
     if (focusPane === 'detail') {
       scrollDetail(3);
       return;
@@ -1027,7 +1402,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     moveSelection(1);
   });
   widgets.screen.key(['up'], () => {
-    if (modalOpen) return;
+    if (hasBlockingOverlay()) return;
     if (focusPane === 'detail') {
       scrollDetail(-3);
       return;
@@ -1035,27 +1410,30 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     moveSelection(-1);
   });
   widgets.screen.key(['pageup'], () => {
-    if (modalOpen) return;
+    if (hasBlockingOverlay()) return;
     pageFocusedPane(-1);
   });
   widgets.screen.key(['pagedown'], () => {
-    if (modalOpen) return;
+    if (hasBlockingOverlay()) return;
     pageFocusedPane(1);
   });
   widgets.screen.key(['home'], () => {
-    if (modalOpen) return;
+    if (hasBlockingOverlay()) return;
     if (focusPane !== 'detail') return;
     widgets.detail.setScroll(0);
     widgets.screen.render();
   });
   widgets.screen.key(['end'], () => {
-    if (modalOpen) return;
+    if (hasBlockingOverlay()) return;
     if (focusPane !== 'detail') return;
     widgets.detail.setScrollPerc(100);
     widgets.screen.render();
   });
   widgets.screen.key(['enter'], () => {
-    if (modalOpen) return;
+    if (hasBlockingOverlay()) return;
+    if (activeScreen !== 'clusters') {
+      return;
+    }
     if (focusPane === 'clusters') {
       updateFocus('members');
       return;
@@ -1067,62 +1445,54 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     }
   });
   widgets.screen.key(['s'], () => {
-    if (modalOpen) return;
-    sortMode = cycleSortMode(sortMode);
-    persistRepositoryPreference();
-    status = `Sort: ${sortMode}`;
-    refreshAll(false);
+    if (hasBlockingOverlay()) return;
+    cycleSortAction();
   });
   widgets.screen.key(['f'], () => {
-    if (modalOpen) return;
-    minSize = cycleMinSizeFilter(minSize);
-    persistRepositoryPreference();
-    status = `Min size: ${minSize === 0 ? 'all' : `${minSize}+`}`;
-    refreshAll(false);
+    if (hasBlockingOverlay()) return;
+    cycleMinSizeAction();
   });
   widgets.screen.key(['l'], () => {
-    if (modalOpen) return;
-    wideLayout = wideLayout === 'columns' ? 'right-stack' : 'columns';
-    persistRepositoryPreference();
-    status = `Layout: ${wideLayout === 'columns' ? 'three columns' : 'wide left + stacked right'}`;
-    render();
+    if (hasBlockingOverlay()) return;
+    toggleLayoutAction();
   });
   widgets.screen.key(['x'], () => {
-    if (modalOpen) return;
-    showClosed = !showClosed;
-    status = showClosed ? 'Showing closed clusters and members' : 'Hiding closed clusters and members';
-    refreshAll(true);
+    if (hasBlockingOverlay()) return;
+    toggleClosedAction();
   });
   widgets.screen.key(['/'], () => {
-    if (modalOpen) return;
-    promptFilter();
+    if (hasBlockingOverlay()) return;
+    openCommandPalette();
   });
   widgets.screen.key(['#'], () => {
-    if (modalOpen) return;
+    if (hasBlockingOverlay()) return;
     promptThreadJump();
   });
   widgets.screen.key(['h', '?'], () => {
-    if (modalOpen) return;
+    if (hasBlockingOverlay()) return;
     openHelp();
   });
-  widgets.screen.key(['p'], () => browseRepositories());
+  widgets.screen.key(['p'], () => {
+    if (hasBlockingOverlay()) return;
+    browseRepositories();
+  });
   widgets.screen.key(['g'], () => {
-    if (modalOpen) return;
+    if (hasBlockingOverlay()) return;
     promptUpdatePipeline();
   });
   widgets.screen.key(['r'], () => {
-    if (modalOpen) return;
-    status = 'Refreshing';
-    refreshAll(true);
+    if (hasBlockingOverlay()) return;
+    refreshAction();
   });
   widgets.screen.key(['o'], () => {
-    if (modalOpen) return;
+    if (hasBlockingOverlay()) return;
     openSelectedThread();
   });
   widgets.screen.key(['u'], () => {
-    if (modalOpen) return;
+    if (hasBlockingOverlay()) return;
     promptAuthorThreads();
   });
+  widgets.screen.on('keypress', handleCommandPaletteKeypress);
   widgets.screen.on('resize', () => render());
 
   widgets.screen.on('destroy', () => {
@@ -1205,14 +1575,107 @@ function createWidgets(owner: string, repo: string): Widgets {
     tags: false,
     style: { fg: 'black', bg: '#5bc0eb' },
   });
+  const commandPalette = blessed.box({
+    parent: screen,
+    border: 'line',
+    label: ' Commands ',
+    tags: true,
+    hidden: true,
+    style: {
+      border: { fg: '#5bc0eb' },
+      fg: 'white',
+      bg: '#101522',
+    },
+  });
+  const commandInput = blessed.box({
+    parent: commandPalette,
+    top: 1,
+    left: 1,
+    right: 1,
+    height: 1,
+    tags: true,
+    style: {
+      fg: 'white',
+      bg: '#101522',
+    },
+  });
+  const commandList = blessed.list({
+    parent: commandPalette,
+    top: 3,
+    left: 1,
+    right: 1,
+    bottom: 1,
+    tags: true,
+    keys: false,
+    style: {
+      item: { fg: 'white' },
+      selected: { bg: '#5bc0eb', fg: 'black', bold: true },
+    },
+    scrollbar: { ch: ' ' },
+  });
+  const commandHint = blessed.box({
+    parent: commandPalette,
+    top: 2,
+    left: 1,
+    right: 1,
+    height: 1,
+    tags: false,
+    style: {
+      fg: '#9bc53d',
+      bg: '#101522',
+    },
+  });
 
-  return { screen, header, clusters, members, detail, footer };
+  return { screen, header, clusters, members, detail, footer, commandPalette, commandInput, commandList, commandHint };
 }
 
 function updatePaneStyles(widgets: Widgets, focus: TuiFocusPane): void {
   widgets.clusters.style.border = { fg: focus === 'clusters' ? 'white' : '#5bc0eb' };
   widgets.members.style.border = { fg: focus === 'members' ? 'white' : '#9bc53d' };
   widgets.detail.style.border = { fg: focus === 'detail' ? 'white' : '#fde74c' };
+}
+
+function renderCommandPaletteOverlay(
+  widgets: Widgets,
+  params: {
+    width: number;
+    footerTop: number;
+    palette: CommandPaletteState;
+    commands: TuiResolvedCommand<TuiCommandContext>[];
+  },
+): void {
+  widgets.commandPalette.hidden = !params.palette.open;
+  if (!params.palette.open) {
+    return;
+  }
+
+  const paletteWidth = Math.max(42, Math.min(Math.floor(params.width * 0.54), 78));
+  const paletteHeight = 10;
+  widgets.commandPalette.width = paletteWidth;
+  widgets.commandPalette.height = paletteHeight;
+  widgets.commandPalette.left = 0;
+  widgets.commandPalette.top = Math.max(1, params.footerTop - paletteHeight);
+  widgets.commandInput.setContent(`{bold}/${escapeBlessedText(params.palette.query || '')}{/bold}`);
+  widgets.commandHint.setContent('Type to filter, arrows to move, Enter to run, Esc to close.');
+  const items = params.commands.length > 0 ? params.commands.map((command) => formatCommandLabel(command)) : ['No matching commands'];
+  widgets.commandList.setItems(items);
+  widgets.commandList.select(params.commands.length > 0 ? Math.max(0, Math.min(params.palette.selectedIndex, params.commands.length - 1)) : 0);
+}
+
+export function renderUserExplorerPlaceholder(target: RepositoryTarget): string {
+  const repoLabel = target.owner && target.repo ? `${target.owner}/${target.repo}` : 'the active repository';
+  return [
+    '{bold}User Explorer{/bold}',
+    '',
+    `This screen is now routable through {bold}/users{/bold}, but the user-centric panes are still a follow-up.`,
+    '',
+    `Current repository: ${escapeBlessedText(repoLabel)}`,
+    '',
+    'Use slash commands as the global navigation layer:',
+    '  /clusters  return to the current issue and PR cluster explorer',
+    '  /repos     switch repositories',
+    '  /help      reopen the full command reference',
+  ].join('\n');
 }
 
 export function renderDetailPane(
@@ -1241,12 +1704,13 @@ export function renderDetailPane(
     ? `{bold}Closed:{/bold} ${escapeBlessedText(thread.closedAtLocal ?? thread.closedAtGh ?? 'yes')} ${thread.closeReasonLocal ? `(${escapeBlessedText(thread.closeReasonLocal)})` : ''}`.trimEnd()
     : '{bold}Closed:{/bold} no';
   const summaries = Object.entries(threadDetail.summaries)
+    .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
     .map(([key, value]) => `{bold}${key}:{/bold}\n${escapeBlessedText(value)}`)
     .join('\n\n');
   const neighbors =
     threadDetail.neighbors.length > 0
       ? threadDetail.neighbors
-          .map((neighbor) => `#${neighbor.number} ${neighbor.kind} ${(neighbor.score * 100).toFixed(1)}%  ${escapeBlessedText(neighbor.title)}`)
+          .map((neighbor: TuiThreadDetail['neighbors'][number]) => `#${neighbor.number} ${neighbor.kind} ${(neighbor.score * 100).toFixed(1)}%  ${escapeBlessedText(neighbor.title)}`)
           .join('\n')
       : focusPane === 'detail'
         ? 'No neighbors available.'
@@ -1348,9 +1812,26 @@ export function buildUpdatePipelineLabels(
   });
 }
 
+export function buildFooterCommandHints(activeScreen: TuiScreenId): [string, string] {
+  const screenHint = activeScreen === 'clusters' ? '/clusters /users /filter /repos /update /help /quit' : '/clusters /users /repos /update /help /quit';
+  const hotkeyHint = activeScreen === 'clusters' ? 'Hotkeys: Tab/arrows move  # jump  p repos  g update  q quit' : 'Hotkeys: / commands  Tab focus  arrows scroll  p repos  g update  q quit';
+  return [`/ commands: ${screenHint}`, hotkeyHint];
+}
+
 export function buildHelpContent(): string {
   return [
     '{bold}ghcrawl TUI Help{/bold}',
+    '',
+    '{bold}Slash Commands{/bold}',
+    '/                 open the command palette in the bottom-left corner',
+    '/clusters         switch to the current issue and PR cluster explorer',
+    '/users            switch to the future user explorer screen',
+    '/filter           open the cluster filter prompt',
+    '/repos            browse repositories or sync a new one',
+    '/update           start the staged background refresh pipeline',
+    '/help             open this popup',
+    '/quit             quit the TUI',
+    'Hotkeys remain available as fast aliases while we transition to slash commands.',
     '',
     '{bold}Navigation{/bold}',
     'Tab / Shift-Tab  cycle focus across clusters, members, and detail',
@@ -1366,7 +1847,7 @@ export function buildHelpContent(): string {
     'f                 cycle minimum cluster size filter',
     'l                 toggle wide layout: columns vs. wide-left stacked-right',
     'x                 show or hide locally closed clusters and members',
-    '/                 filter clusters by title/member text',
+    '/filter           filter clusters by title/member text',
     'r                 refresh the current local view from SQLite',
     '',
     '{bold}Actions{/bold}',
@@ -1382,7 +1863,7 @@ export function buildHelpContent(): string {
     '',
     '{bold}Notes{/bold}',
     'Clusters show C<clusterId> so the cluster id is easy to copy into CLI or skill flows.',
-    'The footer only shows the short command list. Open help to see the full list.',
+    'The footer leads with slash commands now; hotkeys are still available as aliases.',
     'This popup scrolls. Use arrows, PgUp/PgDn, Home, and End if it does not fit.',
   ].join('\n');
 }
@@ -1552,12 +2033,16 @@ async function promptUpdatePipelineSelection(
 }
 
 export function getRepositoryChoices(service: Pick<GHCrawlService, 'listRepositories'>, now: Date = new Date()): RepositoryChoice[] {
+  type ListedRepository = ReturnType<GHCrawlService['listRepositories']>['repositories'][number];
   const repositories = service.listRepositories().repositories
     .slice()
-    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || left.fullName.localeCompare(right.fullName));
+    .sort(
+      (left: ListedRepository, right: ListedRepository) =>
+        Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || left.fullName.localeCompare(right.fullName),
+    );
 
   return [
-    ...repositories.map((repository) => ({
+    ...repositories.map((repository: ListedRepository) => ({
       kind: 'existing' as const,
       target: { owner: repository.owner, repo: repository.name },
       label: `${repository.fullName}  ${formatRelativeTime(repository.updatedAt, now)}`,
@@ -1571,7 +2056,7 @@ async function promptAuthorThreadChoice(
   authorLogin: string,
   threads: ReturnType<GHCrawlService['listAuthorThreads']>['threads'],
 ): Promise<AuthorThreadChoice | null> {
-  const choices: AuthorThreadChoice[] = threads.map((item) => {
+  const choices: AuthorThreadChoice[] = threads.map((item: ReturnType<GHCrawlService['listAuthorThreads']>['threads'][number]) => {
     const match = item.strongestSameAuthorMatch;
     const matchLabel = match ? `  sim:${(match.score * 100).toFixed(1)}% -> #${match.number}` : '  sim:none';
     const clusterLabel = item.thread.clusterId ? `C${item.thread.clusterId}` : 'C-';

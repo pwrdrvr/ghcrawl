@@ -1,7 +1,14 @@
 import type { TuiClusterDetail, TuiClusterSortMode, TuiClusterSummary } from '@ghcrawl/api-core';
 
+export type TuiScreenId = 'clusters' | 'users';
 export type TuiFocusPane = 'clusters' | 'members' | 'detail';
 export type TuiMinSizeFilter = 0 | 1 | 10 | 20 | 50;
+export type TuiScreenDefinition = {
+  id: TuiScreenId;
+  label: string;
+  description: string;
+  focusOrder: readonly TuiFocusPane[];
+};
 
 export type MemberListRow =
   | { key: string; label: string; selectable: false }
@@ -10,6 +17,28 @@ export type MemberListRow =
 export const SORT_MODE_ORDER: TuiClusterSortMode[] = ['recent', 'size'];
 export const MIN_SIZE_FILTER_ORDER: TuiMinSizeFilter[] = [1, 10, 20, 50, 0];
 export const FOCUS_PANE_ORDER: TuiFocusPane[] = ['clusters', 'members', 'detail'];
+export const TUI_SCREEN_DEFINITIONS: Record<TuiScreenId, TuiScreenDefinition> = {
+  clusters: {
+    id: 'clusters',
+    label: 'Clusters Explorer',
+    description: 'Issue and PR similarity clusters.',
+    focusOrder: FOCUS_PANE_ORDER,
+  },
+  users: {
+    id: 'users',
+    label: 'User Explorer',
+    description: 'Author-centric explorer for future user workflows.',
+    focusOrder: ['detail'],
+  },
+};
+
+export function getScreenDefinition(screen: TuiScreenId): TuiScreenDefinition {
+  return TUI_SCREEN_DEFINITIONS[screen];
+}
+
+export function getScreenFocusOrder(screen: TuiScreenId): readonly TuiFocusPane[] {
+  return getScreenDefinition(screen).focusOrder;
+}
 
 export function cycleSortMode(current: TuiClusterSortMode): TuiClusterSortMode {
   const index = SORT_MODE_ORDER.indexOf(current);
@@ -21,10 +50,11 @@ export function cycleMinSizeFilter(current: TuiMinSizeFilter): TuiMinSizeFilter 
   return MIN_SIZE_FILTER_ORDER[(index + 1) % MIN_SIZE_FILTER_ORDER.length] ?? 10;
 }
 
-export function cycleFocusPane(current: TuiFocusPane, direction: 1 | -1 = 1): TuiFocusPane {
-  const index = FOCUS_PANE_ORDER.indexOf(current);
-  const next = (index + direction + FOCUS_PANE_ORDER.length) % FOCUS_PANE_ORDER.length;
-  return FOCUS_PANE_ORDER[next] ?? 'clusters';
+export function cycleFocusPane(current: TuiFocusPane, direction: 1 | -1 = 1, order: readonly TuiFocusPane[] = FOCUS_PANE_ORDER): TuiFocusPane {
+  const index = order.indexOf(current);
+  const baseIndex = index >= 0 ? index : 0;
+  const next = (baseIndex + direction + order.length) % order.length;
+  return order[next] ?? order[0] ?? 'detail';
 }
 
 export function applyClusterFilters(
@@ -49,9 +79,9 @@ export function preserveSelectedId(ids: number[], selectedId: number | null): nu
 export function buildMemberRows(detail: TuiClusterDetail | null, options?: { includeClosedMembers?: boolean }): MemberListRow[] {
   if (!detail) return [];
   const includeClosedMembers = options?.includeClosedMembers ?? true;
-  const visibleMembers = includeClosedMembers ? detail.members : detail.members.filter((member) => !member.isClosed);
-  const issues = visibleMembers.filter((member) => member.kind === 'issue');
-  const pullRequests = visibleMembers.filter((member) => member.kind === 'pull_request');
+  const visibleMembers = includeClosedMembers ? detail.members : detail.members.filter((member: TuiClusterDetail['members'][number]) => !member.isClosed);
+  const issues = visibleMembers.filter((member: TuiClusterDetail['members'][number]) => member.kind === 'issue');
+  const pullRequests = visibleMembers.filter((member: TuiClusterDetail['members'][number]) => member.kind === 'pull_request');
   const rows: MemberListRow[] = [];
 
   if (issues.length > 0) {

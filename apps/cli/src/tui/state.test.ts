@@ -1,7 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildMemberRows, cycleFocusPane, cycleMinSizeFilter, cycleSortMode, findSelectableIndex, moveSelectableIndex, preserveSelectedId, applyClusterFilters } from './state.js';
+import {
+  applyClusterFilters,
+  buildMemberRows,
+  cycleFocusPane,
+  cycleMinSizeFilter,
+  cycleSortMode,
+  findSelectableIndex,
+  getScreenDefinition,
+  moveSelectableIndex,
+  preserveSelectedId,
+} from './state.js';
 import type { TuiClusterDetail, TuiClusterSummary } from '@ghcrawl/api-core';
 
 test('cycleSortMode toggles recent and size', () => {
@@ -20,6 +30,12 @@ test('cycleMinSizeFilter rotates through presets', () => {
 test('cycleFocusPane moves forward and backward', () => {
   assert.equal(cycleFocusPane('clusters', 1), 'members');
   assert.equal(cycleFocusPane('clusters', -1), 'detail');
+  assert.equal(cycleFocusPane('detail', 1, ['detail']), 'detail');
+});
+
+test('getScreenDefinition exposes route metadata for future screens', () => {
+  assert.equal(getScreenDefinition('clusters').label, 'Clusters Explorer');
+  assert.equal(getScreenDefinition('users').focusOrder[0], 'detail');
 });
 
 test('applyClusterFilters sorts by recent and size and respects min size/search', () => {

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import type { TuiClusterDetail, TuiRepoStats, TuiThreadDetail } from '@ghcrawl/api-core';
 
 import {
+  buildFooterCommandHints,
   buildRefreshCliArgs,
   buildHelpContent,
   buildUpdatePipelineLabels,
@@ -13,6 +14,7 @@ import {
   getRepositoryChoices,
   parseOwnerRepoValue,
   renderDetailPane,
+  renderUserExplorerPlaceholder,
   resolveBlessedTerminal,
 } from './app.js';
 
@@ -184,6 +186,10 @@ test('buildUpdatePipelineLabels marks the selected tasks and includes task guida
 test('buildHelpContent includes the full key command list', () => {
   const content = buildHelpContent();
 
+  assert.match(content, /Slash Commands/);
+  assert.match(content, /\/clusters\s+switch to the current issue and PR cluster explorer/);
+  assert.match(content, /\/users\s+switch to the future user explorer screen/);
+  assert.match(content, /\/filter\s+open the cluster filter prompt/);
   assert.match(content, /Tab \/ Shift-Tab/);
   assert.match(content, /Left \/ Right\s+cycle focus backward or forward across panes/);
   assert.match(content, /Up \/ Down\s+move selection, or scroll detail when detail is focused/);
@@ -195,8 +201,22 @@ test('buildHelpContent includes the full key command list', () => {
   assert.match(content, /x\s+show or hide locally closed clusters and members/);
   assert.match(content, /h or \?\s+open this help popup/);
   assert.match(content, /q\s+quit the TUI/);
+  assert.doesNotMatch(content, /\/\s+filter clusters by title\/member text/);
   assert.doesNotMatch(content, /j \/ k/);
   assert.match(content, /This popup scrolls\./);
+});
+
+test('buildFooterCommandHints leads with slash commands for each screen', () => {
+  assert.match(buildFooterCommandHints('clusters')[0], /\/clusters \/users \/filter \/repos \/update \/help \/quit/);
+  assert.match(buildFooterCommandHints('users')[1], /Hotkeys: \/ commands/);
+});
+
+test('renderUserExplorerPlaceholder advertises the routed users screen without implementing it yet', () => {
+  const content = renderUserExplorerPlaceholder({ owner: 'openclaw', repo: 'openclaw' });
+
+  assert.match(content, /User Explorer/);
+  assert.match(content, /\/users/);
+  assert.match(content, /openclaw\/openclaw/);
 });
 
 test('buildRefreshCliArgs maps the staged selection to refresh skip flags', () => {
