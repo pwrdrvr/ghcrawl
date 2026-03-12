@@ -38,6 +38,7 @@ type PerfBaseline = {
 
 type PerfRunResult = {
   backend: 'exact' | 'vectorlite';
+  timingBasis: 'full-run' | 'post-index';
   sampleDurationsMs: number[];
   medianMs: number;
   baselineMedianMs: number;
@@ -324,7 +325,11 @@ async function runSingleCluster(
             k: baseline.fixture.k,
             minScore: baseline.fixture.minScore,
           });
-    const durationMs = performance.now() - startedAt;
+    const wallClockDurationMs = performance.now() - startedAt;
+    const durationMs =
+      backend === 'vectorlite'
+        ? Math.max(0, result.durationMs - result.indexBuildMs)
+        : wallClockDurationMs;
     return { durationMs, clusters: result.clusters, edges: result.edges };
   } finally {
     service.close();
@@ -385,6 +390,7 @@ async function measureBenchmark(baseline: PerfBaseline): Promise<PerfRunResult> 
 
     return {
       backend,
+      timingBasis: backend === 'vectorlite' ? 'post-index' : 'full-run',
       sampleDurationsMs,
       medianMs,
       baselineMedianMs,
@@ -409,6 +415,7 @@ function buildSummary(result: PerfRunResult): string {
   const status = result.deltaPercent > result.maxRegressionPercent ? 'FAIL' : 'PASS';
   const sampleList = result.sampleDurationsMs.map((value) => formatDurationMs(value)).join(', ');
   const suggestedBaseline = buildSuggestedBaseline(result);
+  const timingLabel = result.timingBasis === 'post-index' ? 'Fixture median (post-index)' : 'Fixture median';
   const bootstrapLine =
     result.baselineMedianMs === result.medianMs
       ? '- Bootstrap mode: using the current fixture median as the provisional baseline'
@@ -420,8 +427,9 @@ function buildSummary(result: PerfRunResult): string {
     '## Cluster Performance',
     '',
     `- Backend: ${result.backend}`,
+    `- Timing basis: ${result.timingBasis}`,
     `- Status: ${status}`,
-    `- Fixture median: ${formatDurationMs(result.medianMs)} (${result.samples} samples, ${result.runsPerSample} cluster rebuilds/sample)`,
+    `- ${timingLabel}: ${formatDurationMs(result.medianMs)} (${result.samples} samples, ${result.runsPerSample} cluster rebuilds/sample)`,
     `- Fixture baseline: ${formatDurationMs(result.baselineMedianMs)}`,
     `- Fixture delta: ${formatDurationMs(result.deltaMs)} (${formatPercent(result.deltaPercent)})`,
     `- Projected openclaw/openclaw duration: ${formatDurationMs(result.projectedOpenclawMs)}`,
