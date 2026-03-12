@@ -15,7 +15,10 @@ Useful local commands from the repo root:
 ```bash
 pnpm tui openclaw/openclaw
 pnpm sync openclaw/openclaw --limit 25
+pnpm seed-install openclaw/openclaw
 pnpm refresh openclaw/openclaw
+pnpm seed-export openclaw/openclaw --output /tmp/ghcrawl-seeds
+pnpm seed-audit --asset /tmp/ghcrawl-seeds/<snapshot>.seed.json.gz --repo openclaw/openclaw --sources title,body
 pnpm embed openclaw/openclaw
 pnpm cluster openclaw/openclaw
 pnpm search openclaw/openclaw --query "download stalls"
@@ -44,3 +47,22 @@ This repo uses tag-driven releases from the GitHub Releases UI.
   - `ghcrawl`
 
 CI also runs a package smoke check on pull requests and `main` by packing the publishable packages, installing them into a temporary project, and executing the packaged CLI.
+
+## Seed Audit
+
+Before publishing a starter seed, audit the exported sidecar locally:
+
+```bash
+pnpm seed-export openclaw/openclaw --output /tmp/ghcrawl-seeds
+pnpm seed-audit --asset /tmp/ghcrawl-seeds/<snapshot>.seed.json.gz --repo openclaw/openclaw --sources title,body
+```
+
+The audit is a streaming validation pass over the compressed sidecar. It fails if:
+
+- the manifest points at the wrong repository
+- any thread or edge row references a different repo
+- unexpected keys appear in the payload
+- source kinds drift outside the expected set
+- manifest counts do not match the observed rows
+
+Use `--json` if you want a machine-readable report for release notes or future automation.

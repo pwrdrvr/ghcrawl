@@ -47,6 +47,14 @@ function readSecret(reference) {
   }).trim();
 }
 
+function tryReadSecret(reference) {
+  try {
+    return readSecret(reference);
+  } catch {
+    return undefined;
+  }
+}
+
 function loadOpEnv(env = process.env) {
   const configPath = getConfigPath(env);
   const config = readConfig(configPath);
@@ -54,7 +62,7 @@ function loadOpEnv(env = process.env) {
   return {
     ...env,
     GITHUB_TOKEN: readSecret(`op://${vaultName}/${itemName}/GITHUB_TOKEN`),
-    OPENAI_API_KEY: readSecret(`op://${vaultName}/${itemName}/OPENAI_API_KEY`),
+    OPENAI_API_KEY: tryReadSecret(`op://${vaultName}/${itemName}/OPENAI_API_KEY`),
   };
 }
 

@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
+import { parseSeedSidecarArchive } from './seed/sidecar.js';
 import { GHCrawlService } from './service.js';
 
 function makeTestConfig(overrides: Partial<GHCrawlService['config']> = {}): GHCrawlService['config'] {
@@ -36,6 +40,65 @@ function makeTestService(
     github,
     ai,
   });
+}
+
+function makeSeedGitHubStub(): NonNullable<GHCrawlService['github']> {
+  return {
+    checkAuth: async () => undefined,
+    getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+    listRepositoryIssues: async () => [
+      {
+        id: 100,
+        number: 42,
+        state: 'open',
+        title: 'Downloader hangs',
+        body: 'The transfer never finishes.',
+        html_url: 'https://github.com/openclaw/openclaw/issues/42',
+        labels: [{ name: 'bug' }],
+        assignees: [],
+        user: { login: 'alice', type: 'User' },
+      },
+      {
+        id: 101,
+        number: 43,
+        state: 'open',
+        title: 'Downloader PR',
+        body: 'Implements a fix.',
+        html_url: 'https://github.com/openclaw/openclaw/pull/43',
+        labels: [{ name: 'bug' }],
+        assignees: [],
+        pull_request: { url: 'https://api.github.com/repos/openclaw/openclaw/pulls/43' },
+        user: { login: 'bob', type: 'User' },
+      },
+    ],
+    getIssue: async (_owner, _repo, number) => ({
+      id: 100,
+      number,
+      state: 'open',
+      title: 'Downloader hangs',
+      body: 'The transfer never finishes.',
+      html_url: `https://github.com/openclaw/openclaw/issues/${number}`,
+      labels: [{ name: 'bug' }],
+      assignees: [],
+      user: { login: 'alice', type: 'User' },
+      updated_at: '2026-03-09T00:00:00Z',
+    }),
+    getPull: async (_owner, _repo, number) => ({
+      id: 101,
+      number,
+      state: 'open',
+      title: 'Downloader PR',
+      body: 'Implements a fix.',
+      html_url: `https://github.com/openclaw/openclaw/pull/${number}`,
+      labels: [{ name: 'bug' }],
+      assignees: [],
+      user: { login: 'bob', type: 'User' },
+      updated_at: '2026-03-09T00:00:00Z',
+    }),
+    listIssueComments: async () => [],
+    listPullReviews: async () => [],
+    listPullReviewComments: async () => [],
+  };
 }
 
 test('doctor reports config path and successful auth smoke checks', async () => {
@@ -135,6 +198,257 @@ test('doctor explains when secrets are expected from 1Password CLI env injection
     assert.match(result.openai.error ?? '', /OPENAI_API_KEY/);
   } finally {
     service.close();
+  }
+});
+
+test('seed export and install round-trip imports embeddings and rebuilds a cluster run without mutating sync state', async () => {
+  const github = makeSeedGitHubStub();
+  const sourceService = makeTestService(github);
+  const targetService = makeTestService(github);
+  const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-seed-export-'));
+
+  try {
+    await sourceService.syncRepository({ owner: 'openclaw', repo: 'openclaw' });
+    const sourceThreads = sourceService.db
+      .prepare('select id, number from threads order by number asc')
+      .all() as Array<{ id: number; number: number }>;
+    const now = '2026-03-09T12:00:00Z';
+    const insertEmbedding = sourceService.db.prepare(
+      `insert into document_embeddings (thread_id, source_kind, model, dimensions, content_hash, embedding_json, created_at, updated_at)
+       values (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insertEmbedding.run(sourceThreads[0]?.id, 'title', 'text-embedding-3-large', 2, 'seed-hash-42-title', '[1,0]', now, now);
+    insertEmbedding.run(sourceThreads[0]?.id, 'body', 'text-embedding-3-large', 2, 'seed-hash-42-body', '[0.8,0.2]', now, now);
+    insertEmbedding.run(sourceThreads[1]?.id, 'title', 'text-embedding-3-large', 2, 'seed-hash-43-title', '[0.9,0.1]', now, now);
+    insertEmbedding.run(sourceThreads[1]?.id, 'body', 'text-embedding-3-large', 2, 'seed-hash-43-body', '[0.7,0.3]', now, now);
+    sourceService.db
+      .prepare(`insert into cluster_runs (id, repo_id, scope, status, started_at, finished_at) values (?, ?, ?, ?, ?, ?)`)
+      .run(1, 1, 'openclaw/openclaw', 'completed', now, now);
+    sourceService.db
+      .prepare(
+        `insert into similarity_edges (repo_id, cluster_run_id, left_thread_id, right_thread_id, method, score, explanation_json, created_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(1, 1, sourceThreads[0]?.id, sourceThreads[1]?.id, 'seed', 0.95, '{"sources":["title","body"]}', now);
+
+    const exported = await sourceService.exportSeedSidecar({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      cliVersion: '0.0.0',
+      outputDir,
+      onProgress: () => undefined,
+    });
+
+    await targetService.syncRepository({ owner: 'openclaw', repo: 'openclaw' });
+    const syncStateBefore = targetService.db
+      .prepare('select updated_at from repo_sync_state where repo_id = 1')
+      .get() as { updated_at: string } | undefined;
+
+    const installed = await targetService.seedInstallRepository({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      cliVersion: '0.0.0',
+      assetUrl: exported.outputPath,
+      skipSync: true,
+      force: true,
+      onProgress: () => undefined,
+    });
+
+    assert.equal(installed.importedThreads, 2);
+    assert.equal(installed.importedEmbeddings, 4);
+    assert.equal(installed.importedEdges, 1);
+    assert.equal(installed.skippedThreads, 0);
+    assert.equal(installed.skippedEdges, 0);
+    assert.equal(installed.clusters, 1);
+
+    const embeddingRows = targetService.db
+      .prepare(`select source_kind, dimensions from document_embeddings where model = ? order by thread_id asc`)
+      .all('text-embedding-3-large') as Array<{ source_kind: string; dimensions: number }>;
+    assert.deepEqual(
+      embeddingRows.map((row) => row.source_kind),
+      ['body', 'title', 'body', 'title'],
+    );
+    assert.deepEqual(
+      embeddingRows.map((row) => row.dimensions),
+      [2, 2, 2, 2],
+    );
+
+    const clusterRunRows = targetService.db
+      .prepare(`select id, scope, status from cluster_runs order by id asc`)
+      .all() as Array<{ id: number; scope: string; status: string }>;
+    assert.equal(clusterRunRows.length, 1);
+    assert.equal(clusterRunRows[0]?.id, installed.clusterRunId);
+    assert.equal(clusterRunRows[0]?.scope, `seed:${exported.snapshotId}`);
+    assert.equal(clusterRunRows[0]?.status, 'completed');
+    const edgeRows = targetService.db
+      .prepare('select score from similarity_edges where cluster_run_id = ?')
+      .all(installed.clusterRunId) as Array<{ score: number }>;
+    assert.equal(edgeRows.length, 1);
+    assert.equal(edgeRows[0]?.score, 0.95);
+
+    const clusterMemberRows = targetService.db
+      .prepare(
+        `select cm.thread_id
+         from cluster_members cm
+         join clusters c on c.id = cm.cluster_id
+         where c.cluster_run_id = ?
+         order by cm.thread_id asc`,
+      )
+      .all(installed.clusterRunId) as Array<{ thread_id: number }>;
+    assert.equal(clusterMemberRows.length, 2);
+
+    const syncStateAfter = targetService.db
+      .prepare('select updated_at from repo_sync_state where repo_id = 1')
+      .get() as { updated_at: string } | undefined;
+    assert.equal(syncStateAfter?.updated_at, syncStateBefore?.updated_at);
+  } finally {
+    sourceService.close();
+    targetService.close();
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  }
+});
+
+test('seed install rejects an existing repo without force and skips stale threads and edges when forced', async () => {
+  const github = makeSeedGitHubStub();
+  const sourceService = makeTestService(github);
+  const targetService = makeTestService(github);
+  const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-seed-export-'));
+
+  try {
+    await sourceService.syncRepository({ owner: 'openclaw', repo: 'openclaw' });
+    const sourceThreads = sourceService.db
+      .prepare('select id, number from threads order by number asc')
+      .all() as Array<{ id: number; number: number }>;
+    const now = '2026-03-09T12:00:00Z';
+    sourceService.db
+      .prepare(
+        `insert into document_embeddings (thread_id, source_kind, model, dimensions, content_hash, embedding_json, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(sourceThreads[0]?.id, 'title', 'text-embedding-3-large', 2, 'seed-hash-42-title', '[1,0]', now, now);
+    sourceService.db
+      .prepare(
+        `insert into document_embeddings (thread_id, source_kind, model, dimensions, content_hash, embedding_json, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(sourceThreads[0]?.id, 'body', 'text-embedding-3-large', 2, 'seed-hash-42-body', '[0.8,0.2]', now, now);
+    sourceService.db
+      .prepare(
+        `insert into document_embeddings (thread_id, source_kind, model, dimensions, content_hash, embedding_json, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(sourceThreads[1]?.id, 'title', 'text-embedding-3-large', 2, 'seed-hash-43-title', '[0.9,0.1]', now, now);
+    sourceService.db
+      .prepare(
+        `insert into document_embeddings (thread_id, source_kind, model, dimensions, content_hash, embedding_json, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(sourceThreads[1]?.id, 'body', 'text-embedding-3-large', 2, 'seed-hash-43-body', '[0.7,0.3]', now, now);
+    sourceService.db
+      .prepare(`insert into cluster_runs (id, repo_id, scope, status, started_at, finished_at) values (?, ?, ?, ?, ?, ?)`)
+      .run(1, 1, 'openclaw/openclaw', 'completed', now, now);
+    sourceService.db
+      .prepare(
+        `insert into similarity_edges (repo_id, cluster_run_id, left_thread_id, right_thread_id, method, score, explanation_json, created_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(1, 1, sourceThreads[0]?.id, sourceThreads[1]?.id, 'seed', 0.95, '{"sources":["title","body"]}', now);
+    const exported = await sourceService.exportSeedSidecar({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      cliVersion: '0.0.0',
+      outputDir,
+      onProgress: () => undefined,
+    });
+
+    await targetService.syncRepository({ owner: 'openclaw', repo: 'openclaw' });
+    await assert.rejects(
+      targetService.seedInstallRepository({
+        owner: 'openclaw',
+        repo: 'openclaw',
+        cliVersion: '0.0.0',
+        assetUrl: exported.outputPath,
+        skipSync: true,
+        onProgress: () => undefined,
+      }),
+      /already has local records/,
+    );
+
+    targetService.db.prepare(`update threads set content_hash = 'mismatch' where number = 43`).run();
+    const installed = await targetService.seedInstallRepository({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      cliVersion: '0.0.0',
+      assetUrl: exported.outputPath,
+      skipSync: true,
+      force: true,
+      onProgress: () => undefined,
+    });
+
+    assert.equal(installed.importedThreads, 1);
+    assert.equal(installed.importedEmbeddings, 2);
+    assert.equal(installed.skippedThreads, 2);
+    assert.equal(installed.importedEdges, 0);
+    assert.equal(installed.skippedEdges, 1);
+    assert.equal(installed.clusters, 1);
+
+    const importedEmbeddingRows = targetService.db
+      .prepare(`select count(*) as count from document_embeddings where model = ? and source_kind in ('title', 'body')`)
+      .get('text-embedding-3-large') as { count: number };
+    assert.equal(importedEmbeddingRows.count, 2);
+  } finally {
+    sourceService.close();
+    targetService.close();
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  }
+});
+
+test('seed export excludes dedupe-only embeddings and edge sources from the sidecar', async () => {
+  const github = makeSeedGitHubStub();
+  const service = makeTestService(github);
+  const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-seed-export-'));
+
+  try {
+    await service.syncRepository({ owner: 'openclaw', repo: 'openclaw' });
+    const sourceThreads = service.db
+      .prepare('select id, number from threads order by number asc')
+      .all() as Array<{ id: number; number: number }>;
+    const now = '2026-03-09T12:00:00Z';
+    const insertEmbedding = service.db.prepare(
+      `insert into document_embeddings (thread_id, source_kind, model, dimensions, content_hash, embedding_json, created_at, updated_at)
+       values (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insertEmbedding.run(sourceThreads[0]?.id, 'title', 'text-embedding-3-large', 2, 'seed-hash-42-title', '[1,0]', now, now);
+    insertEmbedding.run(sourceThreads[0]?.id, 'dedupe_summary', 'text-embedding-3-large', 2, 'seed-hash-42-dedupe', '[0.2,0.8]', now, now);
+    service.db
+      .prepare(`insert into cluster_runs (id, repo_id, scope, status, started_at, finished_at) values (?, ?, ?, ?, ?, ?)`)
+      .run(1, 1, 'openclaw/openclaw', 'completed', now, now);
+    const insertEdge = service.db.prepare(
+      `insert into similarity_edges (repo_id, cluster_run_id, left_thread_id, right_thread_id, method, score, explanation_json, created_at)
+       values (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insertEdge.run(1, 1, sourceThreads[0]?.id, sourceThreads[1]?.id, 'seed', 0.95, '{"sources":["dedupe_summary"]}', now);
+    insertEdge.run(1, 1, sourceThreads[1]?.id, sourceThreads[0]?.id, 'seed', 0.91, '{"sources":["title","dedupe_summary"]}', now);
+
+    const exported = await service.exportSeedSidecar({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      cliVersion: '0.0.0',
+      outputDir,
+      onProgress: () => undefined,
+    });
+    const archive = await parseSeedSidecarArchive(fs.readFileSync(exported.outputPath));
+
+    assert.equal(exported.threads, 1);
+    assert.equal(exported.edges, 1);
+    assert.deepEqual(archive.manifest.sourceKinds, ['title']);
+    assert.equal(archive.manifest.embeddingCount, 1);
+    assert.equal(archive.manifest.edgeCount, 1);
+    assert.deepEqual(archive.threads.map((row) => row.sourceKind), ['title']);
+    assert.deepEqual(archive.edges.map((row) => row.sources), [['title']]);
+  } finally {
+    service.close();
+    fs.rmSync(outputDir, { recursive: true, force: true });
   }
 });
 

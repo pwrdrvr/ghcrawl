@@ -1,7 +1,8 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 
@@ -62,6 +63,20 @@ import { openDb, type SqliteDatabase } from './db/sqlite.js';
 import { buildCanonicalDocument, isBotLikeAuthor } from './documents/normalize.js';
 import { makeGitHubClient, type GitHubClient } from './github/client.js';
 import { OpenAiProvider, type AiProvider } from './openai/provider.js';
+import {
+  getKnownSeedManifestEntry,
+  isCliVersionCompatible,
+  parseSeedSidecarArchive,
+  readSeedAsset,
+  seedEmbeddingSourceKindSchema,
+  sha256Hex,
+  writeSeedSidecarArchive,
+  type KnownSeedManifestEntry,
+  type SeedEdgeSidecarRow,
+  type SeedSidecarArchive,
+  type SeedSidecarArchiveWriterInput,
+  type SeedThreadSidecarRow,
+} from './seed/sidecar.js';
 import { cosineSimilarity, normalizeEmbedding, rankNearestNeighbors } from './search/exact.js';
 
 type RunTable = 'sync_runs' | 'summary_runs' | 'embedding_runs' | 'cluster_runs';
@@ -243,6 +258,29 @@ export type DoctorResult = {
     authOk: boolean;
     error: string | null;
   };
+};
+
+export type SeedInstallResult = {
+  repository: RepositoryDto;
+  snapshotId: string;
+  assetUrl: string;
+  synced: boolean;
+  importedThreads: number;
+  importedEmbeddings: number;
+  skippedThreads: number;
+  importedEdges: number;
+  skippedEdges: number;
+  clusters: number;
+  clusterRunId: number;
+};
+
+export type SeedExportResult = {
+  repository: RepositoryDto;
+  snapshotId: string;
+  outputPath: string;
+  sha256: string;
+  threads: number;
+  edges: number;
 };
 
 type SyncOptions = {
@@ -1127,6 +1165,304 @@ export class GHCrawlService {
       this.finishRun('cluster_runs', runId, 'failed', null, error);
       throw error;
     }
+  }
+
+  async seedInstallRepository(params: {
+    owner: string;
+    repo: string;
+    cliVersion: string;
+    force?: boolean;
+    assetUrl?: string;
+    skipSync?: boolean;
+    onProgress?: (message: string) => void;
+  }): Promise<SeedInstallResult> {
+    const knownManifest = params.assetUrl ? null : getKnownSeedManifestEntry(params.owner, params.repo);
+    if (!knownManifest && !params.assetUrl) {
+      throw new Error(`No known seed is configured for ${params.owner}/${params.repo}. Use --asset-url to install an override.`);
+    }
+    if (knownManifest && !isCliVersionCompatible(params.cliVersion, knownManifest.compatibleCli)) {
+      throw new Error(
+        `Seed ${knownManifest.snapshotId} is not compatible with ghcrawl ${params.cliVersion}. Expected ${knownManifest.compatibleCli}.`,
+      );
+    }
+
+    const existingRepository = this.findRepository(params.owner, params.repo);
+    if (!params.force && existingRepository && this.repositoryHasThreadRows(existingRepository.id)) {
+      throw new Error(
+        `Repository ${existingRepository.fullName} already has local records. Re-run with --force to import starter data into an existing repo.`,
+      );
+    }
+
+    let synced = false;
+    if (params.skipSync !== true) {
+      params.onProgress?.(`[seed] syncing ${params.owner}/${params.repo} metadata before starter import`);
+      await this.syncRepository({
+        owner: params.owner,
+        repo: params.repo,
+        onProgress: (message) => params.onProgress?.(message.replace(/^\[sync\]/, '[seed/sync]')),
+      });
+      synced = true;
+    }
+
+    const repository = this.requireRepository(params.owner, params.repo);
+    if (!this.repositoryHasThreadRows(repository.id)) {
+      throw new Error(`Repository ${repository.fullName} has no local thread metadata. Run sync first or omit --no-sync.`);
+    }
+
+    const assetUrl = params.assetUrl ?? knownManifest?.downloadUrl;
+    if (!assetUrl) {
+      throw new Error(`Seed ${repository.fullName} does not have a configured download URL yet.`);
+    }
+    params.onProgress?.(`[seed] downloading starter asset ${assetUrl}`);
+    const asset = await readSeedAsset(assetUrl);
+    const assetSha = sha256Hex(asset);
+    if (knownManifest && assetSha !== knownManifest.sha256) {
+      throw new Error(`Starter asset checksum mismatch for ${repository.fullName}. Expected ${knownManifest.sha256}, received ${assetSha}.`);
+    }
+
+    const archive = await parseSeedSidecarArchive(asset);
+    this.validateInstalledSeedManifest(repository, params.cliVersion, archive.manifest, knownManifest);
+
+    params.onProgress?.(
+      `[seed] archive snapshot=${archive.manifest.snapshotId} threads=${archive.threads.length} edges=${archive.edges.length}`,
+    );
+
+    const resolvedThreads = this.resolveSeedThreads(repository.id, archive.threads);
+    const importedEmbeddings = resolvedThreads.matched.length;
+    const importedThreads = resolvedThreads.matchedThreadIds.size;
+    const skippedThreads = resolvedThreads.skipped;
+    if (importedEmbeddings === 0) {
+      throw new Error(`Starter asset ${archive.manifest.snapshotId} did not match any current local threads for ${repository.fullName}.`);
+    }
+
+    for (const row of resolvedThreads.matched) {
+      this.upsertEmbedding(
+        row.localThreadId,
+        row.sidecar.sourceKind,
+        this.seedImportedEmbeddingContentHash(archive.manifest.snapshotId, row.sidecar.sourceKind, row.sidecar.threadContentHash),
+        row.sidecar.embedding,
+      );
+    }
+
+    const resolvedEdges = this.resolveSeedEdges(resolvedThreads.byIdentity, archive.edges);
+    const runId = this.startRun('cluster_runs', repository.id, `seed:${archive.manifest.snapshotId}`);
+
+    try {
+      const aggregatedEdges = new Map<string, { leftThreadId: number; rightThreadId: number; score: number; sourceKinds: Set<EmbeddingSourceKind> }>();
+      for (const edge of resolvedEdges.matched) {
+        aggregatedEdges.set(this.edgeKey(edge.leftThreadId, edge.rightThreadId), {
+          leftThreadId: edge.leftThreadId,
+          rightThreadId: edge.rightThreadId,
+          score: edge.score,
+          sourceKinds: new Set<EmbeddingSourceKind>(edge.sourceKinds),
+        });
+      }
+
+      const nodes = Array.from(resolvedThreads.matchedThreads.values()).map((row) => ({
+        threadId: row.localThreadId,
+        number: row.number,
+        title: row.title,
+      }));
+      const clusters = buildClusters(
+        nodes,
+        Array.from(aggregatedEdges.values()).map((edge) => ({
+          leftThreadId: edge.leftThreadId,
+          rightThreadId: edge.rightThreadId,
+          score: edge.score,
+        })),
+      );
+
+      this.persistClusterRun(repository.id, runId, aggregatedEdges, clusters);
+      this.pruneOldClusterRuns(repository.id, runId);
+      this.finishRun('cluster_runs', runId, 'completed', {
+        source: 'seed',
+        snapshotId: archive.manifest.snapshotId,
+        importedThreads,
+        importedEdges: resolvedEdges.matched.length,
+        skippedThreads,
+        skippedEdges: resolvedEdges.skipped,
+      });
+
+      params.onProgress?.(
+        `[seed] imported threads=${importedThreads} skipped_threads=${skippedThreads} edges=${resolvedEdges.matched.length} skipped_edges=${resolvedEdges.skipped} clusters=${clusters.length}`,
+      );
+
+      return {
+        repository,
+        snapshotId: archive.manifest.snapshotId,
+        assetUrl,
+        synced,
+        importedThreads,
+        importedEmbeddings,
+        skippedThreads,
+        importedEdges: resolvedEdges.matched.length,
+        skippedEdges: resolvedEdges.skipped,
+        clusters: clusters.length,
+        clusterRunId: runId,
+      };
+    } catch (error) {
+      this.finishRun('cluster_runs', runId, 'failed', null, error);
+      throw error;
+    }
+  }
+
+  async exportSeedSidecar(params: {
+    owner: string;
+    repo: string;
+    cliVersion: string;
+    outputDir: string;
+    snapshotId?: string;
+    onProgress?: (message: string) => void;
+  }): Promise<SeedExportResult> {
+    const repository = this.requireRepository(params.owner, params.repo);
+    const latestRun = this.getLatestClusterRun(repository.id);
+    if (!latestRun) {
+      throw new Error(`Repository ${repository.fullName} does not have a completed cluster run to export.`);
+    }
+
+    const embeddingWhereSql = `from threads t
+      join document_embeddings e on e.thread_id = t.id
+      where t.repo_id = ?
+        and t.state = 'open'
+        and t.closed_at_local is null
+        and e.model = ?
+        and e.source_kind != 'dedupe_summary'`;
+    const threadStatement = this.db.prepare(
+      `select
+          t.number,
+          t.kind,
+          t.github_id,
+          t.content_hash,
+          e.source_kind,
+          e.dimensions,
+          e.embedding_json
+       ${embeddingWhereSql}
+       order by t.number asc, e.source_kind asc`,
+    );
+    const threadCountRow = this.db
+      .prepare(
+        `select count(*) as embedding_count, count(distinct t.id) as thread_count
+         ${embeddingWhereSql}`,
+      )
+      .get(repository.id, this.config.embedModel) as {
+      embedding_count: number;
+      thread_count: number;
+    };
+    if (threadCountRow.embedding_count === 0) {
+      throw new Error(`Repository ${repository.fullName} does not have any non-dedupe embeddings to export.`);
+    }
+
+    const sourceKinds = this.db
+      .prepare(
+        `select distinct e.source_kind
+         ${embeddingWhereSql}
+         order by e.source_kind asc`,
+      )
+      .all(repository.id, this.config.embedModel)
+      .map((row: unknown) => (row as { source_kind: EmbeddingSourceKind }).source_kind);
+    const edgeStatement = this.db
+      .prepare(
+        `select
+            left_t.number as left_number,
+            left_t.kind as left_kind,
+            left_t.github_id as left_github_id,
+            right_t.number as right_number,
+            right_t.kind as right_kind,
+            right_t.github_id as right_github_id,
+            se.score,
+            se.explanation_json
+         from similarity_edges se
+         join threads left_t on left_t.id = se.left_thread_id
+         join threads right_t on right_t.id = se.right_thread_id
+         where se.repo_id = ?
+           and se.cluster_run_id = ?
+         order by left_t.number asc, right_t.number asc`,
+      );
+    let edgeCount = 0;
+    for (const row of edgeStatement.iterate(repository.id, latestRun.id) as Iterable<{
+      left_number: number;
+      left_kind: 'issue' | 'pull_request';
+      left_github_id: string;
+      right_number: number;
+      right_kind: 'issue' | 'pull_request';
+      right_github_id: string;
+      score: number;
+      explanation_json: string;
+    }>) {
+      const sources = this.parseSeedExportEdgeSources(row.explanation_json);
+      if (sources.length > 0) {
+        edgeCount += 1;
+      }
+    }
+
+    const snapshotId =
+      params.snapshotId ??
+      `${params.owner}-${params.repo}-${nowIso().replace(/[:.]/g, '-').replace(/Z$/, 'Z')}`;
+    const archiveManifest: SeedSidecarArchiveWriterInput = {
+      manifest: {
+        schemaVersion: 1,
+        format: 'ghcrawl-seed-sidecar-gzip-v1',
+        snapshotId,
+        createdAt: nowIso(),
+        compatibleCli: this.cliCompatibilityRange(params.cliVersion),
+        owner: params.owner,
+        repo: params.repo,
+        fullName: repository.fullName,
+        embedModel: this.config.embedModel,
+        sourceKinds,
+        cluster: {
+          k: 6,
+          minScore: 0.82,
+        },
+        threadCount: threadCountRow.thread_count,
+        embeddingCount: threadCountRow.embedding_count,
+        edgeCount,
+      },
+      threads: this.iterExportSeedThreads(
+        threadStatement.iterate(repository.id, this.config.embedModel) as Iterable<{
+          number: number;
+          kind: 'issue' | 'pull_request';
+          github_id: string;
+          content_hash: string;
+          source_kind: EmbeddingSourceKind;
+          dimensions: number;
+          embedding_json: string;
+        }>,
+        params.owner,
+        params.repo,
+      ),
+      edges: this.iterExportSeedEdges(
+        edgeStatement.iterate(repository.id, latestRun.id) as Iterable<{
+          left_number: number;
+          left_kind: 'issue' | 'pull_request';
+          left_github_id: string;
+          right_number: number;
+          right_kind: 'issue' | 'pull_request';
+          right_github_id: string;
+          score: number;
+          explanation_json: string;
+        }>,
+        params.owner,
+        params.repo,
+      ),
+    };
+
+    mkdirSync(params.outputDir, { recursive: true });
+    const outputPath = path.join(params.outputDir, `${snapshotId}.seed.json.gz`);
+    const { sha256 } = await writeSeedSidecarArchive(outputPath, archiveManifest);
+    writeFileSync(`${outputPath}.sha256`, `${sha256}  ${path.basename(outputPath)}\n`);
+    params.onProgress?.(
+      `[seed-export] wrote ${threadCountRow.thread_count} threads, ${threadCountRow.embedding_count} embeddings, and ${edgeCount} edges to ${outputPath}`,
+    );
+
+    return {
+      repository,
+      snapshotId,
+      outputPath,
+      sha256,
+      threads: threadCountRow.thread_count,
+      edges: edgeCount,
+    };
   }
 
   async searchRepository(params: {
@@ -2185,13 +2521,236 @@ export class GHCrawlService {
     return this.github as GitHubClient;
   }
 
-  private requireRepository(owner: string, repo: string): RepositoryDto {
+  private findRepository(owner: string, repo: string): RepositoryDto | null {
     const fullName = `${owner}/${repo}`;
     const row = this.db.prepare('select * from repositories where full_name = ? limit 1').get(fullName) as Record<string, unknown> | undefined;
+    return row ? repositoryToDto(row) : null;
+  }
+
+  private requireRepository(owner: string, repo: string): RepositoryDto {
+    const row = this.findRepository(owner, repo);
     if (!row) {
-      throw new Error(`Repository ${fullName} not found. Run sync first.`);
+      throw new Error(`Repository ${owner}/${repo} not found. Run sync first.`);
     }
-    return repositoryToDto(row);
+    return row;
+  }
+
+  private repositoryHasThreadRows(repoId: number): boolean {
+    const row = this.db.prepare('select count(*) as count from threads where repo_id = ?').get(repoId) as { count: number };
+    return row.count > 0;
+  }
+
+  private validateInstalledSeedManifest(
+    repository: RepositoryDto,
+    cliVersion: string,
+    manifest: SeedSidecarArchive['manifest'],
+    knownManifest: KnownSeedManifestEntry | null,
+  ): void {
+    if (manifest.fullName !== repository.fullName) {
+      throw new Error(`Starter asset ${manifest.snapshotId} is for ${manifest.fullName}, not ${repository.fullName}.`);
+    }
+    if (!isCliVersionCompatible(cliVersion, manifest.compatibleCli)) {
+      throw new Error(
+        `Starter asset ${manifest.snapshotId} is not compatible with ghcrawl ${cliVersion}. Expected ${manifest.compatibleCli}.`,
+      );
+    }
+    if (knownManifest && knownManifest.snapshotId !== manifest.snapshotId) {
+      throw new Error(
+        `Starter asset snapshot mismatch for ${repository.fullName}. Expected ${knownManifest.snapshotId}, received ${manifest.snapshotId}.`,
+      );
+    }
+    if (manifest.embedModel !== this.config.embedModel) {
+      throw new Error(
+        `Starter asset ${manifest.snapshotId} expects embed model ${manifest.embedModel}, but this install is configured for ${this.config.embedModel}.`,
+      );
+    }
+  }
+
+  private resolveSeedThreads(
+    repoId: number,
+    sidecarThreads: SeedThreadSidecarRow[],
+  ): {
+    matched: Array<{ localThreadId: number; number: number; title: string; sidecar: SeedThreadSidecarRow }>;
+    matchedThreadIds: Set<number>;
+    matchedThreads: Map<number, { localThreadId: number; number: number; title: string }>;
+    byIdentity: Map<string, { localThreadId: number; number: number; title: string; sidecar: SeedThreadSidecarRow }>;
+    skipped: number;
+  } {
+    const localRows = this.db
+      .prepare(
+        `select id, number, kind, title, github_id, content_hash
+         from threads
+         where repo_id = ?
+           and state = 'open'
+           and closed_at_local is null`,
+      )
+      .all(repoId) as Array<{
+      id: number;
+      number: number;
+      kind: 'issue' | 'pull_request';
+      title: string;
+      github_id: string;
+      content_hash: string;
+    }>;
+    const localByIdentity = new Map(localRows.map((row) => [this.seedIdentityKey(row.kind, row.number), row]));
+    const matched: Array<{ localThreadId: number; number: number; title: string; sidecar: SeedThreadSidecarRow }> = [];
+    const matchedThreadIds = new Set<number>();
+    const matchedThreads = new Map<number, { localThreadId: number; number: number; title: string }>();
+    const byIdentity = new Map<string, { localThreadId: number; number: number; title: string; sidecar: SeedThreadSidecarRow }>();
+    let skipped = 0;
+
+    for (const sidecar of sidecarThreads) {
+      const local = localByIdentity.get(this.seedIdentityKey(sidecar.kind, sidecar.number));
+      if (!local || local.github_id !== sidecar.githubId || local.content_hash !== sidecar.threadContentHash) {
+        skipped += 1;
+        continue;
+      }
+      const resolved = {
+        localThreadId: local.id,
+        number: local.number,
+        title: local.title,
+        sidecar,
+      };
+      matched.push(resolved);
+      matchedThreadIds.add(local.id);
+      matchedThreads.set(local.id, { localThreadId: local.id, number: local.number, title: local.title });
+      byIdentity.set(this.seedIdentityKey(sidecar.kind, sidecar.number), resolved);
+    }
+
+    return { matched, matchedThreadIds, matchedThreads, byIdentity, skipped };
+  }
+
+  private *iterExportSeedThreads(
+    rows: Iterable<{
+      number: number;
+      kind: 'issue' | 'pull_request';
+      github_id: string;
+      content_hash: string;
+      source_kind: EmbeddingSourceKind;
+      dimensions: number;
+      embedding_json: string;
+    }>,
+    owner: string,
+    repo: string,
+  ): Iterable<SeedThreadSidecarRow> {
+    for (const row of rows) {
+      yield {
+        owner,
+        repo,
+        kind: row.kind,
+        number: row.number,
+        githubId: row.github_id,
+        threadContentHash: row.content_hash,
+        sourceKind: row.source_kind,
+        embeddingModel: this.config.embedModel,
+        dimensions: row.dimensions,
+        embedding: JSON.parse(row.embedding_json) as number[],
+      };
+    }
+  }
+
+  private *iterExportSeedEdges(
+    rows: Iterable<{
+      left_number: number;
+      left_kind: 'issue' | 'pull_request';
+      left_github_id: string;
+      right_number: number;
+      right_kind: 'issue' | 'pull_request';
+      right_github_id: string;
+      score: number;
+      explanation_json: string;
+    }>,
+    owner: string,
+    repo: string,
+  ): Iterable<SeedEdgeSidecarRow> {
+    for (const row of rows) {
+      const sources = this.parseSeedExportEdgeSources(row.explanation_json);
+      if (sources.length === 0) {
+        continue;
+      }
+      yield {
+        left: {
+          owner,
+          repo,
+          kind: row.left_kind,
+          number: row.left_number,
+          githubId: row.left_github_id,
+        },
+        right: {
+          owner,
+          repo,
+          kind: row.right_kind,
+          number: row.right_number,
+          githubId: row.right_github_id,
+        },
+        score: row.score,
+        sources,
+      };
+    }
+  }
+
+  private resolveSeedEdges(
+    resolvedThreads: Map<string, { localThreadId: number }>,
+    sidecarEdges: SeedEdgeSidecarRow[],
+  ): {
+    matched: Array<{ leftThreadId: number; rightThreadId: number; score: number; sourceKinds: EmbeddingSourceKind[] }>;
+    skipped: number;
+  } {
+    const matched: Array<{ leftThreadId: number; rightThreadId: number; score: number; sourceKinds: EmbeddingSourceKind[] }> = [];
+    let skipped = 0;
+
+    for (const edge of sidecarEdges) {
+      const left = resolvedThreads.get(this.seedIdentityKey(edge.left.kind, edge.left.number));
+      const right = resolvedThreads.get(this.seedIdentityKey(edge.right.kind, edge.right.number));
+      if (!left || !right || left.localThreadId === right.localThreadId) {
+        skipped += 1;
+        continue;
+      }
+      matched.push({
+        leftThreadId: left.localThreadId,
+        rightThreadId: right.localThreadId,
+        score: edge.score,
+        sourceKinds: (() => {
+          const sources = edge.sources.filter((value): value is EmbeddingSourceKind => seedEmbeddingSourceKindSchema.safeParse(value).success);
+          return sources.length > 0 ? sources : ['title'];
+        })(),
+      });
+    }
+
+    return { matched, skipped };
+  }
+
+  private seedIdentityKey(kind: 'issue' | 'pull_request', number: number): string {
+    return `${kind}:${number}`;
+  }
+
+  private seedImportedEmbeddingContentHash(snapshotId: string, sourceKind: EmbeddingSourceKind, threadContentHash: string): string {
+    return stableContentHash(`seed-embedding:${snapshotId}:${sourceKind}\n${threadContentHash}`);
+  }
+
+  private parseSeedEdgeSources(explanationJson: string | null): EmbeddingSourceKind[] {
+    if (!explanationJson) {
+      return ['title'];
+    }
+    try {
+      const parsed = JSON.parse(explanationJson) as { sources?: unknown };
+      const sourceKinds = Array.isArray(parsed.sources)
+        ? parsed.sources.filter((value): value is EmbeddingSourceKind => seedEmbeddingSourceKindSchema.safeParse(value).success)
+        : [];
+      return sourceKinds.length > 0 ? sourceKinds : ['title'];
+    } catch {
+      return ['title'];
+    }
+  }
+
+  private parseSeedExportEdgeSources(explanationJson: string | null): EmbeddingSourceKind[] {
+    return this.parseSeedEdgeSources(explanationJson).filter((sourceKind) => sourceKind !== 'dedupe_summary');
+  }
+
+  private cliCompatibilityRange(cliVersion: string): string {
+    const match = cliVersion.match(/^(\d+)\./);
+    const major = match ? Number(match[1]) : 0;
+    return `>=${cliVersion} <${major + 1}.0.0`;
   }
 
   private upsertRepository(owner: string, repo: string, payload: Record<string, unknown>): number {

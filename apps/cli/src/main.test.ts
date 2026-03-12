@@ -19,6 +19,7 @@ test('run prints usage with no command', async () => {
   assert.match(output, /ghcrawl <command>/);
   assert.match(output, /\n  version\n/);
   assert.match(output, /refresh <owner\/repo>/);
+  assert.match(output, /seed-install <owner\/repo>/);
   assert.match(output, /threads <owner\/repo>/);
   assert.match(output, /author <owner\/repo> --login <user>/);
   assert.match(output, /close-thread <owner\/repo> --number <thread>/);
@@ -42,6 +43,7 @@ test('run prints usage for help flag', async () => {
   assert.match(output, /ghcrawl <command>/);
   assert.match(output, /\n  version\n/);
   assert.match(output, /refresh <owner\/repo>/);
+  assert.match(output, /seed-install <owner\/repo>/);
   assert.match(output, /threads <owner\/repo>/);
   assert.match(output, /author <owner\/repo> --login <user>/);
   assert.match(output, /close-thread <owner\/repo> --number <thread>/);
@@ -62,6 +64,7 @@ test('run prints advanced commands when dev mode is enabled', async () => {
   assert.match(output, /Advanced Commands:/);
   assert.match(output, /summarize <owner\/repo>/);
   assert.match(output, /purge-comments <owner\/repo>/);
+  assert.match(output, /seed-export <owner\/repo> --output <dir>/);
 });
 
 test('run prints version for version command', async () => {
@@ -160,6 +163,15 @@ test('parseRepoFlags accepts include-closed boolean flag', () => {
   assert.equal(parsed.owner, 'openclaw');
   assert.equal(parsed.repo, 'openclaw');
   assert.equal(parsed.values['include-closed'], true);
+});
+
+test('parseRepoFlags accepts seed-install flags', () => {
+  const parsed = parseRepoFlags(['openclaw/openclaw', '--force', '--asset-url', '/tmp/openclaw.seed.json.gz', '--no-sync']);
+  assert.equal(parsed.owner, 'openclaw');
+  assert.equal(parsed.repo, 'openclaw');
+  assert.equal(parsed.values.force, true);
+  assert.equal(parsed.values['asset-url'], '/tmp/openclaw.seed.json.gz');
+  assert.equal(parsed.values['no-sync'], true);
 });
 
 test('resolveSinceValue keeps ISO timestamps', () => {

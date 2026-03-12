@@ -5,7 +5,8 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
-import { createApiServer, GHCrawlService } from '@ghcrawl/api-core';
+import { confirm, isCancel, note } from '@clack/prompts';
+import { createApiServer, getKnownSeedManifestEntry, GHCrawlService } from '@ghcrawl/api-core';
 import { runInitWizard } from './init-wizard.js';
 import { startTui } from './tui/app.js';
 
@@ -15,12 +16,14 @@ type CommandName =
   | 'version'
   | 'sync'
   | 'refresh'
+  | 'seed-install'
   | 'threads'
   | 'author'
   | 'close-thread'
   | 'close-cluster'
   | 'summarize'
   | 'purge-comments'
+  | 'seed-export'
   | 'embed'
   | 'cluster'
   | 'clusters'
@@ -44,6 +47,7 @@ function usage(devMode = false): string {
     '  version',
     '  sync <owner/repo> [--since <iso|duration>] [--limit <count>] [--include-comments] [--full-reconcile]',
     '  refresh <owner/repo> [--no-sync] [--no-embed] [--no-cluster]',
+    '  seed-install <owner/repo> [--force] [--asset-url <url>] [--no-sync]',
     '  threads <owner/repo> [--numbers <n,n,...>] [--kind issue|pull_request] [--include-closed]',
     '  author <owner/repo> --login <user> [--include-closed]',
     '  close-thread <owner/repo> --number <thread>',
@@ -63,7 +67,13 @@ function usage(devMode = false): string {
     '  clusters reads the existing local cluster data and is intended to be fast.',
   ];
   if (devMode) {
-    lines.push('', 'Advanced Commands:', '  summarize <owner/repo> [--number <thread>] [--include-comments]', '  purge-comments <owner/repo> [--number <thread>]');
+    lines.push(
+      '',
+      'Advanced Commands:',
+      '  summarize <owner/repo> [--number <thread>] [--include-comments]',
+      '  purge-comments <owner/repo> [--number <thread>]',
+      '  seed-export <owner/repo> --output <dir>',
+    );
   }
   return `${lines.join('\n')}\n`;
 }
@@ -119,6 +129,9 @@ export function parseRepoFlags(args: string[]): { owner: string; repo: string; v
       'no-sync': { type: 'boolean' },
       'no-embed': { type: 'boolean' },
       'no-cluster': { type: 'boolean' },
+      force: { type: 'boolean' },
+      'asset-url': { type: 'string' },
+      output: { type: 'string' },
     },
   });
 
@@ -286,7 +299,9 @@ export async function run(argv: string[], stdout: NodeJS.WritableStream = proces
           },
         });
         await runInitWizard({ reconfigure: parsed.values.reconfigure === true });
-        stdout.write(`${JSON.stringify(getService().init(), null, 2)}\n`);
+        const serviceForInit = getService();
+        await maybePromptStarterSeedInstall(serviceForInit);
+        stdout.write(`${JSON.stringify(serviceForInit.init(), null, 2)}\n`);
         return;
       }
       case 'doctor': {
@@ -330,6 +345,20 @@ export async function run(argv: string[], stdout: NodeJS.WritableStream = proces
           sync: values['no-sync'] === true ? false : undefined,
           embed: values['no-embed'] === true ? false : undefined,
           cluster: values['no-cluster'] === true ? false : undefined,
+          onProgress: writeProgress,
+        });
+        stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return;
+      }
+      case 'seed-install': {
+        const { owner, repo, values } = parseRepoFlags(rest);
+        const result = await getService().seedInstallRepository({
+          owner,
+          repo,
+          cliVersion: CLI_VERSION,
+          force: values.force === true,
+          assetUrl: typeof values['asset-url'] === 'string' ? values['asset-url'] : undefined,
+          skipSync: values['no-sync'] === true,
           onProgress: writeProgress,
         });
         stdout.write(`${JSON.stringify(result, null, 2)}\n`);
@@ -406,6 +435,21 @@ export async function run(argv: string[], stdout: NodeJS.WritableStream = proces
           owner,
           repo,
           threadNumber: typeof values.number === 'string' ? Number(values.number) : undefined,
+          onProgress: writeProgress,
+        });
+        stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return;
+      }
+      case 'seed-export': {
+        const { owner, repo, values } = parseRepoFlags(rest);
+        if (typeof values.output !== 'string' || values.output.trim().length === 0) {
+          throw new Error('Missing --output');
+        }
+        const result = await getService().exportSeedSidecar({
+          owner,
+          repo,
+          cliVersion: CLI_VERSION,
+          outputDir: values.output,
           onProgress: writeProgress,
         });
         stdout.write(`${JSON.stringify(result, null, 2)}\n`);
@@ -554,4 +598,36 @@ function loadCliVersion(): string {
   const packageJsonPath = path.resolve(here, '..', 'package.json');
   const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { version?: unknown };
   return typeof packageJson.version === 'string' ? packageJson.version : '0.0.0';
+}
+
+async function maybePromptStarterSeedInstall(service: GHCrawlService): Promise<void> {
+  if (!process.stdin.isTTY || process.stdout.isTTY !== true) {
+    return;
+  }
+  if (!service.config.githubToken) {
+    return;
+  }
+  const manifest = getKnownSeedManifestEntry('openclaw', 'openclaw');
+  if (!manifest || manifest.downloadUrl.includes('example.invalid')) {
+    return;
+  }
+
+  const shouldInstall = await confirm({
+    message: 'Download starter data for openclaw/openclaw now? This runs a metadata sync, then imports the published title/body embeddings and clusters.',
+    initialValue: false,
+  });
+  if (isCancel(shouldInstall) || shouldInstall !== true) {
+    return;
+  }
+
+  await note(
+    'Starter data is only intended for openclaw/openclaw and only imports embeddings plus derived cluster data. It does not replace your thread text or sync cursors.',
+    'Starter Data',
+  );
+  await service.seedInstallRepository({
+    owner: 'openclaw',
+    repo: 'openclaw',
+    cliVersion: CLI_VERSION,
+    onProgress: writeProgress,
+  });
 }
