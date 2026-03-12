@@ -445,7 +445,7 @@ export async function run(argv: string[], stdout: NodeJS.WritableStream = proces
         if (typeof values.output !== 'string' || values.output.trim().length === 0) {
           throw new Error('Missing --output');
         }
-        const result = getService().exportSeedSidecar({
+        const result = await getService().exportSeedSidecar({
           owner,
           repo,
           cliVersion: CLI_VERSION,
@@ -613,7 +613,7 @@ async function maybePromptStarterSeedInstall(service: GHCrawlService): Promise<v
   }
 
   const shouldInstall = await confirm({
-    message: 'Download starter data for openclaw/openclaw now? This runs a metadata sync, then imports the published dedupe embeddings and clusters.',
+    message: 'Download starter data for openclaw/openclaw now? This runs a metadata sync, then imports the published title/body embeddings and clusters.',
     initialValue: false,
   });
   if (isCancel(shouldInstall) || shouldInstall !== true) {

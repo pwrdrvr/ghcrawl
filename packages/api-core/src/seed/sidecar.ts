@@ -1,10 +1,15 @@
 import crypto from 'node:crypto';
+import { once } from 'node:events';
 import fs from 'node:fs';
-import { gunzipSync, gzipSync } from 'node:zlib';
+import { Readable } from 'node:stream';
+import { finished } from 'node:stream/promises';
+import { createInterface } from 'node:readline';
+import { createGunzip, createGzip, gzipSync } from 'node:zlib';
 
 import { z } from 'zod';
 
 const seedThreadKindSchema = z.enum(['issue', 'pull_request']);
+export const seedEmbeddingSourceKindSchema = z.enum(['title', 'body', 'dedupe_summary']);
 
 export const seedSidecarSchemaVersion = 1;
 export const seedSidecarFormat = 'ghcrawl-seed-sidecar-gzip-v1';
@@ -22,7 +27,7 @@ export const seedThreadIdentitySchema = z.object({
 
 export const seedThreadSidecarRowSchema = seedThreadIdentitySchema.extend({
   threadContentHash: z.string().min(1),
-  sourceKind: z.literal('dedupe_summary'),
+  sourceKind: seedEmbeddingSourceKindSchema,
   embeddingModel: z.string().min(1),
   dimensions: z.number().int().positive(),
   embedding: z.array(z.number()),
@@ -32,7 +37,7 @@ export const seedEdgeSidecarRowSchema = z.object({
   left: seedThreadIdentitySchema,
   right: seedThreadIdentitySchema,
   score: z.number(),
-  sources: z.array(z.string()).default(['dedupe_summary']),
+  sources: z.array(seedEmbeddingSourceKindSchema).default(['title']),
 });
 
 export const seedSidecarManifestSchema = z.object({
@@ -45,12 +50,13 @@ export const seedSidecarManifestSchema = z.object({
   repo: z.string().min(1),
   fullName: z.string().min(1),
   embedModel: z.string().min(1),
-  sourceKinds: z.array(z.literal('dedupe_summary')).min(1),
+  sourceKinds: z.array(seedEmbeddingSourceKindSchema).min(1),
   cluster: z.object({
     k: z.number().int().positive(),
     minScore: z.number(),
   }),
   threadCount: z.number().int().nonnegative(),
+  embeddingCount: z.number().int().nonnegative(),
   edgeCount: z.number().int().nonnegative(),
 });
 
@@ -71,6 +77,11 @@ export type SeedEdgeSidecarRow = z.infer<typeof seedEdgeSidecarRowSchema>;
 export type SeedSidecarManifest = z.infer<typeof seedSidecarManifestSchema>;
 export type SeedSidecarArchive = z.infer<typeof seedSidecarArchiveSchema>;
 export type KnownSeedManifestEntry = z.infer<typeof knownSeedManifestEntrySchema>;
+export type SeedSidecarArchiveWriterInput = {
+  manifest: SeedSidecarManifest;
+  threads: Iterable<SeedThreadSidecarRow>;
+  edges: Iterable<SeedEdgeSidecarRow>;
+};
 
 const knownSeedManifest: Record<string, KnownSeedManifestEntry> = {
   'openclaw/openclaw': {
@@ -83,12 +94,13 @@ const knownSeedManifest: Record<string, KnownSeedManifestEntry> = {
     repo: 'openclaw',
     fullName: 'openclaw/openclaw',
     embedModel: 'text-embedding-3-large',
-    sourceKinds: ['dedupe_summary'],
+    sourceKinds: ['title', 'body'],
     cluster: {
       k: 6,
       minScore: 0.82,
     },
     threadCount: 0,
+    embeddingCount: 0,
     edgeCount: 0,
     downloadUrl: 'https://example.invalid/replace-with-real-openclaw-seed.seed.json.gz',
     sha256: '0000000000000000000000000000000000000000000000000000000000000000',
@@ -102,12 +114,76 @@ export function getKnownSeedManifestEntry(owner: string, repo: string): KnownSee
 
 export function serializeSeedSidecarArchive(value: SeedSidecarArchive): Buffer {
   const archive = seedSidecarArchiveSchema.parse(value);
-  return gzipSync(Buffer.from(JSON.stringify(archive), 'utf8'));
+  const lines = [
+    JSON.stringify({ kind: 'manifest', payload: archive.manifest }),
+    ...archive.threads.map((row) => JSON.stringify({ kind: 'thread', payload: row })),
+    ...archive.edges.map((row) => JSON.stringify({ kind: 'edge', payload: row })),
+  ];
+  return gzipSync(Buffer.from(lines.join('\n'), 'utf8'));
 }
 
-export function parseSeedSidecarArchive(buffer: Buffer): SeedSidecarArchive {
-  const text = gunzipSync(buffer).toString('utf8');
-  return seedSidecarArchiveSchema.parse(JSON.parse(text));
+export async function parseSeedSidecarArchive(buffer: Buffer): Promise<SeedSidecarArchive> {
+  const archive: Partial<SeedSidecarArchive> & {
+    threads: SeedThreadSidecarRow[];
+    edges: SeedEdgeSidecarRow[];
+  } = {
+    threads: [],
+    edges: [],
+  };
+  const input = Readable.from(buffer).pipe(createGunzip());
+  const reader = createInterface({ input, crlfDelay: Infinity });
+
+  for await (const line of reader) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const record = JSON.parse(trimmed) as { kind?: unknown; payload?: unknown };
+    if (record.kind === 'manifest') {
+      archive.manifest = seedSidecarManifestSchema.parse(record.payload);
+      continue;
+    }
+    if (record.kind === 'thread') {
+      archive.threads.push(seedThreadSidecarRowSchema.parse(record.payload));
+      continue;
+    }
+    if (record.kind === 'edge') {
+      archive.edges.push(seedEdgeSidecarRowSchema.parse(record.payload));
+      continue;
+    }
+    throw new Error(`Unknown seed sidecar record kind: ${String(record.kind)}`);
+  }
+
+  return seedSidecarArchiveSchema.parse(archive);
+}
+
+export async function writeSeedSidecarArchive(
+  outputPath: string,
+  value: SeedSidecarArchive | SeedSidecarArchiveWriterInput,
+): Promise<{ sha256: string }> {
+  const manifest = seedSidecarManifestSchema.parse(value.manifest);
+  const gzip = createGzip();
+  const output = fs.createWriteStream(outputPath);
+  const hash = crypto.createHash('sha256');
+  gzip.on('data', (chunk) => hash.update(chunk));
+  gzip.pipe(output);
+
+  await writeGzipLine(gzip, JSON.stringify({ kind: 'manifest', payload: manifest }));
+  for (const row of value.threads) {
+    await writeGzipLine(gzip, JSON.stringify({ kind: 'thread', payload: seedThreadSidecarRowSchema.parse(row) }));
+  }
+  for (const row of value.edges) {
+    await writeGzipLine(gzip, JSON.stringify({ kind: 'edge', payload: seedEdgeSidecarRowSchema.parse(row) }));
+  }
+  gzip.end();
+
+  await finished(output);
+  return { sha256: hash.digest('hex') };
+}
+
+async function writeGzipLine(stream: ReturnType<typeof createGzip>, line: string): Promise<void> {
+  if (stream.write(`${line}\n`)) {
+    return;
+  }
+  await once(stream, 'drain');
 }
 
 export function sha256Hex(buffer: Uint8Array): string {

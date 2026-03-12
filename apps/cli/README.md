@@ -50,7 +50,7 @@ ghcrawl tui owner/repo
 
 `ghcrawl refresh owner/repo` is the main pipeline command. It pulls the latest open GitHub issues and pull requests, refreshes embeddings for changed items, and rebuilds the clusters you browse in the TUI.
 
-`ghcrawl seed-install openclaw/openclaw` is the low-cost bootstrap path. It runs a metadata-only sync, then imports published `dedupe_summary` embeddings plus derived similarity edges and rebuilds a local cluster run without needing an OpenAI key on day one.
+`ghcrawl seed-install openclaw/openclaw` is the low-cost bootstrap path. It runs a metadata-only sync, then imports published `title` and `body` embeddings plus derived similarity edges and rebuilds a local cluster run without needing an OpenAI key on day one.
 
 ## Typical Commands
 
@@ -116,7 +116,7 @@ ghcrawl seed-install openclaw/openclaw
 That flow is intentionally narrow:
 
 - it currently only supports `openclaw/openclaw`
-- it imports precomputed `dedupe_summary` embeddings plus derived similarity edges
+- it imports precomputed `title` and `body` embeddings plus derived similarity edges
 - it rebuilds a normal local cluster run from those imported edges
 - it does not overwrite your thread text, comments, summaries, or sync cursor state
 - it does not make semantic query search or summary views fully local-feature-complete; for that you still need an OpenAI key and later local summarize/embed runs
@@ -269,7 +269,7 @@ The agent and build contract for this repo lives in [SPEC.md](https://github.com
 - `embed` defaults to `text-embedding-3-large`
 - `embed` generates separate vectors for `title` and `body`, and also uses stored summary text when present
 - `embed` stores an input hash per source kind and will not resubmit unchanged text for re-embedding
-- starter sidecars currently import only `dedupe_summary` embeddings plus derived similarity edges
+- starter sidecars currently import `title` and `body` embeddings plus derived similarity edges
 - `sync --since` accepts ISO timestamps and relative durations like `15m`, `2h`, `7d`, and `1mo`
 - `sync --limit <count>` is the best smoke-test path on a busy repository
 - `tui` remembers sort order and min cluster size per repository in the persisted config file
