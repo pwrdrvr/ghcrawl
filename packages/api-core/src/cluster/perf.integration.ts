@@ -285,26 +285,25 @@ async function runSingleCluster(
   const service = createService(dbPath);
   try {
     const startedAt = performance.now();
-    const result =
-      backend === 'vectorlite'
-        ? service.clusterExperiment({
-            owner: 'openclaw',
-            repo: 'openclaw',
-            backend: 'vectorlite',
-            k: baseline.fixture.k,
-            minScore: baseline.fixture.minScore,
-          })
-        : await service.clusterRepository({
-            owner: 'openclaw',
-            repo: 'openclaw',
-            k: baseline.fixture.k,
-            minScore: baseline.fixture.minScore,
-          });
-    const wallClockDurationMs = performance.now() - startedAt;
-    const durationMs =
-      backend === 'vectorlite'
-        ? Math.max(0, result.durationMs - result.indexBuildMs)
-        : wallClockDurationMs;
+    if (backend === 'vectorlite') {
+      const result = service.clusterExperiment({
+        owner: 'openclaw',
+        repo: 'openclaw',
+        backend: 'vectorlite',
+        k: baseline.fixture.k,
+        minScore: baseline.fixture.minScore,
+      });
+      const durationMs = Math.max(0, result.durationMs - result.indexBuildMs);
+      return { durationMs, clusters: result.clusters, edges: result.edges };
+    }
+
+    const result = await service.clusterRepository({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      k: baseline.fixture.k,
+      minScore: baseline.fixture.minScore,
+    });
+    const durationMs = performance.now() - startedAt;
     return { durationMs, clusters: result.clusters, edges: result.edges };
   } finally {
     service.close();
