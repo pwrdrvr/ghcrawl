@@ -83,6 +83,12 @@ Common commands:
 
 If a change affects OpenAI-backed paths, avoid unnecessary live spend unless the user wants a real run.
 
+When you create or update a PR, follow through on GitHub Actions with `gh`:
+
+- monitor the PR checks after pushing
+- inspect failed job logs directly with `gh` instead of asking the user to paste errors back
+- keep fixing and pushing until the PR checks pass, unless the user explicitly wants to stop earlier
+
 ## Editing Guidance
 
 - Keep package boundaries intact:
