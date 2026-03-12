@@ -1,0 +1,128 @@
+name: Cluster Perf PR Comment
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: CI workflow run ID to read the cluster perf artifact from
+        required: true
+        type: string
+      pr_number:
+        description: Pull request number to comment on
+        required: true
+        type: string
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+jobs:
+  update-pr-comment:
+    name: Update PR Comment
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve workflow run context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
+          WORKFLOW_RUN_EVENT: ${{ github.event.workflow_run.event }}
+          WORKFLOW_RUN_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          WORKFLOW_RUN_URL: ${{ github.event.workflow_run.html_url }}
+          WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          INPUT_RUN_ID: ${{ inputs.run_id }}
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            run_id="$INPUT_RUN_ID"
+            pr_number="$INPUT_PR_NUMBER"
+            run_json="$(gh api "repos/${REPO}/actions/runs/${run_id}")"
+            run_url="$(printf '%s' "$run_json" | jq -r '.html_url')"
+            head_sha="$(printf '%s' "$run_json" | jq -r '.head_sha')"
+          else
+            if [ "$WORKFLOW_RUN_EVENT" != "pull_request" ] || [ -z "$WORKFLOW_RUN_PR_NUMBER" ] || [ "$WORKFLOW_RUN_PR_NUMBER" = "null" ]; then
+              echo "skip_comment=true" >> "$GITHUB_ENV"
+              exit 0
+            fi
+
+            run_id="$WORKFLOW_RUN_ID"
+            pr_number="$WORKFLOW_RUN_PR_NUMBER"
+            run_url="$WORKFLOW_RUN_URL"
+            head_sha="$WORKFLOW_RUN_HEAD_SHA"
+          fi
+
+          echo "skip_comment=false" >> "$GITHUB_ENV"
+          echo "cluster_perf_run_id=${run_id}" >> "$GITHUB_ENV"
+          echo "cluster_perf_pr_number=${pr_number}" >> "$GITHUB_ENV"
+          echo "cluster_perf_run_url=${run_url}" >> "$GITHUB_ENV"
+          echo "cluster_perf_head_sha=${head_sha}" >> "$GITHUB_ENV"
+
+      - name: Download cluster perf report artifact
+        if: ${{ env.skip_comment != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ env.cluster_perf_run_id }}
+        run: |
+          artifact_id="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/artifacts" --jq '.artifacts[] | select(.name == "cluster-perf-report") | .id' | head -n1)"
+          if [ -z "${artifact_id}" ]; then
+            echo "artifact_found=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          gh api "repos/${REPO}/actions/artifacts/${artifact_id}/zip" > "$RUNNER_TEMP/cluster-perf-report.zip"
+          mkdir -p "$RUNNER_TEMP/cluster-perf-report"
+          unzip -o "$RUNNER_TEMP/cluster-perf-report.zip" -d "$RUNNER_TEMP/cluster-perf-report"
+          echo "artifact_found=true" >> "$GITHUB_ENV"
+          echo "cluster_perf_report_path=$RUNNER_TEMP/cluster-perf-report/cluster-perf.json" >> "$GITHUB_ENV"
+
+      - name: Create or update sticky PR comment
+        if: ${{ env.skip_comment != 'true' && env.artifact_found == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ env.cluster_perf_pr_number }}
+          REPORT_PATH: ${{ env.cluster_perf_report_path }}
+          RUN_URL: ${{ env.cluster_perf_run_url }}
+          HEAD_SHA: ${{ env.cluster_perf_head_sha }}
+        run: |
+          node <<'EOF'
+          const fs = require('node:fs');
+          const { execFileSync } = require('node:child_process');
+
+          const marker = '<!-- ghcrawl-cluster-perf -->';
+          const repo = process.env.REPO;
+          const prNumber = process.env.PR_NUMBER;
+          const reportPath = process.env.REPORT_PATH;
+          const runUrl = process.env.RUN_URL;
+          const headSha = (process.env.HEAD_SHA || '').slice(0, 7);
+
+          const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+          const body = `${marker}\n${report.summary}\n_Run: [workflow run](${runUrl}) for \`${headSha}\`_`;
+
+          const comments = JSON.parse(
+            execFileSync('gh', ['api', `repos/${repo}/issues/${prNumber}/comments`], { encoding: 'utf8' }),
+          );
+          const existing = comments.find(
+            (comment) => comment.user?.login === 'github-actions[bot]' && typeof comment.body === 'string' && comment.body.includes(marker),
+          );
+
+          if (existing) {
+            execFileSync(
+              'gh',
+              ['api', '--method', 'PATCH', `repos/${repo}/issues/comments/${existing.id}`, '-f', `body=${body}`],
+              { stdio: 'inherit' },
+            );
+          } else {
+            execFileSync(
+              'gh',
+              ['api', '--method', 'POST', `repos/${repo}/issues/${prNumber}/comments`, '-f', `body=${body}`],
+              { stdio: 'inherit' },
+            );
+          }
+          EOF
