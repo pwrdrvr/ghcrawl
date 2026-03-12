@@ -28,6 +28,7 @@
     "neighbors": "node ./apps/cli/bin/ghcrawl.js neighbors",
     "tui": "node ./apps/cli/bin/ghcrawl.js tui",
     "serve": "node ./apps/cli/bin/ghcrawl.js serve",
+    "test:cluster-perf": "pnpm --filter @ghcrawl/api-core test:cluster-perf",
     "pack:smoke": "node ./scripts/pack-smoke.mjs",
     "release:apply-version": "node ./scripts/apply-release-version.mjs",
     "typecheck": "pnpm build && pnpm -r typecheck",

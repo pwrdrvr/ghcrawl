@@ -1,0 +1,397 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { performance } from 'node:perf_hooks';
+import { fileURLToPath } from 'node:url';
+
+import { GHCrawlService } from '../service.js';
+
+type EmbeddingSourceKind = 'title' | 'body' | 'dedupe_summary';
+
+type PerfBaseline = {
+  schemaVersion: number;
+  fixture: {
+    clusterCount: number;
+    threadsPerCluster: number;
+    clusterBlockWidth: number;
+    noiseDimensions: number;
+    sourceKinds: EmbeddingSourceKind[];
+    k: number;
+    minScore: number;
+  };
+  benchmark: {
+    warmupRuns: number;
+    runsPerSample: number;
+    minSamples: number;
+    maxSamples: number;
+    maxTotalMs: number;
+  };
+  baseline: {
+    fixtureMedianMs: number;
+    projectedOpenclawMs: number;
+  };
+  thresholds: {
+    maxRegressionPercent: number;
+  };
+};
+
+type PerfRunResult = {
+  sampleDurationsMs: number[];
+  medianMs: number;
+  baselineMedianMs: number;
+  deltaMs: number;
+  deltaPercent: number;
+  projectedOpenclawMs: number;
+  projectedBaselineOpenclawMs: number;
+  projectedDeltaMs: number;
+  projectedDeltaPercent: number;
+  samples: number;
+  runsPerSample: number;
+  threadCount: number;
+  sourceKinds: EmbeddingSourceKind[];
+  maxRegressionPercent: number;
+};
+
+const BASELINE_PATH = fileURLToPath(new URL('./perf-baseline.json', import.meta.url));
+
+function loadBaseline(): PerfBaseline {
+  return JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf8')) as PerfBaseline;
+}
+
+function shouldBootstrapBaseline(): boolean {
+  return process.env.GHCRAWL_CLUSTER_PERF_BOOTSTRAP === '1';
+}
+
+function formatDurationMs(durationMs: number): string {
+  if (!Number.isFinite(durationMs)) return 'n/a';
+  if (durationMs < 1000) {
+    return `${durationMs.toFixed(1)} ms`;
+  }
+  const totalSeconds = durationMs / 1000;
+  if (totalSeconds < 60) {
+    return `${totalSeconds.toFixed(2)} s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds - minutes * 60;
+  return `${minutes}m ${seconds.toFixed(1)}s`;
+}
+
+function formatPercent(value: number): string {
+  const sign = value > 0 ? '+' : '';
+  return `${sign}${value.toFixed(1)}%`;
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 0) {
+    return (sorted[middle - 1] + sorted[middle]) / 2;
+  }
+  return sorted[middle] ?? 0;
+}
+
+function createGitHubStub(): GHCrawlService['github'] {
+  return {
+    checkAuth: async () => undefined,
+    getRepo: async () => ({}),
+    listRepositoryIssues: async () => [],
+    getIssue: async () => ({}),
+    getPull: async () => ({}),
+    listIssueComments: async () => [],
+    listPullReviews: async () => [],
+    listPullReviewComments: async () => [],
+  };
+}
+
+function createService(dbPath: string): GHCrawlService {
+  return new GHCrawlService({
+    config: {
+      workspaceRoot: process.cwd(),
+      configDir: path.dirname(dbPath),
+      configPath: path.join(path.dirname(dbPath), 'config.json'),
+      configFileExists: true,
+      dbPath,
+      dbPathSource: 'config',
+      apiPort: 5179,
+      githubToken: 'ghp_testtoken1234567890',
+      githubTokenSource: 'config',
+      secretProvider: 'plaintext',
+      tuiPreferences: {},
+      openaiApiKeySource: 'none',
+      summaryModel: 'gpt-5-mini',
+      embedModel: 'text-embedding-3-large',
+      embedBatchSize: 2,
+      embedConcurrency: 2,
+      embedMaxUnread: 4,
+      openSearchIndex: 'ghcrawl-threads',
+    },
+    github: createGitHubStub(),
+  });
+}
+
+function deterministicNoise(seed: number): number {
+  const next = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+  return (next / 0xffffffff - 0.5) * 0.025;
+}
+
+function buildDeterministicEmbedding(params: {
+  clusterIndex: number;
+  threadOffset: number;
+  sourceIndex: number;
+  clusterCount: number;
+  clusterBlockWidth: number;
+  noiseDimensions: number;
+  sourceKinds: EmbeddingSourceKind[];
+}): number[] {
+  const dimensions = params.clusterCount * params.clusterBlockWidth + params.noiseDimensions + params.sourceKinds.length;
+  const embedding = new Array<number>(dimensions).fill(0);
+  const clusterBase = params.clusterIndex * params.clusterBlockWidth;
+  const sourceBias = 0.02 * (params.sourceIndex + 1);
+  const memberBias = 0.01 * ((params.threadOffset % 5) + 1);
+
+  embedding[clusterBase] = 1;
+  if (params.clusterBlockWidth > 1) embedding[clusterBase + 1] = 0.72 + sourceBias;
+  if (params.clusterBlockWidth > 2) embedding[clusterBase + 2] = 0.48 + memberBias;
+  if (params.clusterBlockWidth > 3) embedding[clusterBase + 3] = 0.28 + sourceBias + memberBias;
+
+  const sourceOffset = params.clusterCount * params.clusterBlockWidth + params.sourceIndex;
+  embedding[sourceOffset] = 0.12 + sourceBias;
+
+  const noiseBase = params.clusterCount * params.clusterBlockWidth + params.sourceKinds.length;
+  for (let index = 0; index < params.noiseDimensions; index += 1) {
+    const seed = params.clusterIndex * 10_000 + params.threadOffset * 100 + params.sourceIndex * 10 + index;
+    embedding[noiseBase + index] = deterministicNoise(seed);
+  }
+
+  return embedding;
+}
+
+function seedBenchmarkDatabase(dbPath: string, baseline: PerfBaseline): void {
+  const service = createService(dbPath);
+  const threadCount = baseline.fixture.clusterCount * baseline.fixture.threadsPerCluster;
+  const now = '2026-03-12T12:00:00Z';
+
+  try {
+    service.db
+      .prepare(
+        `insert into repositories (id, owner, name, full_name, github_repo_id, raw_json, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '1', '{}', now);
+
+    const insertThread = service.db.prepare(
+      `insert into threads (
+        id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
+        labels_json, assignees_json, raw_json, content_hash, is_draft, created_at_gh, updated_at_gh, closed_at_gh,
+        merged_at_gh, first_pulled_at, last_pulled_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const insertEmbedding = service.db.prepare(
+      `insert into document_embeddings (thread_id, source_kind, model, dimensions, content_hash, embedding_json, created_at, updated_at)
+       values (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+
+    for (let clusterIndex = 0; clusterIndex < baseline.fixture.clusterCount; clusterIndex += 1) {
+      for (let threadOffset = 0; threadOffset < baseline.fixture.threadsPerCluster; threadOffset += 1) {
+        const threadId = clusterIndex * baseline.fixture.threadsPerCluster + threadOffset + 1;
+        const threadNumber = 10_000 + threadId;
+        const kind = threadOffset % 3 === 0 ? 'pull_request' : 'issue';
+        insertThread.run(
+          threadId,
+          1,
+          `gh-${threadId}`,
+          threadNumber,
+          kind,
+          'open',
+          `Cluster ${clusterIndex + 1} thread ${threadOffset + 1}`,
+          `Deterministic benchmark fixture body for cluster ${clusterIndex + 1}, thread ${threadOffset + 1}.`,
+          `user${(threadId % 17) + 1}`,
+          'User',
+          `https://github.com/openclaw/openclaw/${kind === 'issue' ? 'issues' : 'pull'}/${threadNumber}`,
+          '[]',
+          '[]',
+          '{}',
+          `hash-${threadId}`,
+          0,
+          now,
+          now,
+          null,
+          null,
+          now,
+          now,
+          now,
+        );
+
+        for (const [sourceIndex, sourceKind] of baseline.fixture.sourceKinds.entries()) {
+          const embedding = buildDeterministicEmbedding({
+            clusterIndex,
+            threadOffset,
+            sourceIndex,
+            clusterCount: baseline.fixture.clusterCount,
+            clusterBlockWidth: baseline.fixture.clusterBlockWidth,
+            noiseDimensions: baseline.fixture.noiseDimensions,
+            sourceKinds: baseline.fixture.sourceKinds,
+          });
+          insertEmbedding.run(
+            threadId,
+            sourceKind,
+            'text-embedding-3-large',
+            embedding.length,
+            `hash-${threadId}-${sourceKind}`,
+            JSON.stringify(embedding),
+            now,
+            now,
+          );
+        }
+      }
+    }
+
+    const countRow = service.db.prepare('select count(*) as count from threads').get() as { count: number };
+    assert.equal(threadCount, countRow.count);
+  } finally {
+    service.close();
+  }
+}
+
+async function runSingleCluster(dbPath: string, baseline: PerfBaseline): Promise<{ durationMs: number; clusters: number; edges: number }> {
+  const service = createService(dbPath);
+  try {
+    const startedAt = performance.now();
+    const result = await service.clusterRepository({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      k: baseline.fixture.k,
+      minScore: baseline.fixture.minScore,
+    });
+    const durationMs = performance.now() - startedAt;
+    return { durationMs, clusters: result.clusters, edges: result.edges };
+  } finally {
+    service.close();
+  }
+}
+
+async function measureBenchmark(baseline: PerfBaseline): Promise<PerfRunResult> {
+  if (baseline.baseline.fixtureMedianMs <= 0 && !shouldBootstrapBaseline()) {
+    throw new Error(
+      `Cluster perf baseline is not set in ${BASELINE_PATH}. Run the benchmark once, then record fixtureMedianMs before enforcing regressions.`,
+    );
+  }
+
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-cluster-perf-'));
+  const seedDbPath = path.join(tempRoot, 'seed.sqlite');
+  try {
+    seedBenchmarkDatabase(seedDbPath, baseline);
+
+    const warmupRuns = baseline.benchmark.warmupRuns;
+    const runsPerSample = baseline.benchmark.runsPerSample;
+    const sampleDurationsMs: number[] = [];
+    const benchmarkStartedAt = performance.now();
+    let runCounter = 0;
+
+    for (let warmupIndex = 0; warmupIndex < warmupRuns; warmupIndex += 1) {
+      const warmupDbPath = path.join(tempRoot, `warmup-${warmupIndex}.sqlite`);
+      fs.copyFileSync(seedDbPath, warmupDbPath);
+      const warmupResult = await runSingleCluster(warmupDbPath, baseline);
+      assert.equal(warmupResult.clusters, baseline.fixture.clusterCount);
+      assert.ok(warmupResult.edges > baseline.fixture.clusterCount);
+    }
+
+    while (sampleDurationsMs.length < baseline.benchmark.maxSamples) {
+      const sampleStartedAt = performance.now();
+      for (let runIndex = 0; runIndex < runsPerSample; runIndex += 1) {
+        const runDbPath = path.join(tempRoot, `run-${runCounter}.sqlite`);
+        runCounter += 1;
+        fs.copyFileSync(seedDbPath, runDbPath);
+        const result = await runSingleCluster(runDbPath, baseline);
+        assert.equal(result.clusters, baseline.fixture.clusterCount);
+        assert.ok(result.edges > baseline.fixture.clusterCount);
+      }
+      sampleDurationsMs.push(performance.now() - sampleStartedAt);
+
+      const elapsedMs = performance.now() - benchmarkStartedAt;
+      if (sampleDurationsMs.length >= baseline.benchmark.minSamples && elapsedMs >= baseline.benchmark.maxTotalMs) {
+        break;
+      }
+    }
+
+    const medianMs = median(sampleDurationsMs);
+    const baselineMedianMs = baseline.baseline.fixtureMedianMs > 0 ? baseline.baseline.fixtureMedianMs : medianMs;
+    const deltaMs = medianMs - baselineMedianMs;
+    const deltaPercent = baselineMedianMs > 0 ? (deltaMs / baselineMedianMs) * 100 : 0;
+    const projectedOpenclawMs = baseline.baseline.projectedOpenclawMs * (medianMs / baselineMedianMs);
+    const projectedBaselineOpenclawMs = baseline.baseline.projectedOpenclawMs;
+    const projectedDeltaMs = projectedOpenclawMs - projectedBaselineOpenclawMs;
+    const projectedDeltaPercent = (projectedDeltaMs / projectedBaselineOpenclawMs) * 100;
+
+    return {
+      sampleDurationsMs,
+      medianMs,
+      baselineMedianMs,
+      deltaMs,
+      deltaPercent,
+      projectedOpenclawMs,
+      projectedBaselineOpenclawMs,
+      projectedDeltaMs,
+      projectedDeltaPercent,
+      samples: sampleDurationsMs.length,
+      runsPerSample,
+      threadCount: baseline.fixture.clusterCount * baseline.fixture.threadsPerCluster,
+      sourceKinds: baseline.fixture.sourceKinds,
+      maxRegressionPercent: baseline.thresholds.maxRegressionPercent,
+    };
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+function buildSummary(result: PerfRunResult): string {
+  const status = result.deltaPercent > result.maxRegressionPercent ? 'FAIL' : 'PASS';
+  const sampleList = result.sampleDurationsMs.map((value) => formatDurationMs(value)).join(', ');
+  const bootstrapLine =
+    result.baselineMedianMs === result.medianMs
+      ? '- Bootstrap mode: using the current fixture median as the provisional baseline'
+      : null;
+  return [
+    '## Cluster Performance',
+    '',
+    `- Status: ${status}`,
+    `- Fixture median: ${formatDurationMs(result.medianMs)} (${result.samples} samples, ${result.runsPerSample} cluster rebuilds/sample)`,
+    `- Fixture baseline: ${formatDurationMs(result.baselineMedianMs)}`,
+    `- Fixture delta: ${formatDurationMs(result.deltaMs)} (${formatPercent(result.deltaPercent)})`,
+    `- Projected openclaw/openclaw duration: ${formatDurationMs(result.projectedOpenclawMs)}`,
+    `- Projected openclaw/openclaw baseline: ${formatDurationMs(result.projectedBaselineOpenclawMs)}`,
+    `- Projected delta: ${formatDurationMs(result.projectedDeltaMs)} (${formatPercent(result.projectedDeltaPercent)})`,
+    `- Regression threshold: ${formatPercent(result.maxRegressionPercent)}`,
+    `- Fixture shape: ${result.threadCount} threads x ${result.sourceKinds.length} source kinds`,
+    `- Sample durations: ${sampleList}`,
+    bootstrapLine,
+    '',
+  ]
+    .filter((line): line is string => line !== null)
+    .join('\n');
+}
+
+async function main(): Promise<void> {
+  const baseline = loadBaseline();
+  const result = await measureBenchmark(baseline);
+  const summary = buildSummary(result);
+  const bootstrap = shouldBootstrapBaseline();
+
+  process.stdout.write(`${summary}\n`);
+  if (bootstrap) {
+    process.stdout.write(`Suggested fixtureMedianMs: ${result.medianMs.toFixed(1)}\n`);
+  }
+  const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+  if (summaryPath) {
+    fs.appendFileSync(summaryPath, `${summary}\n`);
+  }
+
+  if (!bootstrap && result.deltaPercent > result.maxRegressionPercent) {
+    throw new Error(
+      `Cluster perf regression exceeded threshold: ${formatPercent(result.deltaPercent)} > ${formatPercent(result.maxRegressionPercent)}`,
+    );
+  }
+}
+
+await main();

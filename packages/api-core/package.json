@@ -40,6 +40,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "prepack": "pnpm --filter @ghcrawl/api-contract build && pnpm run build",
+    "test:cluster-perf": "tsx --tsconfig tsconfig.test.json src/cluster/perf.integration.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --tsconfig tsconfig.test.json --test src/*.test.ts src/**/*.test.ts"
   },
