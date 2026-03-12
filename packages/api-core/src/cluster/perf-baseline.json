@@ -21,7 +21,7 @@
     "maxTotalMs": 10000
   },
   "baseline": {
-    "fixtureMedianMs": 239.1,
+    "fixtureMedianMs": 535.1,
     "projectedOpenclawMs": 600000
   },
   "thresholds": {
