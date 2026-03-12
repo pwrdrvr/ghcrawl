@@ -37,6 +37,7 @@ type PerfBaseline = {
 };
 
 type PerfRunResult = {
+  backend: 'exact' | 'vectorlite';
   sampleDurationsMs: number[];
   medianMs: number;
   baselineMedianMs: number;
@@ -61,6 +62,27 @@ function loadBaseline(): PerfBaseline {
 
 function shouldBootstrapBaseline(): boolean {
   return process.env.GHCRAWL_CLUSTER_PERF_BOOTSTRAP === '1';
+}
+
+function shouldIgnoreRegressionThreshold(): boolean {
+  return process.env.GHCRAWL_CLUSTER_PERF_IGNORE_THRESHOLD === '1';
+}
+
+function getPerfBackend(): 'exact' | 'vectorlite' {
+  return process.env.GHCRAWL_CLUSTER_PERF_BACKEND === 'vectorlite' ? 'vectorlite' : 'exact';
+}
+
+function assertBenchmarkShape(
+  result: { clusters: number; edges: number },
+  baseline: PerfBaseline,
+  backend: 'exact' | 'vectorlite',
+): void {
+  if (backend === 'exact') {
+    assert.equal(result.clusters, baseline.fixture.clusterCount);
+  } else {
+    assert.ok(result.clusters > 0);
+  }
+  assert.ok(result.edges > baseline.fixture.clusterCount);
 }
 
 function formatDurationMs(durationMs: number): string {
@@ -254,16 +276,29 @@ function seedBenchmarkDatabase(dbPath: string, baseline: PerfBaseline): void {
   }
 }
 
-async function runSingleCluster(dbPath: string, baseline: PerfBaseline): Promise<{ durationMs: number; clusters: number; edges: number }> {
+async function runSingleCluster(
+  dbPath: string,
+  baseline: PerfBaseline,
+  backend: 'exact' | 'vectorlite',
+): Promise<{ durationMs: number; clusters: number; edges: number }> {
   const service = createService(dbPath);
   try {
     const startedAt = performance.now();
-    const result = await service.clusterRepository({
-      owner: 'openclaw',
-      repo: 'openclaw',
-      k: baseline.fixture.k,
-      minScore: baseline.fixture.minScore,
-    });
+    const result =
+      backend === 'vectorlite'
+        ? service.clusterExperiment({
+            owner: 'openclaw',
+            repo: 'openclaw',
+            backend: 'vectorlite',
+            k: baseline.fixture.k,
+            minScore: baseline.fixture.minScore,
+          })
+        : await service.clusterRepository({
+            owner: 'openclaw',
+            repo: 'openclaw',
+            k: baseline.fixture.k,
+            minScore: baseline.fixture.minScore,
+          });
     const durationMs = performance.now() - startedAt;
     return { durationMs, clusters: result.clusters, edges: result.edges };
   } finally {
@@ -272,6 +307,7 @@ async function runSingleCluster(dbPath: string, baseline: PerfBaseline): Promise
 }
 
 async function measureBenchmark(baseline: PerfBaseline): Promise<PerfRunResult> {
+  const backend = getPerfBackend();
   if (baseline.baseline.fixtureMedianMs <= 0 && !shouldBootstrapBaseline()) {
     throw new Error(
       `Cluster perf baseline is not set in ${BASELINE_PATH}. Run the benchmark once, then record fixtureMedianMs before enforcing regressions.`,
@@ -292,9 +328,8 @@ async function measureBenchmark(baseline: PerfBaseline): Promise<PerfRunResult> 
     for (let warmupIndex = 0; warmupIndex < warmupRuns; warmupIndex += 1) {
       const warmupDbPath = path.join(tempRoot, `warmup-${warmupIndex}.sqlite`);
       fs.copyFileSync(seedDbPath, warmupDbPath);
-      const warmupResult = await runSingleCluster(warmupDbPath, baseline);
-      assert.equal(warmupResult.clusters, baseline.fixture.clusterCount);
-      assert.ok(warmupResult.edges > baseline.fixture.clusterCount);
+      const warmupResult = await runSingleCluster(warmupDbPath, baseline, backend);
+      assertBenchmarkShape(warmupResult, baseline, backend);
     }
 
     while (sampleDurationsMs.length < baseline.benchmark.maxSamples) {
@@ -303,9 +338,8 @@ async function measureBenchmark(baseline: PerfBaseline): Promise<PerfRunResult> 
         const runDbPath = path.join(tempRoot, `run-${runCounter}.sqlite`);
         runCounter += 1;
         fs.copyFileSync(seedDbPath, runDbPath);
-        const result = await runSingleCluster(runDbPath, baseline);
-        assert.equal(result.clusters, baseline.fixture.clusterCount);
-        assert.ok(result.edges > baseline.fixture.clusterCount);
+        const result = await runSingleCluster(runDbPath, baseline, backend);
+        assertBenchmarkShape(result, baseline, backend);
       }
       sampleDurationsMs.push(performance.now() - sampleStartedAt);
 
@@ -325,6 +359,7 @@ async function measureBenchmark(baseline: PerfBaseline): Promise<PerfRunResult> 
     const projectedDeltaPercent = (projectedDeltaMs / projectedBaselineOpenclawMs) * 100;
 
     return {
+      backend,
       sampleDurationsMs,
       medianMs,
       baselineMedianMs,
@@ -355,6 +390,7 @@ function buildSummary(result: PerfRunResult): string {
   return [
     '## Cluster Performance',
     '',
+    `- Backend: ${result.backend}`,
     `- Status: ${status}`,
     `- Fixture median: ${formatDurationMs(result.medianMs)} (${result.samples} samples, ${result.runsPerSample} cluster rebuilds/sample)`,
     `- Fixture baseline: ${formatDurationMs(result.baselineMedianMs)}`,
@@ -399,7 +435,7 @@ async function main(): Promise<void> {
   const result = await measureBenchmark(baseline);
   const summary = buildSummary(result);
   const bootstrap = shouldBootstrapBaseline();
-  const shouldFail = !bootstrap && result.deltaPercent > result.maxRegressionPercent;
+  const shouldFail = !bootstrap && !shouldIgnoreRegressionThreshold() && result.deltaPercent > result.maxRegressionPercent;
 
   process.stdout.write(`${summary}\n`);
   if (bootstrap) {
