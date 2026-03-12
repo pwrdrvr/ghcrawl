@@ -100,7 +100,11 @@ jobs:
           GHCRAWL_CLUSTER_PERF_BACKEND: vectorlite
           GHCRAWL_CLUSTER_PERF_IGNORE_THRESHOLD: 1
           GHCRAWL_CLUSTER_PERF_OUTPUT_PATH: ${{ runner.temp }}/cluster-perf-head-vectorlite.json
-        run: pnpm test:cluster-perf
+        run: |
+          for attempt in 1 2 3; do
+            echo "Vectorlite perf attempt ${attempt}/3"
+            pnpm test:cluster-perf
+          done
 
       - name: Build combined cluster perf report
         env:
@@ -174,7 +178,7 @@ jobs:
               headExact.result.projectedOpenclawMs > 0 ? (vectorliteProjectedDeltaMs / headExact.result.projectedOpenclawMs) * 100 : 0;
             lines.push(
               '',
-              `- Head vectorlite fixture median (post-index): ${formatDurationMs(headVectorlite.result.medianMs)}`,
+              `- Head vectorlite fixture median (post-index, run 3/3): ${formatDurationMs(headVectorlite.result.medianMs)}`,
               `- Vectorlite delta vs head exact: ${formatDurationMs(vectorliteDeltaMs)} (${formatPercent(vectorliteDeltaPercent)})`,
               `- Head vectorlite projected openclaw/openclaw: ${formatDurationMs(headVectorlite.result.projectedOpenclawMs)}`,
               `- Vectorlite projected delta vs head exact: ${formatDurationMs(vectorliteProjectedDeltaMs)} (${formatPercent(vectorliteProjectedDeltaPercent)})`,
