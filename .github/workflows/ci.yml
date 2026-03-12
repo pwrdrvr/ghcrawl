@@ -143,7 +143,7 @@ jobs:
           const lines = [
             '## Cluster Performance',
             '',
-            `- Head exact fixture median: ${formatDurationMs(headExact.result.medianMs)}`,
+            `- Head exact fixture median (full-run): ${formatDurationMs(headExact.result.medianMs)}`,
             `- Head exact projected openclaw/openclaw: ${formatDurationMs(headExact.result.projectedOpenclawMs)}`,
           ];
 
@@ -154,7 +154,7 @@ jobs:
             const exactProjectedDeltaPercent =
               base.result.projectedOpenclawMs > 0 ? (exactProjectedDeltaMs / base.result.projectedOpenclawMs) * 100 : 0;
             lines.push(
-              `- Base exact fixture median: ${formatDurationMs(base.result.medianMs)}`,
+              `- Base exact fixture median (full-run): ${formatDurationMs(base.result.medianMs)}`,
               `- Exact delta vs base: ${formatDurationMs(exactDeltaMs)} (${formatPercent(exactDeltaPercent)})`,
               `- Base exact projected openclaw/openclaw: ${formatDurationMs(base.result.projectedOpenclawMs)}`,
               `- Exact projected delta vs base: ${formatDurationMs(exactProjectedDeltaMs)} (${formatPercent(exactProjectedDeltaPercent)})`,
@@ -170,7 +170,7 @@ jobs:
               headExact.result.projectedOpenclawMs > 0 ? (vectorliteProjectedDeltaMs / headExact.result.projectedOpenclawMs) * 100 : 0;
             lines.push(
               '',
-              `- Head vectorlite fixture median: ${formatDurationMs(headVectorlite.result.medianMs)}`,
+              `- Head vectorlite fixture median (post-index): ${formatDurationMs(headVectorlite.result.medianMs)}`,
               `- Vectorlite delta vs head exact: ${formatDurationMs(vectorliteDeltaMs)} (${formatPercent(vectorliteDeltaPercent)})`,
               `- Head vectorlite projected openclaw/openclaw: ${formatDurationMs(headVectorlite.result.projectedOpenclawMs)}`,
               `- Vectorlite projected delta vs head exact: ${formatDurationMs(vectorliteProjectedDeltaMs)} (${formatPercent(vectorliteProjectedDeltaPercent)})`,
