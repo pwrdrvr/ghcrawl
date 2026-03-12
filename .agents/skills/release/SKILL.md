@@ -25,7 +25,7 @@ Use this skill for repos that publish from GitHub Releases and want human-writte
 Use the bundled planner to gather release facts and raw note inputs:
 
 ```bash
-python3 skills/release/scripts/release_plan.py --output-dir .local/release
+python3 .agents/skills/release/scripts/release_plan.py --output-dir .local/release
 ```
 
 It writes:
@@ -102,7 +102,7 @@ default_branch=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.na
 current_branch=$(git branch --show-current)
 test "$current_branch" = "$default_branch"
 git pull --ff-only origin "$default_branch"
-python3 skills/release/scripts/release_plan.py --output-dir .local/release
+python3 .agents/skills/release/scripts/release_plan.py --output-dir .local/release
 ```
 
 2. Read `.local/release/release-plan.md` and summarize the proposed release for approval.
