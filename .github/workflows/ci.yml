@@ -78,7 +78,9 @@ jobs:
 
       - name: Copy large cluster perf fixture into baseline worktree
         if: ${{ github.event_name == 'pull_request' }}
-        run: cp packages/api-core/src/cluster/perf-large.json "$RUNNER_TEMP/cluster-perf-base/packages/api-core/src/cluster/perf-baseline.json"
+        run: |
+          cp packages/api-core/src/cluster/perf-large.json "$RUNNER_TEMP/cluster-perf-base/packages/api-core/src/cluster/perf-baseline.json"
+          cp packages/api-core/src/cluster/perf.integration.ts "$RUNNER_TEMP/cluster-perf-base/packages/api-core/src/cluster/perf.integration.ts"
 
       - name: Install dependencies for baseline worktree
         if: ${{ github.event_name == 'pull_request' }}
