@@ -2874,9 +2874,99 @@ test('findPullRequestTemplateMatches returns exact and near-template pull reques
     assert.deepEqual(result.matches.map((match) => match.thread.number), [43, 44]);
     assert.equal(result.matches[0]?.exactMatch, true);
     assert.equal(result.matches[0]?.exactMatchOffset, 15);
+    assert.equal(result.matches[0]?.templateSectionFound, false);
+    assert.equal(result.matches[0]?.templateSectionExactMatch, false);
     assert.equal(result.matches[0]?.levenshteinDistance, null);
+    assert.equal(result.matches[0]?.fullBodyLevenshteinDistance, null);
     assert.equal(result.matches[1]?.exactMatch, false);
+    assert.equal(result.matches[1]?.templateSectionFound, false);
     assert.equal(result.matches[1]?.levenshteinDistance, 7);
+    assert.equal(result.matches[1]?.fullBodyLevenshteinDistance, 7);
+  } finally {
+    service.close();
+  }
+});
+
+test('findPullRequestTemplateMatches prefers section distance when summary-to-risks anchors bound the copied template', () => {
+  const service = makeTestService({
+    checkAuth: async () => undefined,
+    getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+    getFileContents: async () => {
+      throw new Error('not expected');
+    },
+    listRepositoryIssues: async () => [],
+    getIssue: async () => {
+      throw new Error('not expected');
+    },
+    getPull: async () => {
+      throw new Error('not expected');
+    },
+    listIssueComments: async () => [],
+    listPullReviews: async () => [],
+    listPullReviewComments: async () => [],
+  });
+
+  try {
+    const now = '2026-03-09T00:00:00Z';
+    const templateText =
+      '## Summary\n\nDescribe the problem and fix in 2-5 bullets:\n\n- Problem:\n\n## Change Type (select all)\n\n- [ ] Bug fix\n\n## Risks and Mitigations\n\nList only real risks for this PR. Add/remove entries as needed. If none, write `None`.\n\n- Risk:\n  - Mitigation:';
+    service.db
+      .prepare(
+        `insert into repositories (id, owner, name, full_name, github_repo_id, raw_json, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '1', '{"default_branch":"main"}', now);
+    service.db
+      .prepare(
+        `insert into threads (
+          id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
+          labels_json, assignees_json, raw_json, content_hash, is_draft, created_at_gh, updated_at_gh, closed_at_gh,
+          merged_at_gh, first_pulled_at, last_pulled_at, updated_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        21,
+        1,
+        '201',
+        88,
+        'pull_request',
+        'open',
+        'Template barely changed',
+        '- Added a short preamble\n- Kept the rest of the template\n\n## Summary\r\n\r\nDescribe the problem and fix in 2-5 bullets:\r\n\r\n- Problem:\r\n\r\n## Change Type (select all)\r\n\r\n- [x] Bug fix\r\n\r\n## Risks and Mitigations\r\n\r\nList only real risks for this PR. Add/remove entries as needed. If none, write `None`.\r\n\r\n- Risk:\r\n  - Mitigation:\r\n',
+        'alice',
+        'User',
+        'https://github.com/openclaw/openclaw/pull/88',
+        '[]',
+        '[]',
+        '{}',
+        'hash-88',
+        0,
+        now,
+        now,
+        null,
+        null,
+        now,
+        now,
+        now,
+      );
+
+    const result = service.findPullRequestTemplateMatches({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      templateText,
+      templateSource: {
+        mode: 'file',
+        label: '/tmp/openclaw-template.md',
+      },
+      maxDistance: 20,
+    });
+
+    assert.deepEqual(result.matches.map((match) => match.thread.number), [88]);
+    assert.equal(result.matches[0]?.exactMatch, false);
+    assert.equal(result.matches[0]?.templateSectionFound, true);
+    assert.equal(result.matches[0]?.templateSectionExactMatch, false);
+    assert.equal(result.matches[0]?.levenshteinDistance, 1);
+    assert.equal(result.matches[0]?.fullBodyLevenshteinDistance, null);
   } finally {
     service.close();
   }

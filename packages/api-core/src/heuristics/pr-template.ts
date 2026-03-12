@@ -1,3 +1,13 @@
+export const PULL_REQUEST_TEMPLATE_SECTION_START_MARKER = '## Summary';
+export const PULL_REQUEST_TEMPLATE_SECTION_END_MARKER = '## Risks and Mitigations';
+
+export type PrTemplateSectionMatch = {
+  templateSection: string;
+  bodySection: string | null;
+  startOffset: number | null;
+  endOffset: number | null;
+};
+
 export function normalizePrTemplateText(value: string): string {
   return value.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').trim();
 }
@@ -8,6 +18,44 @@ export function findExactTemplateOffset(body: string, template: string): number 
   }
   const offset = body.indexOf(template);
   return offset >= 0 ? offset : null;
+}
+
+export function extractPrTemplateSection(body: string, template: string): PrTemplateSectionMatch {
+  const templateStartOffset = template.indexOf(PULL_REQUEST_TEMPLATE_SECTION_START_MARKER);
+  const templateEndOffset = template.indexOf(PULL_REQUEST_TEMPLATE_SECTION_END_MARKER, templateStartOffset);
+  const templateSection =
+    templateStartOffset >= 0 && templateEndOffset >= 0
+      ? template.slice(templateStartOffset)
+      : template;
+
+  const bodyStartOffset = body.indexOf(PULL_REQUEST_TEMPLATE_SECTION_START_MARKER);
+  if (bodyStartOffset < 0 || templateEndOffset < 0) {
+    return {
+      templateSection,
+      bodySection: null,
+      startOffset: null,
+      endOffset: null,
+    };
+  }
+
+  const templateTail = template.slice(templateEndOffset);
+  const bodyTailOffset = body.indexOf(templateTail, bodyStartOffset);
+  if (bodyTailOffset < 0) {
+    return {
+      templateSection,
+      bodySection: null,
+      startOffset: bodyStartOffset,
+      endOffset: null,
+    };
+  }
+
+  const bodyEndOffset = bodyTailOffset + templateTail.length;
+  return {
+    templateSection,
+    bodySection: body.slice(bodyStartOffset, bodyEndOffset),
+    startOffset: bodyStartOffset,
+    endOffset: bodyEndOffset,
+  };
 }
 
 export function boundedLevenshteinDistance(left: string, right: string, maxDistance: number): number | null {

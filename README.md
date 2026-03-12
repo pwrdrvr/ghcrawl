@@ -180,7 +180,7 @@ ghcrawl search owner/repo --query "download stalls"
 
 Use `threads --numbers ...` when you want several specific issue or PR records in one CLI call instead of paying process startup overhead repeatedly.
 
-Use `pr-template` when you want to flag pull requests that still contain the repository PR template verbatim or are only a small edit-distance away from it. Pass `--template-file` to force a local template snapshot, or omit it to let `ghcrawl` probe common GitHub PR-template paths for the target repo.
+Use `pr-template` when you want to flag pull requests that still contain the repository PR template verbatim or are only a small edit-distance away from it. Pass `--template-file` to force a local template snapshot, or omit it to let `ghcrawl` probe common GitHub PR-template paths for the target repo. When the body contains the `## Summary` ... `## Risks and Mitigations` template block, `levenshteinDistance` is computed on that extracted section and `fullBodyLevenshteinDistance` keeps the broader whole-description score.
 
 Use `author --login ...` when you want all currently open issue/PR records from one user plus the strongest stored same-author similarity match for each item.
 

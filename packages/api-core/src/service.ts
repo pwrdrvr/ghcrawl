@@ -63,7 +63,12 @@ import { migrate } from './db/migrate.js';
 import { openDb, type SqliteDatabase } from './db/sqlite.js';
 import { buildCanonicalDocument, isBotLikeAuthor } from './documents/normalize.js';
 import { makeGitHubClient, type GitHubClient } from './github/client.js';
-import { boundedLevenshteinDistance, findExactTemplateOffset, normalizePrTemplateText } from './heuristics/pr-template.js';
+import {
+  boundedLevenshteinDistance,
+  extractPrTemplateSection,
+  findExactTemplateOffset,
+  normalizePrTemplateText,
+} from './heuristics/pr-template.js';
 import { OpenAiProvider, type AiProvider } from './openai/provider.js';
 import { cosineSimilarity, normalizeEmbedding, rankNearestNeighbors } from './search/exact.js';
 
@@ -774,7 +779,14 @@ export class GHCrawlService {
       .map((row) => {
         const normalizedBody = normalizePrTemplateText(row.body ?? '');
         const exactMatchOffset = findExactTemplateOffset(normalizedBody, normalizedTemplate);
-        const levenshteinDistance =
+        const templateSection = extractPrTemplateSection(normalizedBody, normalizedTemplate);
+        const templateSectionLevenshteinDistance =
+          params.maxDistance === undefined
+            ? null
+            : templateSection.bodySection
+              ? boundedLevenshteinDistance(templateSection.bodySection, templateSection.templateSection, params.maxDistance)
+              : null;
+        const fullBodyLevenshteinDistance =
           params.maxDistance === undefined
             ? null
             : boundedLevenshteinDistance(normalizedBody, normalizedTemplate, params.maxDistance);
@@ -782,19 +794,39 @@ export class GHCrawlService {
           thread: threadToDto(row),
           exactMatch: exactMatchOffset !== null,
           exactMatchOffset,
-          levenshteinDistance,
+          templateSectionFound: templateSection.bodySection !== null,
+          templateSectionExactMatch:
+            templateSection.bodySection !== null && templateSection.bodySection === templateSection.templateSection,
+          templateSectionStartOffset: templateSection.startOffset,
+          templateSectionEndOffset: templateSection.endOffset,
+          levenshteinDistance: templateSectionLevenshteinDistance ?? fullBodyLevenshteinDistance,
+          fullBodyLevenshteinDistance,
           bodyLength: normalizedBody.length,
         };
       })
-      .filter((match) => match.exactMatch || match.levenshteinDistance !== null)
+      .filter(
+        (match) =>
+          match.exactMatch || match.templateSectionExactMatch || match.levenshteinDistance !== null || match.fullBodyLevenshteinDistance !== null,
+      )
       .sort((left, right) => {
         if (left.exactMatch !== right.exactMatch) {
           return left.exactMatch ? -1 : 1;
+        }
+        if (left.templateSectionExactMatch !== right.templateSectionExactMatch) {
+          return left.templateSectionExactMatch ? -1 : 1;
+        }
+        if (left.templateSectionFound !== right.templateSectionFound) {
+          return left.templateSectionFound ? -1 : 1;
         }
         const leftDistance = left.levenshteinDistance ?? Number.MAX_SAFE_INTEGER;
         const rightDistance = right.levenshteinDistance ?? Number.MAX_SAFE_INTEGER;
         if (leftDistance !== rightDistance) {
           return leftDistance - rightDistance;
+        }
+        const leftFullBodyDistance = left.fullBodyLevenshteinDistance ?? Number.MAX_SAFE_INTEGER;
+        const rightFullBodyDistance = right.fullBodyLevenshteinDistance ?? Number.MAX_SAFE_INTEGER;
+        if (leftFullBodyDistance !== rightFullBodyDistance) {
+          return leftFullBodyDistance - rightFullBodyDistance;
         }
         const leftUpdatedAt = left.thread.updatedAtGh ? Date.parse(left.thread.updatedAtGh) : 0;
         const rightUpdatedAt = right.thread.updatedAtGh ? Date.parse(right.thread.updatedAtGh) : 0;

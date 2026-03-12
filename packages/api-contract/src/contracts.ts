@@ -46,7 +46,12 @@ export const prTemplateMatchSchema = z.object({
   thread: threadSchema,
   exactMatch: z.boolean(),
   exactMatchOffset: z.number().int().nonnegative().nullable(),
+  templateSectionFound: z.boolean(),
+  templateSectionExactMatch: z.boolean(),
+  templateSectionStartOffset: z.number().int().nonnegative().nullable(),
+  templateSectionEndOffset: z.number().int().nonnegative().nullable(),
   levenshteinDistance: z.number().int().nonnegative().nullable(),
+  fullBodyLevenshteinDistance: z.number().int().nonnegative().nullable(),
   bodyLength: z.number().int().nonnegative(),
 });
 export type PrTemplateMatchDto = z.infer<typeof prTemplateMatchSchema>;
