@@ -23,6 +23,7 @@ type CommandName =
   | 'purge-comments'
   | 'embed'
   | 'cluster'
+  | 'cluster-experiment'
   | 'clusters'
   | 'cluster-detail'
   | 'search'
@@ -63,7 +64,13 @@ function usage(devMode = false): string {
     '  clusters reads the existing local cluster data and is intended to be fast.',
   ];
   if (devMode) {
-    lines.push('', 'Advanced Commands:', '  summarize <owner/repo> [--number <thread>] [--include-comments]', '  purge-comments <owner/repo> [--number <thread>]');
+    lines.push(
+      '',
+      'Advanced Commands:',
+      '  summarize <owner/repo> [--number <thread>] [--include-comments]',
+      '  purge-comments <owner/repo> [--number <thread>]',
+      '  cluster-experiment <owner/repo> [--backend vectorlite] [--k <count>] [--threshold <score>] [--candidate-k <count>]',
+    );
   }
   return `${lines.join('\n')}\n`;
 }
@@ -108,6 +115,8 @@ export function parseRepoFlags(args: string[]): { owner: string; repo: string; v
       query: { type: 'string' },
       mode: { type: 'string' },
       k: { type: 'string' },
+      backend: { type: 'string' },
+      'candidate-k': { type: 'string' },
       threshold: { type: 'string' },
       port: { type: 'string' },
       id: { type: 'string' },
@@ -429,6 +438,21 @@ export async function run(argv: string[], stdout: NodeJS.WritableStream = proces
           repo,
           k: typeof values.k === 'string' ? Number(values.k) : undefined,
           minScore: typeof values.threshold === 'string' ? Number(values.threshold) : undefined,
+          onProgress: writeProgress,
+        });
+        stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return;
+      }
+      case 'cluster-experiment': {
+        const { owner, repo, values } = parseRepoFlags(rest);
+        const backend = values.backend === 'vectorlite' ? values.backend : undefined;
+        const result = getService().clusterExperiment({
+          owner,
+          repo,
+          backend,
+          k: typeof values.k === 'string' ? Number(values.k) : undefined,
+          minScore: typeof values.threshold === 'string' ? Number(values.threshold) : undefined,
+          candidateK: typeof values['candidate-k'] === 'string' ? Number(values['candidate-k']) : undefined,
           onProgress: writeProgress,
         });
         stdout.write(`${JSON.stringify(result, null, 2)}\n`);

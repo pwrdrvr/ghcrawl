@@ -46,13 +46,14 @@
   },
   "dependencies": {
     "@ghcrawl/api-contract": "workspace:*",
-    "@shutterstock/p-map-iterable": "^1.1.2",
     "@octokit/plugin-retry": "^8.0.3",
     "@octokit/plugin-throttling": "^11.0.1",
-    "octokit": "^5.0.3",
+    "@shutterstock/p-map-iterable": "^1.1.2",
     "better-sqlite3": "^12.2.0",
     "dotenv": "^17.2.2",
+    "octokit": "^5.0.3",
     "openai": "^6.27.0",
+    "vectorlite": "^0.2.0",
     "zod": "^4.3.6"
   }
 }
