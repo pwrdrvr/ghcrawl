@@ -5,6 +5,10 @@ import {
   closeResponseSchema,
   closeThreadRequestSchema,
   authorThreadsResponseSchema,
+  repoUserDetailResponseSchema,
+  repoUserRefreshRequestSchema,
+  repoUserRefreshResponseSchema,
+  repoUsersResponseSchema,
   clusterDetailResponseSchema,
   clusterSummariesResponseSchema,
   clustersResponseSchema,
@@ -18,6 +22,10 @@ import {
   type ActionResponse,
   type CloseResponse,
   type AuthorThreadsResponse,
+  type RepoUserDetailResponse,
+  type RepoUserMode,
+  type RepoUserRefreshResponse,
+  type RepoUsersResponse,
   type ClusterDetailResponse,
   type ClusterSummariesResponse,
   type ClustersResponse,
@@ -35,6 +43,9 @@ export type GitcrawlClient = {
   listRepositories: () => Promise<RepositoriesResponse>;
   listThreads: (params: { owner: string; repo: string; kind?: 'issue' | 'pull_request'; numbers?: number[]; includeClosed?: boolean }) => Promise<ThreadsResponse>;
   listAuthorThreads: (params: { owner: string; repo: string; login: string; includeClosed?: boolean }) => Promise<AuthorThreadsResponse>;
+  listRepoUsers: (params: { owner: string; repo: string; mode: RepoUserMode; limit?: number; includeStale?: boolean }) => Promise<RepoUsersResponse>;
+  getRepoUserDetail: (params: { owner: string; repo: string; login: string }) => Promise<RepoUserDetailResponse>;
+  refreshRepoUser: (request: { owner: string; repo: string; login: string; force?: boolean }) => Promise<RepoUserRefreshResponse>;
   search: (params: { owner: string; repo: string; query: string; mode?: SearchMode }) => Promise<SearchResponse>;
   listClusters: (params: { owner: string; repo: string; includeClosed?: boolean }) => Promise<ClustersResponse>;
   listClusterSummaries: (params: {
@@ -96,6 +107,27 @@ export function createGitcrawlClient(baseUrl: string, fetchImpl: FetchLike = fet
       if (params.includeClosed) search.set('includeClosed', 'true');
       const res = await fetchImpl(`${normalized}/author-threads?${search.toString()}`);
       return readJson(res, authorThreadsResponseSchema);
+    },
+    async listRepoUsers(params) {
+      const search = new URLSearchParams({ owner: params.owner, repo: params.repo, mode: params.mode });
+      if (params.limit !== undefined) search.set('limit', String(params.limit));
+      if (params.includeStale !== undefined) search.set('includeStale', String(params.includeStale));
+      const res = await fetchImpl(`${normalized}/repo-users?${search.toString()}`);
+      return readJson(res, repoUsersResponseSchema);
+    },
+    async getRepoUserDetail(params) {
+      const search = new URLSearchParams({ owner: params.owner, repo: params.repo, login: params.login });
+      const res = await fetchImpl(`${normalized}/repo-user-detail?${search.toString()}`);
+      return readJson(res, repoUserDetailResponseSchema);
+    },
+    async refreshRepoUser(request) {
+      const body = repoUserRefreshRequestSchema.parse(request);
+      const res = await fetchImpl(`${normalized}/actions/refresh-user`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return readJson(res, repoUserRefreshResponseSchema);
     },
     async search(params) {
       const search = new URLSearchParams({

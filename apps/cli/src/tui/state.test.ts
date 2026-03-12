@@ -35,7 +35,7 @@ test('cycleFocusPane moves forward and backward', () => {
 
 test('getScreenDefinition exposes route metadata for future screens', () => {
   assert.equal(getScreenDefinition('clusters').label, 'Clusters Explorer');
-  assert.equal(getScreenDefinition('users').focusOrder[0], 'detail');
+  assert.equal(getScreenDefinition('users').focusOrder[0], 'clusters');
 });
 
 test('applyClusterFilters sorts by recent and size and respects min size/search', () => {

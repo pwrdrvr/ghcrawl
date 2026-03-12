@@ -17,6 +17,10 @@ import {
   embedResultSchema,
   healthResponseSchema,
   neighborsResponseSchema,
+  repoUserDetailResponseSchema,
+  repoUserModeSchema,
+  repoUserRefreshResponseSchema,
+  repoUsersResponseSchema,
   refreshResponseSchema,
   repositoriesResponseSchema,
   searchResponseSchema,
@@ -34,6 +38,10 @@ import {
   type EmbedResultDto,
   type HealthResponse,
   type NeighborsResponse,
+  type RepoUserDetailResponse,
+  type RepoUserMode,
+  type RepoUserRefreshResponse,
+  type RepoUsersResponse,
   type RefreshResponse,
   type RepositoriesResponse,
   type RepositoryDto,
@@ -78,11 +86,57 @@ type ThreadRow = {
   title: string;
   body: string | null;
   author_login: string | null;
+  author_type: string | null;
   html_url: string;
   labels_json: string;
+  raw_json: string;
+  is_draft: number;
+  created_at_gh: string | null;
   updated_at_gh: string | null;
+  merged_at_gh: string | null;
+  files_changed: number | null;
+  additions: number | null;
+  deletions: number | null;
   first_pulled_at: string | null;
   last_pulled_at: string | null;
+};
+
+type UserRow = {
+  login: string;
+  github_user_id: string | null;
+  account_created_at: string | null;
+  public_repo_count: number | null;
+  public_gist_count: number | null;
+  followers: number | null;
+  following: number | null;
+  profile_url: string | null;
+  avatar_url: string | null;
+  user_type: string | null;
+  recent_public_event_count: number | null;
+  likely_hidden_activity: number;
+  reputation_tier: 'low' | 'medium' | 'high' | 'unknown';
+  reputation_reason_json: string;
+  last_global_refresh_at: string | null;
+  last_refresh_error: string | null;
+  updated_at: string;
+};
+
+type RepoUserStateRow = {
+  repo_id: number;
+  user_login: string;
+  last_repo_refresh_at: string | null;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  last_refresh_error: string | null;
+  updated_at: string;
+};
+
+type RepoUserAggregateRow = {
+  user_login: string;
+  open_issue_count: number;
+  open_pull_request_count: number;
+  waiting_pull_request_count: number;
+  oldest_open_pr_created_at: string | null;
 };
 
 type CommentSeed = {
@@ -227,6 +281,9 @@ export type TuiSnapshot = {
   clusters: TuiClusterSummary[];
 };
 
+export type RepoUserReputationTier = 'low' | 'medium' | 'high' | 'unknown';
+export type RepoUserExplorerMode = RepoUserMode;
+
 export type DoctorResult = {
   health: HealthResponse;
   github: {
@@ -268,6 +325,7 @@ const EMBED_ESTIMATED_CHARS_PER_TOKEN = 3;
 const EMBED_MAX_ITEM_TOKENS = 7000;
 const EMBED_MAX_BATCH_TOKENS = 250000;
 const EMBED_TRUNCATION_MARKER = '\n\n[truncated for embedding]';
+const USER_REFRESH_STALE_MS = 30 * 24 * 60 * 60 * 1000;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -277,6 +335,25 @@ function parseIso(value: string | null | undefined): number | null {
   if (!value) return null;
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? null : parsed;
+}
+
+function parseNullableInteger(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
+  }
+  return Math.max(0, Math.trunc(value));
+}
+
+function ageDaysFrom(value: string | null | undefined, now: Date = new Date()): number | null {
+  const parsed = parseIso(value);
+  if (parsed === null) return null;
+  return Math.max(0, Math.floor((now.getTime() - parsed) / (24 * 60 * 60 * 1000)));
+}
+
+function isStaleAt(lastRefreshAt: string | null | undefined, now: Date = new Date()): boolean {
+  const parsed = parseIso(lastRefreshAt);
+  if (parsed === null) return true;
+  return now.getTime() - parsed > USER_REFRESH_STALE_MS;
 }
 
 function isEffectivelyClosed(row: { state: string; closed_at_local: string | null }): boolean {
@@ -345,6 +422,101 @@ function userType(payload: Record<string, unknown>): string | null {
   const user = payload.user as Record<string, unknown> | undefined;
   const type = user?.type;
   return typeof type === 'string' ? type : null;
+}
+
+function normalizeLogin(login: string | null | undefined): string | null {
+  const normalized = (login ?? '').trim().toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function parseReasonArray(value: string | null | undefined): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function parsePullFilesChanged(payload: Record<string, unknown>): number | null {
+  return parseNullableInteger(payload.changed_files ?? payload.files_changed);
+}
+
+function buildReputationProfile(params: {
+  user: UserRow | null;
+  aggregate: RepoUserAggregateRow;
+  repoState: RepoUserStateRow | null;
+  now?: Date;
+}): {
+  reputationTier: RepoUserReputationTier;
+  likelyHiddenActivity: boolean;
+  reasons: string[];
+  accountAgeDays: number | null;
+  isStale: boolean;
+  lastRefreshError: string | null;
+} {
+  const now = params.now ?? new Date();
+  const accountAgeDays = ageDaysFrom(params.user?.account_created_at ?? null, now);
+  const isStale = isStaleAt(params.user?.last_global_refresh_at ?? null, now);
+  const sparsePublicFootprint =
+    (params.user?.public_repo_count ?? 0) <= 1 &&
+    (params.user?.public_gist_count ?? 0) === 0 &&
+    (params.user?.followers ?? 0) <= 1;
+  const strongRepoEvidence =
+    params.aggregate.open_pull_request_count >= 2 ||
+    params.aggregate.open_issue_count + params.aggregate.open_pull_request_count >= 4;
+  const likelyHiddenActivity =
+    Boolean(params.user) &&
+    (accountAgeDays ?? 0) >= 90 &&
+    sparsePublicFootprint &&
+    (params.aggregate.open_issue_count + params.aggregate.open_pull_request_count) >= 3 &&
+    (params.user?.recent_public_event_count ?? 0) === 0;
+
+  if (!params.user || params.user.last_refresh_error) {
+    return {
+      reputationTier: 'unknown',
+      likelyHiddenActivity,
+      reasons: params.user?.last_refresh_error ? [params.user.last_refresh_error] : ['profile not refreshed yet'],
+      accountAgeDays,
+      isStale: true,
+      lastRefreshError: params.user?.last_refresh_error ?? params.repoState?.last_refresh_error ?? null,
+    };
+  }
+
+  const reasons: string[] = [];
+  let reputationTier: RepoUserReputationTier = 'medium';
+  if (accountAgeDays !== null && accountAgeDays < 90) {
+    reputationTier = 'low';
+    reasons.push(`new account (${accountAgeDays}d old)`);
+  } else if (sparsePublicFootprint && !strongRepoEvidence) {
+    reputationTier = 'low';
+    reasons.push('very sparse public footprint');
+  } else if (
+    (accountAgeDays ?? 0) >= 365 &&
+    ((params.user.public_repo_count ?? 0) >= 10 || (params.user.followers ?? 0) >= 10 || (params.user.public_gist_count ?? 0) >= 5)
+  ) {
+    reputationTier = 'high';
+    reasons.push('established public contribution history');
+  } else {
+    reasons.push('moderate public footprint');
+  }
+
+  if (likelyHiddenActivity) {
+    reasons.push('likely hidden or sparse public activity relative to repo participation');
+  }
+  if (strongRepoEvidence) {
+    reasons.push('strong repo-local participation');
+  }
+
+  return {
+    reputationTier,
+    likelyHiddenActivity,
+    reasons,
+    accountAgeDays,
+    isStale,
+    lastRefreshError: params.user.last_refresh_error ?? params.repoState?.last_refresh_error ?? null,
+  };
 }
 
 function isPullRequestPayload(payload: Record<string, unknown>): boolean {
@@ -680,6 +852,179 @@ export class GHCrawlService {
         strongestSameAuthorMatch: strongestByThread.get(row.id) ?? null,
       })),
     });
+  }
+
+  listRepoUsers(params: { owner: string; repo: string; mode: RepoUserMode; limit?: number; includeStale?: boolean }): RepoUsersResponse {
+    const repository = this.requireRepository(params.owner, params.repo);
+    const mode = repoUserModeSchema.parse(params.mode);
+    const includeStale = params.includeStale ?? true;
+    const aggregateRows = this.listRepoUserAggregates(repository.id);
+    const decorated = aggregateRows
+      .map((aggregate) => this.buildRepoUserSummaryRecord(repository.id, aggregate))
+      .filter((record) => this.matchesRepoUserMode(record.summary, mode, includeStale));
+
+    decorated.sort((left, right) => {
+      if (mode === 'trusted_prs') {
+        return (
+          right.summary.waitingPullRequestCount - left.summary.waitingPullRequestCount ||
+          (parseIso(left.oldestOpenPrCreatedAt) ?? Number.POSITIVE_INFINITY) - (parseIso(right.oldestOpenPrCreatedAt) ?? Number.POSITIVE_INFINITY) ||
+          left.summary.login.localeCompare(right.summary.login)
+        );
+      }
+      return (
+        right.summary.openIssueCount - left.summary.openIssueCount ||
+        right.summary.openPullRequestCount - left.summary.openPullRequestCount ||
+        (parseIso(left.firstSeenAt) ?? Number.POSITIVE_INFINITY) - (parseIso(right.firstSeenAt) ?? Number.POSITIVE_INFINITY) ||
+        left.summary.login.localeCompare(right.summary.login)
+      );
+    });
+
+    const limited = params.limit && params.limit > 0 ? decorated.slice(0, params.limit) : decorated;
+    const totals = decorated.reduce(
+      (accumulator, record) => ({
+        matchingUserCount: accumulator.matchingUserCount + 1,
+        openIssueCount: accumulator.openIssueCount + record.summary.openIssueCount,
+        openPullRequestCount: accumulator.openPullRequestCount + record.summary.openPullRequestCount,
+        waitingPullRequestCount: accumulator.waitingPullRequestCount + record.summary.waitingPullRequestCount,
+      }),
+      { matchingUserCount: 0, openIssueCount: 0, openPullRequestCount: 0, waitingPullRequestCount: 0 },
+    );
+
+    return repoUsersResponseSchema.parse({
+      repository,
+      mode,
+      totals,
+      users: limited.map((record) => record.summary),
+    });
+  }
+
+  getRepoUserDetail(params: { owner: string; repo: string; login: string }): RepoUserDetailResponse {
+    const repository = this.requireRepository(params.owner, params.repo);
+    const normalizedLogin = normalizeLogin(params.login);
+    if (!normalizedLogin) {
+      throw new Error('Missing login');
+    }
+
+    const aggregate = this.getRepoUserAggregate(repository.id, normalizedLogin);
+    if (!aggregate) {
+      throw new Error(`User ${normalizedLogin} has no open threads in ${repository.fullName}.`);
+    }
+
+    const profile = this.buildRepoUserProfileDto(repository.id, normalizedLogin, aggregate);
+    const issueRows = this.listRepoUserThreads(repository.id, normalizedLogin, 'issue');
+    const pullRequestRows = this.listRepoUserThreads(repository.id, normalizedLogin, 'pull_request');
+
+    return repoUserDetailResponseSchema.parse({
+      repository,
+      profile,
+      totals: {
+        matchingUserCount: 1,
+        openIssueCount: aggregate.open_issue_count,
+        openPullRequestCount: aggregate.open_pull_request_count,
+        waitingPullRequestCount: aggregate.waiting_pull_request_count,
+      },
+      issues: issueRows.map((row) => this.repoUserThreadToDto(row)),
+      pullRequests: pullRequestRows.map((row) => this.repoUserThreadToDto(row)),
+    });
+  }
+
+  async refreshRepoUser(params: { owner: string; repo: string; login: string; force?: boolean }): Promise<RepoUserRefreshResponse> {
+    const repository = this.requireRepository(params.owner, params.repo);
+    const normalizedLogin = normalizeLogin(params.login);
+    if (!normalizedLogin) {
+      throw new Error('Missing login');
+    }
+
+    const aggregate = this.getRepoUserAggregate(repository.id, normalizedLogin);
+    if (!aggregate) {
+      throw new Error(`User ${normalizedLogin} has no open threads in ${repository.fullName}.`);
+    }
+
+    const existing = this.getUserRow(normalizedLogin);
+    if (params.force !== true && existing && !isStaleAt(existing.last_global_refresh_at) && !existing.last_refresh_error) {
+      return repoUserRefreshResponseSchema.parse({
+        ok: true,
+        repository,
+        login: normalizedLogin,
+        refreshedAt: existing.last_global_refresh_at ?? nowIso(),
+        profile: this.buildRepoUserProfileDto(repository.id, normalizedLogin, aggregate),
+      });
+    }
+
+    const github = this.requireGithub();
+    if (!github.getUser || !github.listUserPublicEvents) {
+      throw new Error('GitHub client does not support user refresh methods.');
+    }
+
+    const refreshedAt = nowIso();
+    try {
+      const payload = await github.getUser(normalizedLogin);
+      const events = await github.listUserPublicEvents(normalizedLogin);
+      const profileRow: UserRow = {
+        login: normalizedLogin,
+        github_user_id: payload.id != null ? String(payload.id) : null,
+        account_created_at: typeof payload.created_at === 'string' ? payload.created_at : null,
+        public_repo_count: parseNullableInteger(payload.public_repos),
+        public_gist_count: parseNullableInteger(payload.public_gists),
+        followers: parseNullableInteger(payload.followers),
+        following: parseNullableInteger(payload.following),
+        profile_url: typeof payload.html_url === 'string' ? payload.html_url : null,
+        avatar_url: typeof payload.avatar_url === 'string' ? payload.avatar_url : null,
+        user_type: typeof payload.type === 'string' ? payload.type : null,
+        recent_public_event_count: Array.isArray(events) ? events.length : 0,
+        likely_hidden_activity: 0,
+        reputation_tier: 'unknown',
+        reputation_reason_json: '[]',
+        last_global_refresh_at: refreshedAt,
+        last_refresh_error: null,
+        updated_at: refreshedAt,
+      };
+      const repoState = this.getRepoUserStateRow(repository.id, normalizedLogin);
+      const classification = buildReputationProfile({ user: profileRow, aggregate, repoState });
+      profileRow.likely_hidden_activity = classification.likelyHiddenActivity ? 1 : 0;
+      profileRow.reputation_tier = classification.reputationTier;
+      profileRow.reputation_reason_json = asJson(classification.reasons);
+
+      this.upsertUserRow(profileRow);
+      this.upsertRepoUserRefreshState(repository.id, normalizedLogin, {
+        lastRepoRefreshAt: refreshedAt,
+        lastRefreshError: null,
+      });
+
+      return repoUserRefreshResponseSchema.parse({
+        ok: true,
+        repository,
+        login: normalizedLogin,
+        refreshedAt,
+        profile: this.buildRepoUserProfileDto(repository.id, normalizedLogin, aggregate),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.upsertUserRow({
+        login: normalizedLogin,
+        github_user_id: existing?.github_user_id ?? null,
+        account_created_at: existing?.account_created_at ?? null,
+        public_repo_count: existing?.public_repo_count ?? null,
+        public_gist_count: existing?.public_gist_count ?? null,
+        followers: existing?.followers ?? null,
+        following: existing?.following ?? null,
+        profile_url: existing?.profile_url ?? null,
+        avatar_url: existing?.avatar_url ?? null,
+        user_type: existing?.user_type ?? null,
+        recent_public_event_count: existing?.recent_public_event_count ?? null,
+        likely_hidden_activity: existing?.likely_hidden_activity ?? 0,
+        reputation_tier: existing?.reputation_tier ?? 'unknown',
+        reputation_reason_json: existing?.reputation_reason_json ?? '[]',
+        last_global_refresh_at: existing?.last_global_refresh_at ?? null,
+        last_refresh_error: message,
+        updated_at: refreshedAt,
+      });
+      this.upsertRepoUserRefreshState(repository.id, normalizedLogin, {
+        lastRepoRefreshAt: this.getRepoUserStateRow(repository.id, normalizedLogin)?.last_repo_refresh_at ?? null,
+        lastRefreshError: message,
+      });
+      throw new Error(`Failed to refresh ${normalizedLogin}: ${message}`);
+    }
   }
 
   closeThreadLocally(params: { owner: string; repo: string; threadNumber: number }): CloseResponse {
@@ -2171,11 +2516,249 @@ export class GHCrawlService {
     return comments;
   }
 
+  private listRepoUserAggregates(repoId: number): RepoUserAggregateRow[] {
+    return this.db
+      .prepare(
+        `select
+            lower(author_login) as user_login,
+            sum(case when kind = 'issue' then 1 else 0 end) as open_issue_count,
+            sum(case when kind = 'pull_request' then 1 else 0 end) as open_pull_request_count,
+            sum(case when kind = 'pull_request' then 1 else 0 end) as waiting_pull_request_count,
+            min(case when kind = 'pull_request' then created_at_gh end) as oldest_open_pr_created_at
+         from threads
+         where repo_id = ?
+           and author_login is not null
+           and trim(author_login) != ''
+           and state = 'open'
+           and closed_at_local is null
+         group by lower(author_login)`,
+      )
+      .all(repoId) as RepoUserAggregateRow[];
+  }
+
+  private getRepoUserAggregate(repoId: number, login: string): RepoUserAggregateRow | null {
+    return (
+      (this.db
+        .prepare(
+          `select
+              lower(author_login) as user_login,
+              sum(case when kind = 'issue' then 1 else 0 end) as open_issue_count,
+              sum(case when kind = 'pull_request' then 1 else 0 end) as open_pull_request_count,
+              sum(case when kind = 'pull_request' then 1 else 0 end) as waiting_pull_request_count,
+              min(case when kind = 'pull_request' then created_at_gh end) as oldest_open_pr_created_at
+           from threads
+           where repo_id = ?
+             and lower(author_login) = ?
+             and state = 'open'
+             and closed_at_local is null
+           group by lower(author_login)`,
+        )
+        .get(repoId, login) as RepoUserAggregateRow | undefined) ?? null
+    );
+  }
+
+  private getUserRow(login: string): UserRow | null {
+    return ((this.db.prepare('select * from users where login = ? limit 1').get(login) as UserRow | undefined) ?? null);
+  }
+
+  private getRepoUserStateRow(repoId: number, login: string): RepoUserStateRow | null {
+    return (
+      (this.db
+        .prepare('select * from repo_user_state where repo_id = ? and user_login = ? limit 1')
+        .get(repoId, login) as RepoUserStateRow | undefined) ?? null
+    );
+  }
+
+  private upsertUserRow(row: UserRow): void {
+    this.db
+      .prepare(
+        `insert into users (
+            login, github_user_id, account_created_at, public_repo_count, public_gist_count, followers, following,
+            profile_url, avatar_url, user_type, recent_public_event_count, likely_hidden_activity, reputation_tier,
+            reputation_reason_json, last_global_refresh_at, last_refresh_error, updated_at
+         ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         on conflict(login) do update set
+           github_user_id = excluded.github_user_id,
+           account_created_at = excluded.account_created_at,
+           public_repo_count = excluded.public_repo_count,
+           public_gist_count = excluded.public_gist_count,
+           followers = excluded.followers,
+           following = excluded.following,
+           profile_url = excluded.profile_url,
+           avatar_url = excluded.avatar_url,
+           user_type = excluded.user_type,
+           recent_public_event_count = excluded.recent_public_event_count,
+           likely_hidden_activity = excluded.likely_hidden_activity,
+           reputation_tier = excluded.reputation_tier,
+           reputation_reason_json = excluded.reputation_reason_json,
+           last_global_refresh_at = excluded.last_global_refresh_at,
+           last_refresh_error = excluded.last_refresh_error,
+           updated_at = excluded.updated_at`,
+      )
+      .run(
+        row.login,
+        row.github_user_id,
+        row.account_created_at,
+        row.public_repo_count,
+        row.public_gist_count,
+        row.followers,
+        row.following,
+        row.profile_url,
+        row.avatar_url,
+        row.user_type,
+        row.recent_public_event_count,
+        row.likely_hidden_activity,
+        row.reputation_tier,
+        row.reputation_reason_json,
+        row.last_global_refresh_at,
+        row.last_refresh_error,
+        row.updated_at,
+      );
+  }
+
+  private upsertRepoUserRefreshState(repoId: number, login: string, params: { lastRepoRefreshAt: string | null; lastRefreshError: string | null }): void {
+    const now = nowIso();
+    this.db
+      .prepare(
+        `insert into repo_user_state (repo_id, user_login, last_repo_refresh_at, first_seen_at, last_seen_at, last_refresh_error, updated_at)
+         values (?, ?, ?, null, null, ?, ?)
+         on conflict(repo_id, user_login) do update set
+           last_repo_refresh_at = excluded.last_repo_refresh_at,
+           last_refresh_error = excluded.last_refresh_error,
+           updated_at = excluded.updated_at`,
+      )
+      .run(repoId, login, params.lastRepoRefreshAt, params.lastRefreshError, now);
+  }
+
+  private buildRepoUserSummaryRecord(repoId: number, aggregate: RepoUserAggregateRow): {
+    summary: RepoUsersResponse['users'][number];
+    firstSeenAt: string | null;
+    oldestOpenPrCreatedAt: string | null;
+  } {
+    const user = this.getUserRow(aggregate.user_login);
+    const repoState = this.getRepoUserStateRow(repoId, aggregate.user_login);
+    const classification = buildReputationProfile({ user, aggregate, repoState });
+    return {
+      summary: {
+        login: aggregate.user_login,
+        reputationTier: classification.reputationTier,
+        likelyHiddenActivity: classification.likelyHiddenActivity,
+        isStale: classification.isStale,
+        lastRefreshedAt: user?.last_global_refresh_at ?? null,
+        lastRefreshError: classification.lastRefreshError,
+        accountCreatedAt: user?.account_created_at ?? null,
+        accountAgeDays: classification.accountAgeDays,
+        openIssueCount: aggregate.open_issue_count,
+        openPullRequestCount: aggregate.open_pull_request_count,
+        waitingPullRequestCount: aggregate.waiting_pull_request_count,
+        matchedLowReputation: classification.reputationTier === 'low',
+        matchedLikelyHiddenActivity: classification.likelyHiddenActivity,
+        reasons: classification.reasons,
+      },
+      firstSeenAt: repoState?.first_seen_at ?? null,
+      oldestOpenPrCreatedAt: aggregate.oldest_open_pr_created_at,
+    };
+  }
+
+  private buildRepoUserProfileDto(repoId: number, login: string, aggregate: RepoUserAggregateRow): RepoUserDetailResponse['profile'] {
+    const user = this.getUserRow(login);
+    const repoState = this.getRepoUserStateRow(repoId, login);
+    const classification = buildReputationProfile({ user, aggregate, repoState });
+    return {
+      login,
+      githubUserId: user?.github_user_id ?? null,
+      profileUrl: user?.profile_url ?? `https://github.com/${login}`,
+      avatarUrl: user?.avatar_url ?? null,
+      userType: user?.user_type ?? null,
+      accountCreatedAt: user?.account_created_at ?? null,
+      accountAgeDays: classification.accountAgeDays,
+      publicRepoCount: user?.public_repo_count ?? null,
+      publicGistCount: user?.public_gist_count ?? null,
+      followers: user?.followers ?? null,
+      following: user?.following ?? null,
+      recentPublicEventCount: user?.recent_public_event_count ?? null,
+      reputationTier: classification.reputationTier,
+      likelyHiddenActivity: classification.likelyHiddenActivity,
+      isStale: classification.isStale,
+      lastGlobalRefreshAt: user?.last_global_refresh_at ?? null,
+      lastRepoRefreshAt: repoState?.last_repo_refresh_at ?? null,
+      lastRefreshError: classification.lastRefreshError,
+      firstSeenAt: repoState?.first_seen_at ?? null,
+      lastSeenAt: repoState?.last_seen_at ?? null,
+      reasons: classification.reasons,
+    };
+  }
+
+  private matchesRepoUserMode(summary: RepoUsersResponse['users'][number], mode: RepoUserMode, includeStale: boolean): boolean {
+    if (mode === 'trusted_prs') {
+      return summary.reputationTier === 'high' && summary.waitingPullRequestCount > 0;
+    }
+    if (summary.matchedLowReputation || summary.matchedLikelyHiddenActivity) {
+      return true;
+    }
+    return includeStale && (summary.reputationTier === 'unknown' || summary.isStale);
+  }
+
+  private listRepoUserThreads(repoId: number, login: string, kind: 'issue' | 'pull_request'): ThreadRow[] {
+    return this.db
+      .prepare(
+        `select *
+         from threads
+         where repo_id = ?
+           and lower(author_login) = ?
+           and kind = ?
+           and state = 'open'
+           and closed_at_local is null
+         order by
+           case when kind = 'pull_request' then coalesce(created_at_gh, updated_at_gh, updated_at) end asc,
+           coalesce(updated_at_gh, updated_at) desc,
+           number desc`,
+      )
+      .all(repoId, login, kind) as ThreadRow[];
+  }
+
+  private repoUserThreadToDto(row: ThreadRow): RepoUserDetailResponse['issues'][number] {
+    return {
+      threadId: row.id,
+      number: row.number,
+      kind: row.kind,
+      title: row.title,
+      htmlUrl: row.html_url,
+      state: row.state,
+      isDraft: row.is_draft === 1,
+      createdAtGh: row.created_at_gh ?? null,
+      updatedAtGh: row.updated_at_gh ?? null,
+      ageDays: ageDaysFrom(row.created_at_gh ?? row.updated_at_gh ?? null),
+      filesChanged: row.files_changed ?? null,
+      additions: row.additions ?? null,
+      deletions: row.deletions ?? null,
+    };
+  }
+
   private requireAi(): AiProvider {
     if (!this.ai) {
       requireOpenAiKey(this.config);
     }
     return this.ai as AiProvider;
+  }
+
+  private touchRepoUserState(repoId: number, login: string | null | undefined, seenAt: string): void {
+    const normalizedLogin = normalizeLogin(login);
+    if (!normalizedLogin) return;
+    this.db
+      .prepare(
+        `insert into repo_user_state (repo_id, user_login, last_repo_refresh_at, first_seen_at, last_seen_at, last_refresh_error, updated_at)
+         values (?, ?, null, ?, ?, null, ?)
+         on conflict(repo_id, user_login) do update set
+           first_seen_at = coalesce(repo_user_state.first_seen_at, excluded.first_seen_at),
+           last_seen_at = case
+             when repo_user_state.last_seen_at is null then excluded.last_seen_at
+             when repo_user_state.last_seen_at < excluded.last_seen_at then excluded.last_seen_at
+             else repo_user_state.last_seen_at
+           end,
+           updated_at = excluded.updated_at`,
+      )
+      .run(repoId, normalizedLogin, seenAt, seenAt, seenAt);
   }
 
   private requireGithub(): GitHubClient {
@@ -2226,8 +2809,9 @@ export class GHCrawlService {
         `insert into threads (
             repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
             labels_json, assignees_json, raw_json, content_hash, is_draft,
-            created_at_gh, updated_at_gh, closed_at_gh, merged_at_gh, first_pulled_at, last_pulled_at, updated_at
-          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            created_at_gh, updated_at_gh, closed_at_gh, merged_at_gh, files_changed, additions, deletions,
+            first_pulled_at, last_pulled_at, updated_at
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           on conflict(repo_id, kind, number) do update set
             github_id = excluded.github_id,
             state = excluded.state,
@@ -2245,6 +2829,9 @@ export class GHCrawlService {
             updated_at_gh = excluded.updated_at_gh,
             closed_at_gh = excluded.closed_at_gh,
             merged_at_gh = excluded.merged_at_gh,
+            files_changed = excluded.files_changed,
+            additions = excluded.additions,
+            deletions = excluded.deletions,
             last_pulled_at = excluded.last_pulled_at,
             updated_at = excluded.updated_at`,
       )
@@ -2268,6 +2855,9 @@ export class GHCrawlService {
         typeof payload.updated_at === 'string' ? payload.updated_at : null,
         typeof payload.closed_at === 'string' ? payload.closed_at : null,
         typeof payload.merged_at === 'string' ? payload.merged_at : null,
+        parsePullFilesChanged(payload),
+        parseNullableInteger(payload.additions),
+        parseNullableInteger(payload.deletions),
         pulledAt,
         pulledAt,
         nowIso(),
@@ -2275,6 +2865,7 @@ export class GHCrawlService {
     const row = this.db
       .prepare('select id from threads where repo_id = ? and kind = ? and number = ?')
       .get(repoId, kind, Number(payload.number)) as { id: number };
+    this.touchRepoUserState(repoId, userLogin(payload), pulledAt);
     return row.id;
   }
 
@@ -2336,6 +2927,9 @@ export class GHCrawlService {
                updated_at_gh = ?,
                closed_at_gh = ?,
                merged_at_gh = ?,
+               files_changed = ?,
+               additions = ?,
+               deletions = ?,
                last_pulled_at = ?,
                updated_at = ?
            where id = ?`,
@@ -2346,6 +2940,9 @@ export class GHCrawlService {
           typeof payload.updated_at === 'string' ? payload.updated_at : null,
           typeof payload.closed_at === 'string' ? payload.closed_at : null,
           typeof payload.merged_at === 'string' ? payload.merged_at : null,
+          parsePullFilesChanged(payload),
+          parseNullableInteger(payload.additions),
+          parseNullableInteger(payload.deletions),
           pulledAt,
           pulledAt,
           staleRow.id,
@@ -2425,6 +3022,9 @@ export class GHCrawlService {
                  updated_at_gh = ?,
                  closed_at_gh = ?,
                  merged_at_gh = ?,
+                 files_changed = ?,
+                 additions = ?,
+                 deletions = ?,
                  last_pulled_at = ?,
                  updated_at = ?
              where id = ?`,
@@ -2435,6 +3035,9 @@ export class GHCrawlService {
             typeof payload.updated_at === 'string' ? payload.updated_at : null,
             typeof payload.closed_at === 'string' ? payload.closed_at : null,
             typeof payload.merged_at === 'string' ? payload.merged_at : null,
+            parsePullFilesChanged(payload),
+            parseNullableInteger(payload.additions),
+            parseNullableInteger(payload.deletions),
             pulledAt,
             pulledAt,
             row.id,

@@ -28,7 +28,7 @@ export const TUI_SCREEN_DEFINITIONS: Record<TuiScreenId, TuiScreenDefinition> = 
     id: 'users',
     label: 'User Explorer',
     description: 'Author-centric explorer for future user workflows.',
-    focusOrder: ['detail'],
+    focusOrder: FOCUS_PANE_ORDER,
   },
 };
 

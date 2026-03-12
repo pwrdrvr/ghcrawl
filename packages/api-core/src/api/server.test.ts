@@ -1,7 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { authorThreadsResponseSchema, closeResponseSchema, clusterDetailResponseSchema, clusterSummariesResponseSchema, healthResponseSchema, neighborsResponseSchema, threadsResponseSchema } from '@ghcrawl/api-contract';
+import {
+  authorThreadsResponseSchema,
+  closeResponseSchema,
+  clusterDetailResponseSchema,
+  clusterSummariesResponseSchema,
+  healthResponseSchema,
+  neighborsResponseSchema,
+  repoUserDetailResponseSchema,
+  repoUserRefreshResponseSchema,
+  repoUsersResponseSchema,
+  threadsResponseSchema,
+} from '@ghcrawl/api-contract';
 
 import { createApiServer } from './server.js';
 import { GHCrawlService } from '../service.js';
@@ -290,6 +301,199 @@ test('author-threads endpoint returns one author with strongest same-author matc
     assert.equal(payload.authorLogin, 'lqquan');
     assert.deepEqual(payload.threads.map((item) => item.thread.number), [43, 42]);
     assert.equal(payload.threads[0]?.strongestSameAuthorMatch?.number, 42);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    service.close();
+  }
+});
+
+test('repo user endpoints expose summaries, detail, and refresh', async () => {
+  const service = new GHCrawlService({
+    config: {
+      workspaceRoot: process.cwd(),
+      configDir: '/tmp/ghcrawl-test',
+      configPath: '/tmp/ghcrawl-test/config.json',
+      configFileExists: true,
+      dbPath: ':memory:',
+      dbPathSource: 'config',
+      apiPort: 5179,
+      secretProvider: 'plaintext',
+      githubTokenSource: 'none',
+      openaiApiKeySource: 'none',
+      summaryModel: 'gpt-5-mini',
+      embedModel: 'text-embedding-3-large',
+      embedBatchSize: 8,
+      embedConcurrency: 10,
+      embedMaxUnread: 20,
+      openSearchIndex: 'ghcrawl-threads',
+      tuiPreferences: {},
+    },
+    github: {
+      checkAuth: async () => undefined,
+      getRepo: async () => ({}),
+      listRepositoryIssues: async () => [],
+      getIssue: async () => ({}),
+      getPull: async () => ({}),
+      listIssueComments: async () => [],
+      listPullReviews: async () => [],
+      listPullReviewComments: async () => [],
+      getUser: async () => ({
+        id: 42,
+        login: 'alice',
+        created_at: '2024-01-01T00:00:00Z',
+        public_repos: 12,
+        public_gists: 1,
+        followers: 11,
+        following: 2,
+        html_url: 'https://github.com/alice',
+        avatar_url: 'https://avatars.githubusercontent.com/u/42?v=4',
+        type: 'User',
+      }),
+      listUserPublicEvents: async () => [{ id: 'evt-1' }, { id: 'evt-2' }],
+    },
+  });
+
+  const now = '2026-03-09T00:00:00Z';
+  service.db
+    .prepare(
+      `insert into repositories (id, owner, name, full_name, github_repo_id, raw_json, updated_at)
+       values (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '1', '{}', now);
+  service.db
+    .prepare(
+      `insert into threads (
+        id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
+        labels_json, assignees_json, raw_json, content_hash, is_draft, created_at_gh, updated_at_gh, closed_at_gh,
+        merged_at_gh, files_changed, additions, deletions, first_pulled_at, last_pulled_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      10,
+      1,
+      '100',
+      42,
+      'issue',
+      'open',
+      'Downloader hangs',
+      'The transfer never finishes.',
+      'alice',
+      'User',
+      'https://github.com/openclaw/openclaw/issues/42',
+      '[]',
+      '[]',
+      '{}',
+      'hash-42',
+      0,
+      now,
+      now,
+      null,
+      null,
+      null,
+      null,
+      null,
+      now,
+      now,
+      now,
+    );
+  service.db
+    .prepare(
+      `insert into threads (
+        id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
+        labels_json, assignees_json, raw_json, content_hash, is_draft, created_at_gh, updated_at_gh, closed_at_gh,
+        merged_at_gh, files_changed, additions, deletions, first_pulled_at, last_pulled_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      11,
+      1,
+      '101',
+      43,
+      'pull_request',
+      'open',
+      'Fix downloader hang',
+      'Implements a fix.',
+      'alice',
+      'User',
+      'https://github.com/openclaw/openclaw/pull/43',
+      '[]',
+      '[]',
+      '{}',
+      'hash-43',
+      0,
+      '2026-02-20T00:00:00Z',
+      now,
+      null,
+      null,
+      4,
+      120,
+      30,
+      now,
+      now,
+      now,
+    );
+  service.db
+    .prepare(
+      `insert into users (
+        login, github_user_id, account_created_at, public_repo_count, public_gist_count, followers, following,
+        profile_url, avatar_url, user_type, recent_public_event_count, likely_hidden_activity, reputation_tier,
+        reputation_reason_json, last_global_refresh_at, last_refresh_error, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      'alice',
+      '42',
+      '2024-01-01T00:00:00Z',
+      12,
+      1,
+      11,
+      2,
+      'https://github.com/alice',
+      'https://avatars.githubusercontent.com/u/42?v=4',
+      'User',
+      2,
+      0,
+      'high',
+      '["established public contribution history"]',
+      now,
+      null,
+      now,
+    );
+  service.db
+    .prepare(
+      `insert into repo_user_state (repo_id, user_login, last_repo_refresh_at, first_seen_at, last_seen_at, last_refresh_error, updated_at)
+       values (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(1, 'alice', now, now, now, null, now);
+
+  const server = createApiServer(service);
+  try {
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert(address && typeof address === 'object');
+
+    const listResponse = await fetch(
+      `http://127.0.0.1:${address.port}/repo-users?owner=openclaw&repo=openclaw&mode=trusted_prs`,
+    );
+    assert.equal(listResponse.status, 200);
+    const listPayload = repoUsersResponseSchema.parse((await listResponse.json()) as unknown);
+    assert.equal(listPayload.users[0]?.login, 'alice');
+
+    const detailResponse = await fetch(
+      `http://127.0.0.1:${address.port}/repo-user-detail?owner=openclaw&repo=openclaw&login=alice`,
+    );
+    assert.equal(detailResponse.status, 200);
+    const detailPayload = repoUserDetailResponseSchema.parse((await detailResponse.json()) as unknown);
+    assert.equal(detailPayload.pullRequests[0]?.filesChanged, 4);
+
+    const refreshResponse = await fetch(`http://127.0.0.1:${address.port}/actions/refresh-user`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ owner: 'openclaw', repo: 'openclaw', login: 'alice', force: true }),
+    });
+    assert.equal(refreshResponse.status, 200);
+    const refreshPayload = repoUserRefreshResponseSchema.parse((await refreshResponse.json()) as unknown);
+    assert.equal(refreshPayload.profile.reputationTier, 'high');
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     service.close();

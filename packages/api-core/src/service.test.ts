@@ -2813,3 +2813,238 @@ test('repository-scoped reads and neighbors do not leak across repos in the same
     service.close();
   }
 });
+
+function seedRepoUserExplorerFixture(service: GHCrawlService): void {
+  const now = '2026-03-09T00:00:00Z';
+  service.db
+    .prepare(
+      `insert into repositories (id, owner, name, full_name, github_repo_id, raw_json, updated_at)
+       values (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '1', '{}', now);
+
+  const insertThread = service.db.prepare(
+    `insert into threads (
+      id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
+      labels_json, assignees_json, raw_json, content_hash, is_draft, created_at_gh, updated_at_gh,
+      closed_at_gh, merged_at_gh, first_pulled_at, last_pulled_at, files_changed, additions, deletions, updated_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+
+  insertThread.run(10, 1, '100', 10, 'issue', 'open', 'New account question', 'body', 'bob', 'User', 'https://github.com/openclaw/openclaw/issues/10', '[]', '[]', '{}', 'hash-10', 0, '2026-03-01T00:00:00Z', now, null, null, now, now, null, null, null, now);
+  insertThread.run(11, 1, '101', 11, 'issue', 'open', 'Another new account issue', 'body', 'bob', 'User', 'https://github.com/openclaw/openclaw/issues/11', '[]', '[]', '{}', 'hash-11', 0, '2026-03-02T00:00:00Z', now, null, null, now, now, null, null, null, now);
+  insertThread.run(12, 1, '102', 12, 'issue', 'open', 'Third new account issue', 'body', 'bob', 'User', 'https://github.com/openclaw/openclaw/issues/12', '[]', '[]', '{}', 'hash-12', 0, '2026-03-03T00:00:00Z', now, null, null, now, now, null, null, null, now);
+  insertThread.run(13, 1, '103', 13, 'pull_request', 'open', 'Bob tries a fix', 'body', 'bob', 'User', 'https://github.com/openclaw/openclaw/pull/13', '[]', '[]', '{}', 'hash-13', 0, '2026-03-04T00:00:00Z', now, null, null, now, now, 3, 30, 5, now);
+  insertThread.run(20, 1, '200', 20, 'issue', 'open', 'Carol issue', 'body', 'carol', 'User', 'https://github.com/openclaw/openclaw/issues/20', '[]', '[]', '{}', 'hash-20', 0, '2026-02-15T00:00:00Z', now, null, null, now, now, null, null, null, now);
+  insertThread.run(21, 1, '201', 21, 'pull_request', 'open', 'Carol first PR', 'body', 'carol', 'User', 'https://github.com/openclaw/openclaw/pull/21', '[]', '[]', '{}', 'hash-21', 0, '2026-02-01T00:00:00Z', now, null, null, now, now, 5, 80, 10, now);
+  insertThread.run(22, 1, '202', 22, 'pull_request', 'open', 'Carol second PR', 'body', 'carol', 'User', 'https://github.com/openclaw/openclaw/pull/22', '[]', '[]', '{}', 'hash-22', 0, '2026-02-10T00:00:00Z', now, null, null, now, now, 2, 20, 4, now);
+  insertThread.run(30, 1, '300', 30, 'pull_request', 'open', 'Alice polished fix', 'body', 'alice', 'User', 'https://github.com/openclaw/openclaw/pull/30', '[]', '[]', '{}', 'hash-30', 0, '2026-01-10T00:00:00Z', now, null, null, now, now, 4, 120, 30, now);
+  insertThread.run(31, 1, '301', 31, 'pull_request', 'open', 'Alice follow-up', 'body', 'alice', 'User', 'https://github.com/openclaw/openclaw/pull/31', '[]', '[]', '{}', 'hash-31', 0, '2026-01-05T00:00:00Z', now, null, null, now, now, 7, 200, 40, now);
+
+  const insertUser = service.db.prepare(
+    `insert into users (
+      login, github_user_id, account_created_at, public_repo_count, public_gist_count, followers, following,
+      profile_url, avatar_url, user_type, recent_public_event_count, likely_hidden_activity, reputation_tier,
+      reputation_reason_json, last_global_refresh_at, last_refresh_error, updated_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  insertUser.run('bob', '1000', '2026-02-01T00:00:00Z', 1, 0, 1, 0, 'https://github.com/bob', 'https://avatars.githubusercontent.com/u/1000?v=4', 'User', 1, 0, 'low', '["new account"]', now, null, now);
+  insertUser.run('carol', '2000', '2024-01-01T00:00:00Z', 1, 0, 1, 0, 'https://github.com/carol', 'https://avatars.githubusercontent.com/u/2000?v=4', 'User', 0, 1, 'medium', '["likely hidden or sparse public activity relative to repo participation"]', now, null, now);
+  insertUser.run('alice', '3000', '2020-01-01T00:00:00Z', 24, 2, 12, 4, 'https://github.com/alice', 'https://avatars.githubusercontent.com/u/3000?v=4', 'User', 5, 0, 'high', '["established public contribution history"]', now, null, now);
+
+  const insertRepoUserState = service.db.prepare(
+    `insert into repo_user_state (repo_id, user_login, last_repo_refresh_at, first_seen_at, last_seen_at, last_refresh_error, updated_at)
+     values (?, ?, ?, ?, ?, ?, ?)`,
+  );
+  insertRepoUserState.run(1, 'bob', now, '2026-03-01T00:00:00Z', now, null, now);
+  insertRepoUserState.run(1, 'carol', now, '2026-02-01T00:00:00Z', now, null, now);
+  insertRepoUserState.run(1, 'alice', now, '2026-01-01T00:00:00Z', now, null, now);
+}
+
+test('syncRepository stores pull request sizing metadata and repo user state for user explorer', async () => {
+  const service = makeTestService({
+    checkAuth: async () => undefined,
+    getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+    listRepositoryIssues: async () => [
+      {
+        id: 101,
+        number: 43,
+        state: 'open',
+        title: 'Downloader PR',
+        body: 'Implements a fix.',
+        html_url: 'https://github.com/openclaw/openclaw/pull/43',
+        labels: [{ name: 'bug' }],
+        assignees: [],
+        pull_request: { url: 'https://api.github.com/repos/openclaw/openclaw/pulls/43' },
+        user: { login: 'alice', type: 'User' },
+      },
+    ],
+    getIssue: async () => {
+      throw new Error('not expected');
+    },
+    getPull: async (_owner, _repo, number) => ({
+      id: 101,
+      number,
+      state: 'open',
+      title: 'Downloader PR',
+      body: 'Implements a fix.',
+      html_url: `https://github.com/openclaw/openclaw/pull/${number}`,
+      labels: [{ name: 'bug' }],
+      assignees: [],
+      user: { login: 'alice', type: 'User' },
+      draft: false,
+      files_changed: 6,
+      additions: 140,
+      deletions: 22,
+      created_at: '2026-03-01T00:00:00Z',
+      updated_at: '2026-03-09T00:00:00Z',
+    }),
+    listIssueComments: async () => [],
+    listPullReviews: async () => [],
+    listPullReviewComments: async () => [],
+  });
+
+  try {
+    await service.syncRepository({ owner: 'openclaw', repo: 'openclaw' });
+
+    const threadRow = service.db
+      .prepare('select files_changed, additions, deletions from threads where number = 43 limit 1')
+      .get() as { files_changed: number | null; additions: number | null; deletions: number | null };
+    assert.deepEqual(threadRow, { files_changed: 6, additions: 140, deletions: 22 });
+
+    const repoState = service.db
+      .prepare('select first_seen_at, last_seen_at from repo_user_state where repo_id = 1 and user_login = ? limit 1')
+      .get('alice') as { first_seen_at: string | null; last_seen_at: string | null };
+    assert.ok(repoState.first_seen_at);
+    assert.ok(repoState.last_seen_at);
+  } finally {
+    service.close();
+  }
+});
+
+test('listRepoUsers returns flagged and trusted contributor views with totals and ordering', () => {
+  const service = makeTestService({
+    checkAuth: async () => undefined,
+    getRepo: async () => ({}),
+    listRepositoryIssues: async () => [],
+    getIssue: async () => ({}),
+    getPull: async () => ({}),
+    listIssueComments: async () => [],
+    listPullReviews: async () => [],
+    listPullReviewComments: async () => [],
+  });
+
+  try {
+    seedRepoUserExplorerFixture(service);
+
+    const flagged = service.listRepoUsers({ owner: 'openclaw', repo: 'openclaw', mode: 'flagged' });
+    assert.deepEqual(flagged.users.map((user) => user.login), ['bob', 'carol']);
+    assert.equal(flagged.totals.matchingUserCount, 2);
+    assert.equal(flagged.totals.openIssueCount, 4);
+    assert.equal(flagged.totals.openPullRequestCount, 3);
+    assert.equal(flagged.users[0]?.matchedLowReputation, true);
+    assert.equal(flagged.users[1]?.matchedLikelyHiddenActivity, true);
+
+    const trusted = service.listRepoUsers({ owner: 'openclaw', repo: 'openclaw', mode: 'trusted_prs' });
+    assert.deepEqual(trusted.users.map((user) => user.login), ['alice']);
+    assert.equal(trusted.totals.matchingUserCount, 1);
+    assert.equal(trusted.totals.waitingPullRequestCount, 2);
+    assert.equal(trusted.users[0]?.reputationTier, 'high');
+  } finally {
+    service.close();
+  }
+});
+
+test('getRepoUserDetail returns repo-local issues, PRs, and sizing metrics', () => {
+  const service = makeTestService({
+    checkAuth: async () => undefined,
+    getRepo: async () => ({}),
+    listRepositoryIssues: async () => [],
+    getIssue: async () => ({}),
+    getPull: async () => ({}),
+    listIssueComments: async () => [],
+    listPullReviews: async () => [],
+    listPullReviewComments: async () => [],
+  });
+
+  try {
+    seedRepoUserExplorerFixture(service);
+
+    const detail = service.getRepoUserDetail({ owner: 'openclaw', repo: 'openclaw', login: 'alice' });
+    assert.equal(detail.profile.login, 'alice');
+    assert.equal(detail.profile.reputationTier, 'high');
+    assert.equal(detail.pullRequests.length, 2);
+    assert.equal(detail.pullRequests[0]?.number, 31);
+    assert.equal(detail.pullRequests[0]?.filesChanged, 7);
+    assert.equal(detail.pullRequests[0]?.additions, 200);
+    assert.equal(detail.pullRequests[1]?.number, 30);
+    assert.equal(detail.issues.length, 0);
+  } finally {
+    service.close();
+  }
+});
+
+test('refreshRepoUser reuses fresh cache and refreshes stale user data on demand', async () => {
+  let getUserCalls = 0;
+  let listUserPublicEventsCalls = 0;
+  const service = makeTestService({
+    checkAuth: async () => undefined,
+    getRepo: async () => ({}),
+    listRepositoryIssues: async () => [],
+    getIssue: async () => ({}),
+    getPull: async () => ({}),
+    listIssueComments: async () => [],
+    listPullReviews: async () => [],
+    listPullReviewComments: async () => [],
+    getUser: async (login) => {
+      getUserCalls += 1;
+      return {
+        id: 3000,
+        login,
+        created_at: '2020-01-01T00:00:00Z',
+        public_repos: 24,
+        public_gists: 2,
+        followers: 12,
+        following: 4,
+        html_url: `https://github.com/${login}`,
+        avatar_url: `https://avatars.githubusercontent.com/${login}`,
+        type: 'User',
+      };
+    },
+    listUserPublicEvents: async () => {
+      listUserPublicEventsCalls += 1;
+      return [{ id: 'evt-1' }, { id: 'evt-2' }];
+    },
+  });
+
+  try {
+    seedRepoUserExplorerFixture(service);
+
+    const fresh = await service.refreshRepoUser({ owner: 'openclaw', repo: 'openclaw', login: 'alice' });
+    assert.equal(fresh.profile.reputationTier, 'high');
+    assert.equal(getUserCalls, 0);
+    assert.equal(listUserPublicEventsCalls, 0);
+
+    service.db
+      .prepare('update users set last_global_refresh_at = ?, last_refresh_error = null where login = ?')
+      .run('2020-01-01T00:00:00Z', 'alice');
+
+    const refreshed = await service.refreshRepoUser({ owner: 'openclaw', repo: 'openclaw', login: 'alice' });
+    assert.equal(refreshed.profile.reputationTier, 'high');
+    assert.equal(getUserCalls, 1);
+    assert.equal(listUserPublicEventsCalls, 1);
+
+    const updatedUser = service.db
+      .prepare('select recent_public_event_count, reputation_tier, last_refresh_error from users where login = ? limit 1')
+      .get('alice') as {
+        recent_public_event_count: number | null;
+        reputation_tier: string | null;
+        last_refresh_error: string | null;
+      };
+    assert.equal(updatedUser.recent_public_event_count, 2);
+    assert.equal(updatedUser.reputation_tier, 'high');
+    assert.equal(updatedUser.last_refresh_error, null);
+  } finally {
+    service.close();
+  }
+});

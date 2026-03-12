@@ -12,6 +12,7 @@ import type {
   TuiClusterDetail,
   TuiClusterSortMode,
   TuiRepoStats,
+  RepoUserExplorerMode,
   TuiSnapshot,
   TuiThreadDetail,
   TuiWideLayoutPreference,
@@ -42,6 +43,16 @@ import {
   type TuiScreenId,
 } from './state.js';
 import { computeTuiLayout } from './layout.js';
+import {
+  buildRepoUserListRows,
+  buildRepoUserThreadRows,
+  describeRepoUserMode,
+  renderRepoUserDetail,
+  type RepoUserDetailPayload,
+  type RepoUsersPayload,
+  type UserListRow,
+  type UserThreadRow,
+} from './users.js';
 
 type StartTuiParams = {
   service: GHCrawlService;
@@ -116,6 +127,7 @@ type TuiCommandContext = {
   currentRepository: RepositoryTarget;
   hasSnapshot: boolean;
   hasSelectedThread: boolean;
+  hasSelectedUser: boolean;
   hasActiveJobs: boolean;
 };
 
@@ -197,6 +209,14 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   let selectedMemberThreadId: number | null = null;
   let memberRows: MemberListRow[] = [];
   let memberIndex = -1;
+  let userMode: RepoUserExplorerMode = 'flagged';
+  let userList: RepoUsersPayload | null = null;
+  let userRows: UserListRow[] = [];
+  let selectedUserLogin: string | null = null;
+  let userDetail: RepoUserDetailPayload | null = null;
+  let userThreadRows: UserThreadRow[] = [];
+  let selectedUserThreadId: number | null = null;
+  let userThreadIndex = -1;
   let status = 'Ready';
   const activityLines: string[] = [];
   const clusterDetailCache = new Map<number, TuiClusterDetail>();
@@ -223,12 +243,20 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     currentRepository,
     hasSnapshot: snapshot !== null,
     hasSelectedThread: selectedMemberThreadId !== null && threadDetail?.thread.htmlUrl !== undefined,
+    hasSelectedUser: selectedUserLogin !== null,
     hasActiveJobs: hasActiveJobs(),
   });
 
   const clearCaches = (): void => {
     clusterDetailCache.clear();
     threadDetailCache.clear();
+  };
+
+  const preserveSelectedLogin = (logins: string[], selectedLogin: string | null): string | null => {
+    if (selectedLogin !== null && logins.includes(selectedLogin)) {
+      return selectedLogin;
+    }
+    return logins[0] ?? null;
   };
 
   const rebuildClusterItems = (): void => {
@@ -395,6 +423,65 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     render();
   };
 
+  const loadSelectedUserDetail = (): void => {
+    if (!selectedUserLogin) {
+      userDetail = null;
+      userThreadRows = [];
+      selectedUserThreadId = null;
+      userThreadIndex = -1;
+      return;
+    }
+
+    userDetail = params.service.getRepoUserDetail({
+      owner: currentRepository.owner,
+      repo: currentRepository.repo,
+      login: selectedUserLogin,
+    });
+    userThreadRows = buildRepoUserThreadRows(userDetail, userMode);
+    const selectableThreadIds = userThreadRows.filter((row): row is Extract<UserThreadRow, { selectable: true }> => row.selectable).map((row) => row.threadId);
+    if (!selectableThreadIds.includes(selectedUserThreadId ?? -1)) {
+      selectedUserThreadId = selectableThreadIds[0] ?? null;
+    }
+    userThreadIndex = userThreadRows.findIndex((row) => row.selectable && row.threadId === selectedUserThreadId);
+  };
+
+  const refreshUserExplorer = (preserveSelection: boolean): void => {
+    const previousLogin = preserveSelection ? selectedUserLogin : null;
+    const previousThreadId = preserveSelection ? selectedUserThreadId : null;
+    userList = params.service.listRepoUsers({
+      owner: currentRepository.owner,
+      repo: currentRepository.repo,
+      mode: userMode,
+      includeStale: true,
+    });
+    userRows = buildRepoUserListRows(userList);
+    selectedUserLogin = preserveSelectedLogin(
+      userList.users.map((user) => user.login),
+      previousLogin,
+    );
+    selectedUserThreadId = previousThreadId;
+    if (selectedUserLogin) {
+      try {
+        loadSelectedUserDetail();
+      } catch (error) {
+        userDetail = null;
+        userThreadRows = [];
+        selectedUserThreadId = null;
+        userThreadIndex = -1;
+        status = error instanceof Error ? error.message : 'Failed to load user detail';
+        render();
+        return;
+      }
+    } else {
+      userDetail = null;
+      userThreadRows = [];
+      selectedUserThreadId = null;
+      userThreadIndex = -1;
+    }
+    status = `Loaded ${userList.users.length} user(s) for ${describeRepoUserMode(userMode)}`;
+    render();
+  };
+
   const getDefaultFocusPane = (): TuiFocusPane => getScreenFocusOrder(activeScreen)[0] ?? 'detail';
 
   const updateFocus = (nextFocus: TuiFocusPane): void => {
@@ -419,8 +506,13 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     focusPane = getDefaultFocusPane();
     status =
       nextScreen === 'users'
-        ? 'Switched to User Explorer. Data-specific user browsing will land in a follow-up.'
+        ? `Switched to ${describeRepoUserMode(userMode)}`
         : 'Switched to Clusters Explorer';
+    if (nextScreen === 'users') {
+      refreshUserExplorer(true);
+      updateFocus('clusters');
+      return;
+    }
     updateFocus(getDefaultFocusPane());
   };
 
@@ -447,9 +539,15 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       snapshot?.stats.latestClusterRunId != null
         ? `#${snapshot.stats.latestClusterRunId} ${formatRelativeTime(snapshot.stats.latestClusterRunFinishedAt ?? null)}`
         : 'never';
-    widgets.header.setContent(
-      `{bold}${repoLabel}{/bold}  view:${escapeBlessedText(screenDefinition.label)}  {cyan-fg}${snapshot?.stats.openPullRequestCount ?? 0} PR{/cyan-fg}  {green-fg}${snapshot?.stats.openIssueCount ?? 0} issues{/green-fg}  GH:${ghStatus}  Emb:${embedStatus}  Cl:${clusterStatus}  sort:${sortMode}  min:${minSize === 0 ? 'all' : `${minSize}+`}  layout:${wideLayout === 'columns' ? 'cols' : 'stack'}  closed:${showClosed ? 'shown' : 'hidden'}  filter:${search || 'none'}`,
-    );
+    if (activeScreen === 'clusters') {
+      widgets.header.setContent(
+        `{bold}${repoLabel}{/bold}  view:${escapeBlessedText(screenDefinition.label)}  {cyan-fg}${snapshot?.stats.openPullRequestCount ?? 0} PR{/cyan-fg}  {green-fg}${snapshot?.stats.openIssueCount ?? 0} issues{/green-fg}  GH:${ghStatus}  Emb:${embedStatus}  Cl:${clusterStatus}  sort:${sortMode}  min:${minSize === 0 ? 'all' : `${minSize}+`}  layout:${wideLayout === 'columns' ? 'cols' : 'stack'}  closed:${showClosed ? 'shown' : 'hidden'}  filter:${search || 'none'}`,
+      );
+    } else {
+      widgets.header.setContent(
+        `{bold}${repoLabel}{/bold}  view:${escapeBlessedText(screenDefinition.label)}  mode:${escapeBlessedText(describeRepoUserMode(userMode))}  matched:${userList?.totals.matchingUserCount ?? 0}  issues:${userList?.totals.openIssueCount ?? 0}  prs:${userList?.totals.openPullRequestCount ?? 0}  waiting:${userList?.totals.waitingPullRequestCount ?? 0}  GH:${ghStatus}  Emb:${embedStatus}  Cl:${clusterStatus}`,
+      );
+    }
 
     if (activeScreen === 'clusters') {
       widgets.clusters.setLabel(' Clusters ');
@@ -465,13 +563,18 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       widgets.detail.setContent(renderDetailPane(threadDetail, clusterDetail, focusPane));
     } else {
       widgets.clusters.setLabel(' Users ');
-      widgets.members.setLabel(' Threads ');
-      widgets.detail.setLabel(' Explorer ');
-      widgets.clusters.setItems(['User Explorer is reserved for the next TUI screen.']);
-      widgets.clusters.select(0);
-      widgets.members.setItems(['Use /clusters to return to the current cluster workflow.']);
-      widgets.members.select(0);
-      widgets.detail.setContent(renderUserExplorerPlaceholder(currentRepository));
+      widgets.members.setLabel(userMode === 'trusted_prs' ? ' Waiting PRs ' : ' Issues & PRs ');
+      widgets.detail.setLabel(' User Detail ');
+      widgets.clusters.setItems(userRows.length > 0 ? userRows.map((row) => row.label) : ['No matching users']);
+      const userIndex = selectedUserLogin ? Math.max(0, userRows.findIndex((row) => row.login === selectedUserLogin)) : 0;
+      widgets.clusters.select(userIndex);
+      widgets.members.setItems(userThreadRows.length > 0 ? userThreadRows.map((row) => row.label) : ['No open threads for this user']);
+      if (userThreadIndex >= 0) {
+        widgets.members.select(userThreadIndex);
+      } else {
+        widgets.members.select(0);
+      }
+      widgets.detail.setContent(renderRepoUserDetail(userDetail, selectedUserThreadId));
     }
 
     updatePaneStyles(widgets, focusPane);
@@ -634,12 +737,55 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   };
 
   const moveSelection = (delta: -1 | 1, options?: { steps?: number; wrap?: boolean }): void => {
-    if (activeScreen !== 'clusters') {
-      return;
-    }
-    if (!snapshot) return;
     const steps = Math.max(1, options?.steps ?? 1);
     const wrap = options?.wrap ?? true;
+    if (activeScreen === 'users') {
+      if (focusPane === 'clusters') {
+        if (userRows.length === 0) return;
+        const currentIndex = Math.max(0, selectedUserLogin === null ? -1 : userRows.findIndex((row) => row.login === selectedUserLogin));
+        let nextIndex = currentIndex + delta * steps;
+        if (wrap) {
+          nextIndex = ((nextIndex % userRows.length) + userRows.length) % userRows.length;
+        } else {
+          nextIndex = Math.max(0, Math.min(userRows.length - 1, nextIndex));
+        }
+        selectedUserLogin = userRows[nextIndex]?.login ?? null;
+        selectedUserThreadId = null;
+        loadSelectedUserDetail();
+        status = selectedUserLogin ? `User @${selectedUserLogin} (${nextIndex + 1}/${userRows.length})` : status;
+        render();
+        return;
+      }
+
+      if (focusPane === 'members') {
+        if (userThreadRows.length === 0) return;
+        let nextIndex = userThreadIndex < 0 ? 0 : userThreadIndex;
+        for (let index = 0; index < steps; index += 1) {
+          nextIndex += delta;
+          while (nextIndex < 0) nextIndex = wrap ? userThreadRows.length - 1 : 0;
+          while (nextIndex >= userThreadRows.length) nextIndex = wrap ? 0 : userThreadRows.length - 1;
+          if (userThreadRows[nextIndex]?.selectable) {
+            break;
+          }
+          if (!wrap && (nextIndex === 0 || nextIndex === userThreadRows.length - 1)) {
+            break;
+          }
+        }
+        if (!userThreadRows[nextIndex]?.selectable) {
+          nextIndex = userThreadRows.findIndex((row) => row.selectable);
+        }
+        userThreadIndex = nextIndex;
+        const selectedRow = userThreadRows[nextIndex];
+        selectedUserThreadId = selectedRow?.selectable ? selectedRow.threadId : null;
+        status = selectedUserThreadId !== null ? `Selected user thread #${selectedUserThreadId}` : status;
+        render();
+        return;
+      }
+      return;
+    }
+
+    if (!snapshot) return;
+
     if (focusPane === 'clusters') {
       if (snapshot.clusters.length === 0) return;
       const currentIndex = Math.max(0, selectedClusterId === null ? -1 : (clusterIndexById.get(selectedClusterId) ?? -1));
@@ -1115,6 +1261,9 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     memberIndex = -1;
     status = `Switched to ${target.owner}/${target.repo}`;
     refreshAll(false);
+    if (activeScreen === 'users') {
+      refreshUserExplorer(false);
+    }
   };
 
   const runRepositoryBootstrap = (target: RepositoryTarget): boolean => {
@@ -1234,7 +1383,59 @@ export async function startTui(params: StartTuiParams): Promise<void> {
 
   const refreshAction = (): void => {
     status = 'Refreshing';
+    if (activeScreen === 'users') {
+      refreshUserExplorer(true);
+      return;
+    }
     refreshAll(true);
+  };
+
+  const switchUserMode = (nextMode: RepoUserExplorerMode): void => {
+    userMode = nextMode;
+    activeScreen = 'users';
+    focusPane = 'clusters';
+    refreshUserExplorer(false);
+    updateFocus('clusters');
+  };
+
+  const refreshSelectedUserAction = (): void => {
+    if (activeScreen !== 'users' || !selectedUserLogin) {
+      status = 'Select a user first';
+      render();
+      return;
+    }
+
+    const login = selectedUserLogin;
+    void (async () => {
+      modalOpen = true;
+      try {
+        await withLoadingOverlay(`Refreshing @${login}...`, async () => {
+          await params.service.refreshRepoUser({
+            owner: currentRepository.owner,
+            repo: currentRepository.repo,
+            login,
+          });
+        });
+        refreshUserExplorer(true);
+        status = `Refreshed @${login}`;
+      } catch (error) {
+        status = error instanceof Error ? error.message : 'Failed to refresh user';
+        render();
+      } finally {
+        modalOpen = false;
+      }
+    })();
+  };
+
+  const openSelectedUserProfileAction = (): void => {
+    if (activeScreen !== 'users' || !userDetail?.profile.profileUrl) {
+      status = 'No selected user profile to open';
+      render();
+      return;
+    }
+    openUrl(userDetail.profile.profileUrl);
+    status = `Opened ${userDetail.profile.profileUrl}`;
+    render();
   };
 
   const focusForwardAction = (): void => {
@@ -1258,9 +1459,25 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       id: 'view.users',
       slash: 'users',
       label: 'User Explorer',
-      description: 'Switch to the user explorer screen.',
+      description: 'Switch to the flagged contributor explorer.',
       aliases: ['user'],
-      execute: () => switchScreen('users'),
+      execute: () => switchUserMode('flagged'),
+    },
+    {
+      id: 'view.users-flagged',
+      slash: 'users flagged',
+      label: 'Flagged contributors',
+      description: 'Show low-reputation, hidden, stale, or unknown contributors.',
+      aliases: ['flagged'],
+      execute: () => switchUserMode('flagged'),
+    },
+    {
+      id: 'view.users-trusted',
+      slash: 'users trusted',
+      label: 'Trusted PRs',
+      description: 'Show high-reputation contributors with open PRs.',
+      aliases: ['trusted'],
+      execute: () => switchUserMode('trusted_prs'),
     },
     {
       id: 'view.filter',
@@ -1361,6 +1578,24 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       execute: () => promptThreadJump(),
     },
     {
+      id: 'data.user-refresh',
+      slash: 'user-refresh',
+      label: 'Refresh selected user',
+      description: 'Refresh the selected user profile and reputation signals.',
+      screens: ['users'],
+      getAvailability: () => ({ enabled: selectedUserLogin !== null, reason: 'select a user first' }),
+      execute: () => refreshSelectedUserAction(),
+    },
+    {
+      id: 'data.user-open',
+      slash: 'user-open',
+      label: 'Open selected user profile',
+      description: 'Open the selected user profile in your browser.',
+      screens: ['users'],
+      getAvailability: () => ({ enabled: Boolean(userDetail?.profile.profileUrl), reason: 'select a user first' }),
+      execute: () => openSelectedUserProfileAction(),
+    },
+    {
       id: 'utility.help',
       slash: 'help',
       label: 'Help',
@@ -1431,16 +1666,15 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   });
   widgets.screen.key(['enter'], () => {
     if (hasBlockingOverlay()) return;
-    if (activeScreen !== 'clusters') {
-      return;
-    }
     if (focusPane === 'clusters') {
       updateFocus('members');
       return;
     }
     if (focusPane === 'members') {
-      loadSelectedThreadDetail(true);
-      status = selectedMemberThreadId !== null ? `Loaded neighbors for #${threadDetail?.thread.number ?? '?'}` : status;
+      if (activeScreen === 'clusters') {
+        loadSelectedThreadDetail(true);
+        status = selectedMemberThreadId !== null ? `Loaded neighbors for #${threadDetail?.thread.number ?? '?'}` : status;
+      }
       updateFocus('detail');
     }
   });
@@ -1486,6 +1720,10 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   });
   widgets.screen.key(['o'], () => {
     if (hasBlockingOverlay()) return;
+    if (activeScreen === 'users') {
+      openSelectedUserProfileAction();
+      return;
+    }
     openSelectedThread();
   });
   widgets.screen.key(['u'], () => {
@@ -1662,22 +1900,6 @@ function renderCommandPaletteOverlay(
   widgets.commandList.select(params.commands.length > 0 ? Math.max(0, Math.min(params.palette.selectedIndex, params.commands.length - 1)) : 0);
 }
 
-export function renderUserExplorerPlaceholder(target: RepositoryTarget): string {
-  const repoLabel = target.owner && target.repo ? `${target.owner}/${target.repo}` : 'the active repository';
-  return [
-    '{bold}User Explorer{/bold}',
-    '',
-    `This screen is now routable through {bold}/users{/bold}, but the user-centric panes are still a follow-up.`,
-    '',
-    `Current repository: ${escapeBlessedText(repoLabel)}`,
-    '',
-    'Use slash commands as the global navigation layer:',
-    '  /clusters  return to the current issue and PR cluster explorer',
-    '  /repos     switch repositories',
-    '  /help      reopen the full command reference',
-  ].join('\n');
-}
-
 export function renderDetailPane(
   threadDetail: TuiThreadDetail | null,
   clusterDetail: TuiClusterDetail | null,
@@ -1813,8 +2035,14 @@ export function buildUpdatePipelineLabels(
 }
 
 export function buildFooterCommandHints(activeScreen: TuiScreenId): [string, string] {
-  const screenHint = activeScreen === 'clusters' ? '/clusters /users /filter /repos /update /help /quit' : '/clusters /users /repos /update /help /quit';
-  const hotkeyHint = activeScreen === 'clusters' ? 'Hotkeys: Tab/arrows move  # jump  p repos  g update  q quit' : 'Hotkeys: / commands  Tab focus  arrows scroll  p repos  g update  q quit';
+  const screenHint =
+    activeScreen === 'clusters'
+      ? '/clusters /users /filter /repos /update /help /quit'
+      : '/users flagged /users trusted /user-refresh /user-open /repos /help /quit';
+  const hotkeyHint =
+    activeScreen === 'clusters'
+      ? 'Hotkeys: Tab/arrows move  # jump  p repos  g update  q quit'
+      : 'Hotkeys: Tab/arrows move  o profile  p repos  g update  q quit';
   return [`/ commands: ${screenHint}`, hotkeyHint];
 }
 
@@ -1825,8 +2053,12 @@ export function buildHelpContent(): string {
     '{bold}Slash Commands{/bold}',
     '/                 open the command palette in the bottom-left corner',
     '/clusters         switch to the current issue and PR cluster explorer',
-    '/users            switch to the future user explorer screen',
+    '/users            switch to the flagged contributor explorer',
+    '/users flagged    show low-reputation, stale, or hidden-activity contributors',
+    '/users trusted    show high-reputation contributors with open PRs',
     '/filter           open the cluster filter prompt',
+    '/user-refresh     refresh the selected user profile and reputation signals',
+    '/user-open        open the selected user profile in your browser',
     '/repos            browse repositories or sync a new one',
     '/update           start the staged background refresh pipeline',
     '/help             open this popup',

@@ -80,6 +80,114 @@ export const authorThreadsResponseSchema = z.object({
 });
 export type AuthorThreadsResponse = z.infer<typeof authorThreadsResponseSchema>;
 
+export const repoUserModeSchema = z.enum(['flagged', 'trusted_prs']);
+export type RepoUserMode = z.infer<typeof repoUserModeSchema>;
+
+export const reputationTierSchema = z.enum(['low', 'medium', 'high', 'unknown']);
+export type ReputationTier = z.infer<typeof reputationTierSchema>;
+
+export const repoUserTotalsSchema = z.object({
+  matchingUserCount: z.number().int().nonnegative(),
+  openIssueCount: z.number().int().nonnegative(),
+  openPullRequestCount: z.number().int().nonnegative(),
+  waitingPullRequestCount: z.number().int().nonnegative(),
+});
+export type RepoUserTotalsDto = z.infer<typeof repoUserTotalsSchema>;
+
+export const repoUserSummarySchema = z.object({
+  login: z.string(),
+  reputationTier: reputationTierSchema,
+  likelyHiddenActivity: z.boolean().default(false),
+  isStale: z.boolean().default(true),
+  lastRefreshedAt: z.string().nullable(),
+  lastRefreshError: z.string().nullable(),
+  accountCreatedAt: z.string().nullable(),
+  accountAgeDays: z.number().int().nonnegative().nullable(),
+  openIssueCount: z.number().int().nonnegative(),
+  openPullRequestCount: z.number().int().nonnegative(),
+  waitingPullRequestCount: z.number().int().nonnegative(),
+  matchedLowReputation: z.boolean().default(false),
+  matchedLikelyHiddenActivity: z.boolean().default(false),
+  reasons: z.array(z.string()),
+});
+export type RepoUserSummaryDto = z.infer<typeof repoUserSummarySchema>;
+
+export const repoUsersResponseSchema = z.object({
+  repository: repositorySchema,
+  mode: repoUserModeSchema,
+  totals: repoUserTotalsSchema,
+  users: z.array(repoUserSummarySchema),
+});
+export type RepoUsersResponse = z.infer<typeof repoUsersResponseSchema>;
+
+export const repoUserThreadSchema = z.object({
+  threadId: z.number().int().positive(),
+  number: z.number().int().positive(),
+  kind: threadKindSchema,
+  title: z.string(),
+  htmlUrl: z.string().url(),
+  state: z.string(),
+  isDraft: z.boolean().default(false),
+  createdAtGh: z.string().nullable(),
+  updatedAtGh: z.string().nullable(),
+  ageDays: z.number().int().nonnegative().nullable(),
+  filesChanged: z.number().int().nonnegative().nullable(),
+  additions: z.number().int().nonnegative().nullable(),
+  deletions: z.number().int().nonnegative().nullable(),
+});
+export type RepoUserThreadDto = z.infer<typeof repoUserThreadSchema>;
+
+export const repoUserProfileSchema = z.object({
+  login: z.string(),
+  githubUserId: z.string().nullable(),
+  profileUrl: z.string().url().nullable(),
+  avatarUrl: z.string().url().nullable(),
+  userType: z.string().nullable(),
+  accountCreatedAt: z.string().nullable(),
+  accountAgeDays: z.number().int().nonnegative().nullable(),
+  publicRepoCount: z.number().int().nonnegative().nullable(),
+  publicGistCount: z.number().int().nonnegative().nullable(),
+  followers: z.number().int().nonnegative().nullable(),
+  following: z.number().int().nonnegative().nullable(),
+  recentPublicEventCount: z.number().int().nonnegative().nullable(),
+  reputationTier: reputationTierSchema,
+  likelyHiddenActivity: z.boolean().default(false),
+  isStale: z.boolean().default(true),
+  lastGlobalRefreshAt: z.string().nullable(),
+  lastRepoRefreshAt: z.string().nullable(),
+  lastRefreshError: z.string().nullable(),
+  firstSeenAt: z.string().nullable(),
+  lastSeenAt: z.string().nullable(),
+  reasons: z.array(z.string()),
+});
+export type RepoUserProfileDto = z.infer<typeof repoUserProfileSchema>;
+
+export const repoUserDetailResponseSchema = z.object({
+  repository: repositorySchema,
+  profile: repoUserProfileSchema,
+  totals: repoUserTotalsSchema,
+  issues: z.array(repoUserThreadSchema),
+  pullRequests: z.array(repoUserThreadSchema),
+});
+export type RepoUserDetailResponse = z.infer<typeof repoUserDetailResponseSchema>;
+
+export const repoUserRefreshRequestSchema = z.object({
+  owner: z.string(),
+  repo: z.string(),
+  login: z.string(),
+  force: z.boolean().optional(),
+});
+export type RepoUserRefreshRequest = z.infer<typeof repoUserRefreshRequestSchema>;
+
+export const repoUserRefreshResponseSchema = z.object({
+  ok: z.boolean(),
+  repository: repositorySchema,
+  login: z.string(),
+  refreshedAt: z.string(),
+  profile: repoUserProfileSchema,
+});
+export type RepoUserRefreshResponse = z.infer<typeof repoUserRefreshResponseSchema>;
+
 export const searchHitSchema = z.object({
   thread: threadSchema,
   keywordScore: z.number().nullable(),

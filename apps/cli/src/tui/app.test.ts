@@ -14,7 +14,6 @@ import {
   getRepositoryChoices,
   parseOwnerRepoValue,
   renderDetailPane,
-  renderUserExplorerPlaceholder,
   resolveBlessedTerminal,
 } from './app.js';
 
@@ -188,7 +187,10 @@ test('buildHelpContent includes the full key command list', () => {
 
   assert.match(content, /Slash Commands/);
   assert.match(content, /\/clusters\s+switch to the current issue and PR cluster explorer/);
-  assert.match(content, /\/users\s+switch to the future user explorer screen/);
+  assert.match(content, /\/users\s+switch to the flagged contributor explorer/);
+  assert.match(content, /\/users flagged\s+show low-reputation, stale, or hidden-activity contributors/);
+  assert.match(content, /\/users trusted\s+show high-reputation contributors with open PRs/);
+  assert.match(content, /\/user-refresh\s+refresh the selected user profile and reputation signals/);
   assert.match(content, /\/filter\s+open the cluster filter prompt/);
   assert.match(content, /Tab \/ Shift-Tab/);
   assert.match(content, /Left \/ Right\s+cycle focus backward or forward across panes/);
@@ -208,15 +210,8 @@ test('buildHelpContent includes the full key command list', () => {
 
 test('buildFooterCommandHints leads with slash commands for each screen', () => {
   assert.match(buildFooterCommandHints('clusters')[0], /\/clusters \/users \/filter \/repos \/update \/help \/quit/);
-  assert.match(buildFooterCommandHints('users')[1], /Hotkeys: \/ commands/);
-});
-
-test('renderUserExplorerPlaceholder advertises the routed users screen without implementing it yet', () => {
-  const content = renderUserExplorerPlaceholder({ owner: 'openclaw', repo: 'openclaw' });
-
-  assert.match(content, /User Explorer/);
-  assert.match(content, /\/users/);
-  assert.match(content, /openclaw\/openclaw/);
+  assert.match(buildFooterCommandHints('users')[0], /\/users flagged \/users trusted \/user-refresh \/user-open \/repos \/help \/quit/);
+  assert.match(buildFooterCommandHints('users')[1], /o profile/);
 });
 
 test('buildRefreshCliArgs maps the staged selection to refresh skip flags', () => {

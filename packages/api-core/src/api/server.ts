@@ -1,6 +1,6 @@
 import http from 'node:http';
 
-import { actionRequestSchema, closeClusterRequestSchema, closeThreadRequestSchema, refreshRequestSchema } from '@ghcrawl/api-contract';
+import { actionRequestSchema, closeClusterRequestSchema, closeThreadRequestSchema, refreshRequestSchema, repoUserRefreshRequestSchema } from '@ghcrawl/api-contract';
 import { ZodError } from 'zod';
 
 import { GHCrawlService, parseRepoParams } from '../service.js';
@@ -65,6 +65,36 @@ export function createApiServer(service: GHCrawlService): http.Server {
         }
         const includeClosed = url.searchParams.get('includeClosed') === 'true';
         sendJson(res, 200, service.listAuthorThreads({ ...params, login, includeClosed }));
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === '/repo-users') {
+        const params = parseRepoParams(url);
+        const modeParam = url.searchParams.get('mode');
+        const mode = modeParam === 'flagged' || modeParam === 'trusted_prs' ? modeParam : 'flagged';
+        const limitValue = url.searchParams.get('limit');
+        const includeStale = url.searchParams.get('includeStale') === 'false' ? false : true;
+        sendJson(
+          res,
+          200,
+          service.listRepoUsers({
+            ...params,
+            mode,
+            limit: limitValue ? Number(limitValue) : undefined,
+            includeStale,
+          }),
+        );
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === '/repo-user-detail') {
+        const params = parseRepoParams(url);
+        const login = (url.searchParams.get('login') ?? '').trim();
+        if (!login) {
+          sendJson(res, 400, { error: 'Missing login parameter' });
+          return;
+        }
+        sendJson(res, 200, service.getRepoUserDetail({ ...params, login }));
         return;
       }
 
@@ -176,6 +206,12 @@ export function createApiServer(service: GHCrawlService): http.Server {
       if (req.method === 'POST' && url.pathname === '/actions/refresh') {
         const body = refreshRequestSchema.parse(await readBody(req));
         sendJson(res, 200, await service.refreshRepository(body));
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/actions/refresh-user') {
+        const body = repoUserRefreshRequestSchema.parse(await readBody(req));
+        sendJson(res, 200, await service.refreshRepoUser(body));
         return;
       }
 

@@ -23,6 +23,8 @@ export type GitHubClient = {
     number: number,
     reporter?: GitHubReporter,
   ) => Promise<Array<Record<string, unknown>>>;
+  getUser?: (login: string, reporter?: GitHubReporter) => Promise<Record<string, unknown>>;
+  listUserPublicEvents?: (login: string, reporter?: GitHubReporter) => Promise<Array<Record<string, unknown>>>;
 };
 
 export type GitHubReporter = (message: string) => void;
@@ -234,6 +236,24 @@ export function makeGitHubClient(options: RequestOptions): GitHubClient {
             owner,
             repo,
             pull_number: number,
+            per_page: 100,
+          }) as AsyncIterable<OctokitPage<Record<string, unknown>>>,
+      );
+    },
+    async getUser(login, reporter) {
+      return request(`GET /users/${login}`, reporter, async (octokit) => {
+        const response = await octokit.rest.users.getByUsername({ username: login });
+        return response.data as Record<string, unknown>;
+      });
+    },
+    async listUserPublicEvents(login, reporter) {
+      return paginate(
+        `GET /users/${login}/events/public per_page=100`,
+        100,
+        reporter,
+        (octokit) =>
+          octokit.paginate.iterator(octokit.rest.activity.listPublicEventsForUser, {
+            username: login,
             per_page: 100,
           }) as AsyncIterable<OctokitPage<Record<string, unknown>>>,
       );

@@ -57,6 +57,39 @@ const migrationStatements = [
   )
   `,
   `
+  create table if not exists users (
+    login text primary key,
+    github_user_id text,
+    account_created_at text,
+    public_repo_count integer,
+    public_gist_count integer,
+    followers integer,
+    following integer,
+    profile_url text,
+    avatar_url text,
+    user_type text,
+    recent_public_event_count integer,
+    likely_hidden_activity integer not null default 0,
+    reputation_tier text not null default 'unknown',
+    reputation_reason_json text not null default '[]',
+    last_global_refresh_at text,
+    last_refresh_error text,
+    updated_at text not null
+  )
+  `,
+  `
+  create table if not exists repo_user_state (
+    repo_id integer not null references repositories(id) on delete cascade,
+    user_login text not null,
+    last_repo_refresh_at text,
+    first_seen_at text,
+    last_seen_at text,
+    last_refresh_error text,
+    updated_at text not null,
+    primary key (repo_id, user_login)
+  )
+  `,
+  `
   create table if not exists documents (
     id integer primary key,
     thread_id integer not null unique references threads(id) on delete cascade,
@@ -238,6 +271,15 @@ export function migrate(db: SqliteDatabase): void {
   if (!threadColumns.has('close_reason_local')) {
     db.exec('alter table threads add column close_reason_local text');
   }
+  if (!threadColumns.has('files_changed')) {
+    db.exec('alter table threads add column files_changed integer');
+  }
+  if (!threadColumns.has('additions')) {
+    db.exec('alter table threads add column additions integer');
+  }
+  if (!threadColumns.has('deletions')) {
+    db.exec('alter table threads add column deletions integer');
+  }
 
   const clusterColumns = new Set(
     (db.prepare('pragma table_info(clusters)').all() as Array<{ name: string }>).map((column) => column.name),
@@ -250,6 +292,9 @@ export function migrate(db: SqliteDatabase): void {
   }
 
   db.exec('create index if not exists idx_threads_repo_number on threads(repo_id, number)');
+  db.exec('create index if not exists idx_threads_repo_author_open on threads(repo_id, author_login, state, closed_at_local)');
+  db.exec('create index if not exists idx_users_reputation_tier on users(reputation_tier, last_global_refresh_at)');
+  db.exec('create index if not exists idx_repo_user_state_repo_seen on repo_user_state(repo_id, last_repo_refresh_at, first_seen_at)');
   db.exec('create index if not exists idx_document_summaries_thread_model on document_summaries(thread_id, model)');
   db.exec('create index if not exists idx_cluster_runs_repo_status_id on cluster_runs(repo_id, status, id)');
   db.exec('create index if not exists idx_clusters_repo_run_id on clusters(repo_id, cluster_run_id, id)');
