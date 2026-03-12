@@ -36,6 +36,36 @@ export const threadSchema = z.object({
 });
 export type ThreadDto = z.infer<typeof threadSchema>;
 
+export const prTemplateSourceSchema = z.object({
+  mode: z.enum(['file', 'github']),
+  label: z.string(),
+});
+export type PrTemplateSourceDto = z.infer<typeof prTemplateSourceSchema>;
+
+export const prTemplateMatchSchema = z.object({
+  thread: threadSchema,
+  exactMatch: z.boolean(),
+  exactMatchOffset: z.number().int().nonnegative().nullable(),
+  levenshteinDistance: z.number().int().nonnegative().nullable(),
+  bodyLength: z.number().int().nonnegative(),
+});
+export type PrTemplateMatchDto = z.infer<typeof prTemplateMatchSchema>;
+
+export const prTemplateMatchesResponseSchema = z.object({
+  repository: repositorySchema,
+  template: z.object({
+    source: prTemplateSourceSchema,
+    length: z.number().int().positive(),
+  }),
+  filters: z.object({
+    exact: z.boolean(),
+    maxDistance: z.number().int().nonnegative().nullable(),
+    includeClosed: z.boolean(),
+  }),
+  matches: z.array(prTemplateMatchSchema),
+});
+export type PrTemplateMatchesResponse = z.infer<typeof prTemplateMatchesResponseSchema>;
+
 export const healthResponseSchema = z.object({
   ok: z.boolean(),
   configPath: z.string(),

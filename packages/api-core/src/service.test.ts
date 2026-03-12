@@ -51,6 +51,7 @@ test('doctor reports config path and successful auth smoke checks', async () => 
         githubChecked += 1;
       },
       getRepo: async () => ({}),
+      getFileContents: async () => { throw new Error("not expected"); },
       listRepositoryIssues: async () => [],
       getIssue: async () => ({}),
       getPull: async () => ({}),
@@ -94,6 +95,7 @@ test('doctor reports invalid token format without attempting auth', async () => 
         githubChecked += 1;
       },
       getRepo: async () => ({}),
+      getFileContents: async () => { throw new Error("not expected"); },
       listRepositoryIssues: async () => [],
       getIssue: async () => ({}),
       getPull: async () => ({}),
@@ -146,6 +148,7 @@ test('syncRepository defaults to metadata-only mode, preserves thread kind, and 
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async (_owner, _repo, _since, limit) =>
       [
         {
@@ -281,6 +284,7 @@ test('syncRepository fetches comments, reviews, and review comments when include
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async () => [
       {
         id: 101,
@@ -375,6 +379,7 @@ test('summarizeRepository excludes hydrated comments by default and reports toke
     {
       checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+      getFileContents: async () => { throw new Error("not expected"); },
       listRepositoryIssues: async () => [],
       getIssue: async () => {
         throw new Error('not expected');
@@ -483,6 +488,7 @@ test('summarizeRepository includes hydrated human comments when includeComments 
     {
       checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+      getFileContents: async () => { throw new Error("not expected"); },
       listRepositoryIssues: async () => [],
       getIssue: async () => {
         throw new Error('not expected');
@@ -588,6 +594,7 @@ test('purgeComments removes hydrated comments and refreshes canonical documents'
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async () => [],
     getIssue: async () => {
       throw new Error('not expected');
@@ -685,6 +692,7 @@ test('embedRepository batches multi-source embeddings and skips unchanged inputs
     {
       checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+      getFileContents: async () => { throw new Error("not expected"); },
       listRepositoryIssues: async () => [],
       getIssue: async () => {
         throw new Error('not expected');
@@ -794,6 +802,7 @@ test('embedRepository truncates oversized inputs before submission', async () =>
     github: {
       checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+      getFileContents: async () => { throw new Error("not expected"); },
       listRepositoryIssues: async () => [],
       getIssue: async () => {
         throw new Error('not expected');
@@ -918,6 +927,7 @@ test('embedRepository isolates a failing oversized item from a mixed batch and r
     github: {
       checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+      getFileContents: async () => { throw new Error("not expected"); },
       listRepositoryIssues: async () => [],
       getIssue: async () => {
         throw new Error('not expected');
@@ -1038,6 +1048,7 @@ test('listNeighbors returns exact nearest neighbors for an embedded thread', () 
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({}),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
     getPull: async () => ({}),
@@ -1121,6 +1132,7 @@ test('listAuthorThreads returns one author view with strongest same-author match
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({}),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
     getPull: async () => ({}),
@@ -1194,6 +1206,7 @@ test('clusterRepository emits timed progress updates while identifying similarit
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({}),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
     getPull: async () => ({}),
@@ -1250,6 +1263,7 @@ test('clusterRepository merges source kinds into one edge without directional du
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({}),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
     getPull: async () => ({}),
@@ -1312,6 +1326,7 @@ test('clusterRepository prunes older cluster runs for the repo after a successfu
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({}),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
     getPull: async () => ({}),
@@ -1372,6 +1387,7 @@ test('tui snapshot returns mixed issue and pull request counts with default rece
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({}),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
     getPull: async () => ({}),
@@ -1472,6 +1488,7 @@ test('tui cluster detail and thread detail expose members, summaries, and neighb
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({}),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
     getPull: async () => ({}),
@@ -1575,6 +1592,7 @@ test('getTuiThreadDetail prefers stored cluster neighbors over exact embedding s
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({}),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
     getPull: async () => ({}),
@@ -1639,6 +1657,7 @@ test('refreshRepository runs sync, embed, and cluster in order and returns the c
     {
       checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+      getFileContents: async () => { throw new Error("not expected"); },
       listRepositoryIssues: async () => [
         {
           id: 100,
@@ -1710,6 +1729,7 @@ test('agent cluster summary and detail dumps expose repo stats, snippets, and su
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({}),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
     getPull: async () => ({}),
@@ -1856,6 +1876,7 @@ test('getTuiThreadDetail can skip neighbor loading for fast browse paths', () =>
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async () => [],
     getIssue: async () => {
       throw new Error('not expected');
@@ -1936,6 +1957,7 @@ test('local thread closure updates default thread filters and auto-closes fully 
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({}),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
     getPull: async () => ({}),
@@ -2021,6 +2043,7 @@ test('manual cluster closure is hidden from JSON summaries by default but remain
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({}),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
     getPull: async () => ({}),
@@ -2091,6 +2114,7 @@ test('syncRepository reconciles stale open threads and marks confirmed closures 
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async (_owner, _repo, _since, _limit, _reporter, state = 'open') => {
       if (state === 'closed') {
         closedListCalls += 1;
@@ -2198,6 +2222,7 @@ test('syncRepository treats missing stale pull requests as closed and continues'
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async () => {
       listRepositoryIssuesCalls += 1;
       return listRepositoryIssuesCalls === 1
@@ -2284,6 +2309,7 @@ test('syncRepository skips stale-open reconciliation for filtered crawls', async
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async (_owner, _repo, _since, limit) => {
       listRepositoryIssuesCalls += 1;
       return listRepositoryIssuesCalls === 1
@@ -2348,6 +2374,7 @@ test('syncRepository leaves unseen stale open items alone by default when closed
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async (_owner, _repo, _since, _limit, _reporter, state = 'open') => {
       if (state === 'closed') {
         return [];
@@ -2413,6 +2440,7 @@ test('syncRepository performs direct stale-open reconciliation when fullReconcil
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async (_owner, _repo, _since, _limit, _reporter, state = 'open') => {
       if (state === 'closed') {
         return [];
@@ -2490,6 +2518,7 @@ test('syncRepository derives the default overlapping since window from the last 
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async (_owner, _repo, since, _limit, _reporter, state = 'open') => {
       if (state === 'closed') {
         closedSinceValues.push(since);
@@ -2591,6 +2620,7 @@ test('syncRepository uses an explicit since window for both open and closed over
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async (_owner, _repo, since, _limit, _reporter, state = 'open') => {
       if (state === 'closed') {
         closedSinceValues.push(since);
@@ -2663,6 +2693,7 @@ test('syncRepository skips the closed overlap sweep on the first full scan with 
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async (_owner, _repo, since, _limit, _reporter, state = 'open') => {
       if (state === 'closed') {
         closedSinceValues.push(since);
@@ -2718,10 +2749,194 @@ test('syncRepository skips the closed overlap sweep on the first full scan with 
   }
 });
 
+test('findPullRequestTemplateMatches returns exact and near-template pull requests', () => {
+  const service = makeTestService({
+    checkAuth: async () => undefined,
+    getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+    getFileContents: async () => {
+      throw new Error('not expected');
+    },
+    listRepositoryIssues: async () => [],
+    getIssue: async () => {
+      throw new Error('not expected');
+    },
+    getPull: async () => {
+      throw new Error('not expected');
+    },
+    listIssueComments: async () => [],
+    listPullReviews: async () => [],
+    listPullReviewComments: async () => [],
+  });
+
+  try {
+    const now = '2026-03-09T00:00:00Z';
+    service.db
+      .prepare(
+        `insert into repositories (id, owner, name, full_name, github_repo_id, raw_json, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '1', '{"default_branch":"main"}', now);
+    const insertThread = service.db.prepare(
+      `insert into threads (
+        id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
+        labels_json, assignees_json, raw_json, content_hash, is_draft, created_at_gh, updated_at_gh, closed_at_gh,
+        merged_at_gh, first_pulled_at, last_pulled_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insertThread.run(
+      11,
+      1,
+      '101',
+      43,
+      'pull_request',
+      'open',
+      'Fix downloader hang',
+      'Lead-in note.\n\n## Summary\n- [ ] explain the fix\n- [ ] add tests',
+      'alice',
+      'User',
+      'https://github.com/openclaw/openclaw/pull/43',
+      '[]',
+      '[]',
+      '{}',
+      'hash-43',
+      0,
+      now,
+      now,
+      null,
+      null,
+      now,
+      now,
+      now,
+    );
+    insertThread.run(
+      12,
+      1,
+      '102',
+      44,
+      'pull_request',
+      'open',
+      'Partial template edits',
+      '## Summary\n- [ ] explain teh fix\n- [ ] add tests soon',
+      'bob',
+      'User',
+      'https://github.com/openclaw/openclaw/pull/44',
+      '[]',
+      '[]',
+      '{}',
+      'hash-44',
+      0,
+      now,
+      now,
+      null,
+      null,
+      now,
+      now,
+      now,
+    );
+    insertThread.run(
+      13,
+      1,
+      '103',
+      45,
+      'pull_request',
+      'open',
+      'Real write-up',
+      'Implemented the fix, added tests, and documented the migration.',
+      'carol',
+      'User',
+      'https://github.com/openclaw/openclaw/pull/45',
+      '[]',
+      '[]',
+      '{}',
+      'hash-45',
+      0,
+      now,
+      now,
+      null,
+      null,
+      now,
+      now,
+      now,
+    );
+
+    const result = service.findPullRequestTemplateMatches({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      templateText: '## Summary\n- [ ] explain the fix\n- [ ] add tests',
+      templateSource: {
+        mode: 'file',
+        label: '/tmp/pr-template.md',
+      },
+      maxDistance: 12,
+    });
+
+    assert.equal(result.template.length, 48);
+    assert.deepEqual(result.matches.map((match) => match.thread.number), [43, 44]);
+    assert.equal(result.matches[0]?.exactMatch, true);
+    assert.equal(result.matches[0]?.exactMatchOffset, 15);
+    assert.equal(result.matches[0]?.levenshteinDistance, null);
+    assert.equal(result.matches[1]?.exactMatch, false);
+    assert.equal(result.matches[1]?.levenshteinDistance, 7);
+  } finally {
+    service.close();
+  }
+});
+
+test('getPullRequestTemplate auto-discovers a common GitHub template path', async () => {
+  const attemptedPaths: string[] = [];
+  const service = makeTestService({
+    checkAuth: async () => undefined,
+    getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+    getFileContents: async (_owner, _repo, filePath, ref) => {
+      attemptedPaths.push(`${ref ?? 'none'}:${filePath}`);
+      if (filePath === 'pull_request_template.md') {
+        return '\n## Summary\n- [ ] explain the fix\n';
+      }
+      const error = new Error('Not Found') as Error & { status?: number };
+      error.status = 404;
+      throw error;
+    },
+    listRepositoryIssues: async () => [],
+    getIssue: async () => {
+      throw new Error('not expected');
+    },
+    getPull: async () => {
+      throw new Error('not expected');
+    },
+    listIssueComments: async () => [],
+    listPullReviews: async () => [],
+    listPullReviewComments: async () => [],
+  });
+
+  try {
+    const now = '2026-03-09T00:00:00Z';
+    service.db
+      .prepare(
+        `insert into repositories (id, owner, name, full_name, github_repo_id, raw_json, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '1', '{"default_branch":"main"}', now);
+
+    const result = await service.getPullRequestTemplate({ owner: 'openclaw', repo: 'openclaw' });
+
+    assert.equal(result.source.mode, 'github');
+    assert.equal(result.source.label, 'pull_request_template.md');
+    assert.equal(result.text, '## Summary\n- [ ] explain the fix');
+    assert.deepEqual(attemptedPaths.slice(0, 3), [
+      'main:.github/pull_request_template.md',
+      'main:.github/PULL_REQUEST_TEMPLATE.md',
+      'main:pull_request_template.md',
+    ]);
+  } finally {
+    service.close();
+  }
+});
+
 test('repository-scoped reads and neighbors do not leak across repos in the same database', () => {
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'owner-one/repo-one' }),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async () => [],
     getIssue: async () => {
       throw new Error('not expected');

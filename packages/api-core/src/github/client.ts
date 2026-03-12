@@ -5,6 +5,13 @@ import { Octokit } from 'octokit';
 export type GitHubClient = {
   checkAuth: (reporter?: GitHubReporter) => Promise<void>;
   getRepo: (owner: string, repo: string, reporter?: GitHubReporter) => Promise<Record<string, unknown>>;
+  getFileContents: (
+    owner: string,
+    repo: string,
+    filePath: string,
+    ref?: string,
+    reporter?: GitHubReporter,
+  ) => Promise<string>;
   listRepositoryIssues: (
     owner: string,
     repo: string,
@@ -165,6 +172,23 @@ export function makeGitHubClient(options: RequestOptions): GitHubClient {
       return request(`GET /repos/${owner}/${repo}`, reporter, async (octokit) => {
         const response = await octokit.rest.repos.get({ owner, repo });
         return response.data as Record<string, unknown>;
+      });
+    },
+    async getFileContents(owner, repo, filePath, ref, reporter) {
+      return request(`GET /repos/${owner}/${repo}/contents/${filePath}`, reporter, async (octokit) => {
+        const response = await octokit.rest.repos.getContent({
+          owner,
+          repo,
+          path: filePath,
+          ref,
+          mediaType: {
+            format: 'raw',
+          },
+        });
+        if (typeof response.data !== 'string') {
+          throw new Error(`GitHub content for ${filePath} was not returned as raw text.`);
+        }
+        return response.data;
       });
     },
     async listRepositoryIssues(owner, repo, since, limit, reporter, state = 'open') {

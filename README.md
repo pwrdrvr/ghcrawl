@@ -166,6 +166,8 @@ These commands are intended more for scripts, bots, and agent integrations than 
 ```bash
 ghcrawl threads owner/repo --numbers 42,43,44
 ghcrawl threads owner/repo --numbers 42,43,44 --include-closed
+ghcrawl pr-template owner/repo --template-file ./pull_request_template.md
+ghcrawl pr-template owner/repo --max-distance 200
 ghcrawl author owner/repo --login lqquan
 ghcrawl close-thread owner/repo --number 42
 ghcrawl close-cluster owner/repo --id 123
@@ -177,6 +179,8 @@ ghcrawl search owner/repo --query "download stalls"
 ```
 
 Use `threads --numbers ...` when you want several specific issue or PR records in one CLI call instead of paying process startup overhead repeatedly.
+
+Use `pr-template` when you want to flag pull requests that still contain the repository PR template verbatim or are only a small edit-distance away from it. Pass `--template-file` to force a local template snapshot, or omit it to let `ghcrawl` probe common GitHub PR-template paths for the target repo.
 
 Use `author --login ...` when you want all currently open issue/PR records from one user plus the strongest stored same-author similarity match for each item.
 
@@ -220,6 +224,7 @@ The skill is built around the stable JSON CLI surface and is intentionally conse
 ghcrawl doctor --json
 ghcrawl refresh owner/repo
 ghcrawl threads owner/repo --numbers 42,43,44
+ghcrawl pr-template owner/repo --max-distance 200
 ghcrawl clusters owner/repo --min-size 10 --limit 20 --sort recent
 ghcrawl cluster-detail owner/repo --id 123 --member-limit 20 --body-chars 280
 ```

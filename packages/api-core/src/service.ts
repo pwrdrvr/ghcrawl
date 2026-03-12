@@ -17,6 +17,7 @@ import {
   embedResultSchema,
   healthResponseSchema,
   neighborsResponseSchema,
+  prTemplateMatchesResponseSchema,
   refreshResponseSchema,
   repositoriesResponseSchema,
   searchResponseSchema,
@@ -34,6 +35,7 @@ import {
   type EmbedResultDto,
   type HealthResponse,
   type NeighborsResponse,
+  type PrTemplateMatchesResponse,
   type RefreshResponse,
   type RepositoriesResponse,
   type RepositoryDto,
@@ -61,6 +63,7 @@ import { migrate } from './db/migrate.js';
 import { openDb, type SqliteDatabase } from './db/sqlite.js';
 import { buildCanonicalDocument, isBotLikeAuthor } from './documents/normalize.js';
 import { makeGitHubClient, type GitHubClient } from './github/client.js';
+import { boundedLevenshteinDistance, findExactTemplateOffset, normalizePrTemplateText } from './heuristics/pr-template.js';
 import { OpenAiProvider, type AiProvider } from './openai/provider.js';
 import { cosineSimilarity, normalizeEmbedding, rankNearestNeighbors } from './search/exact.js';
 
@@ -83,6 +86,16 @@ type ThreadRow = {
   updated_at_gh: string | null;
   first_pulled_at: string | null;
   last_pulled_at: string | null;
+};
+
+type RepositoryRow = {
+  id: number;
+  owner: string;
+  name: string;
+  full_name: string;
+  github_repo_id: string | null;
+  raw_json: string;
+  updated_at: string;
 };
 
 type CommentSeed = {
@@ -258,6 +271,7 @@ type SyncOptions = {
 
 type SearchResultInternal = SearchResponse;
 type NeighborsResultInternal = NeighborsResponse;
+type PullRequestTemplateMatchesInternal = PrTemplateMatchesResponse;
 
 const SYNC_BATCH_SIZE = 100;
 const SYNC_BATCH_DELAY_MS = 5000;
@@ -268,6 +282,16 @@ const EMBED_ESTIMATED_CHARS_PER_TOKEN = 3;
 const EMBED_MAX_ITEM_TOKENS = 7000;
 const EMBED_MAX_BATCH_TOKENS = 250000;
 const EMBED_TRUNCATION_MARKER = '\n\n[truncated for embedding]';
+const COMMON_PULL_REQUEST_TEMPLATE_PATHS = [
+  '.github/pull_request_template.md',
+  '.github/PULL_REQUEST_TEMPLATE.md',
+  'pull_request_template.md',
+  'PULL_REQUEST_TEMPLATE.md',
+  'docs/pull_request_template.md',
+  'docs/PULL_REQUEST_TEMPLATE.md',
+  '.github/PULL_REQUEST_TEMPLATE/default.md',
+  '.github/PULL_REQUEST_TEMPLATE/pull_request_template.md',
+] as const;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -333,6 +357,10 @@ function asJson(value: unknown): string {
 
 function parseArray(value: string): string[] {
   return JSON.parse(value) as string[];
+}
+
+function parseObject(value: string): Record<string, unknown> {
+  return JSON.parse(value) as Record<string, unknown>;
 }
 
 function userLogin(payload: Record<string, unknown>): string | null {
@@ -679,6 +707,112 @@ export class GHCrawlService {
         thread: threadToDto(row, clusterIds.get(row.id) ?? null),
         strongestSameAuthorMatch: strongestByThread.get(row.id) ?? null,
       })),
+    });
+  }
+
+  async getPullRequestTemplate(params: { owner: string; repo: string }): Promise<{ text: string; source: { mode: 'github'; label: string } }> {
+    const repository = this.getStoredRepositoryRow(params.owner, params.repo);
+    const raw = parseObject(repository.raw_json);
+    const defaultBranch =
+      typeof raw.default_branch === 'string' && raw.default_branch.trim().length > 0 ? raw.default_branch : undefined;
+    const github = this.requireGithub();
+
+    for (const candidatePath of COMMON_PULL_REQUEST_TEMPLATE_PATHS) {
+      try {
+        const text = await github.getFileContents(params.owner, params.repo, candidatePath, defaultBranch);
+        const normalized = normalizePrTemplateText(text);
+        if (normalized.length === 0) {
+          continue;
+        }
+        return {
+          text: normalized,
+          source: {
+            mode: 'github',
+            label: candidatePath,
+          },
+        };
+      } catch (error) {
+        if (isMissingGitHubResourceError(error)) {
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    throw new Error(
+      `No pull request template was found for ${repository.full_name}. Tried ${COMMON_PULL_REQUEST_TEMPLATE_PATHS.join(', ')}.`,
+    );
+  }
+
+  findPullRequestTemplateMatches(params: {
+    owner: string;
+    repo: string;
+    templateText: string;
+    templateSource: { mode: 'file' | 'github'; label: string };
+    maxDistance?: number;
+    limit?: number;
+    includeClosed?: boolean;
+  }): PullRequestTemplateMatchesInternal {
+    const repository = this.requireRepository(params.owner, params.repo);
+    const normalizedTemplate = normalizePrTemplateText(params.templateText);
+    if (!normalizedTemplate) {
+      throw new Error('Template text is empty after normalization.');
+    }
+    if (params.maxDistance !== undefined && (!Number.isSafeInteger(params.maxDistance) || params.maxDistance < 0)) {
+      throw new Error(`Invalid maxDistance: ${params.maxDistance}`);
+    }
+
+    let sql = `select * from threads where repo_id = ? and kind = 'pull_request'`;
+    const args: Array<number> = [repository.id];
+    if (!params.includeClosed) {
+      sql += " and state = 'open' and closed_at_local is null";
+    }
+    sql += ' order by updated_at_gh desc, number desc';
+    const rows = this.db.prepare(sql).all(...args) as ThreadRow[];
+
+    const matches = rows
+      .map((row) => {
+        const normalizedBody = normalizePrTemplateText(row.body ?? '');
+        const exactMatchOffset = findExactTemplateOffset(normalizedBody, normalizedTemplate);
+        const levenshteinDistance =
+          params.maxDistance === undefined
+            ? null
+            : boundedLevenshteinDistance(normalizedBody, normalizedTemplate, params.maxDistance);
+        return {
+          thread: threadToDto(row),
+          exactMatch: exactMatchOffset !== null,
+          exactMatchOffset,
+          levenshteinDistance,
+          bodyLength: normalizedBody.length,
+        };
+      })
+      .filter((match) => match.exactMatch || match.levenshteinDistance !== null)
+      .sort((left, right) => {
+        if (left.exactMatch !== right.exactMatch) {
+          return left.exactMatch ? -1 : 1;
+        }
+        const leftDistance = left.levenshteinDistance ?? Number.MAX_SAFE_INTEGER;
+        const rightDistance = right.levenshteinDistance ?? Number.MAX_SAFE_INTEGER;
+        if (leftDistance !== rightDistance) {
+          return leftDistance - rightDistance;
+        }
+        const leftUpdatedAt = left.thread.updatedAtGh ? Date.parse(left.thread.updatedAtGh) : 0;
+        const rightUpdatedAt = right.thread.updatedAtGh ? Date.parse(right.thread.updatedAtGh) : 0;
+        return rightUpdatedAt - leftUpdatedAt || right.thread.number - left.thread.number;
+      });
+
+    return prTemplateMatchesResponseSchema.parse({
+      repository,
+      template: {
+        source: params.templateSource,
+        length: normalizedTemplate.length,
+      },
+      filters: {
+        exact: true,
+        maxDistance: params.maxDistance ?? null,
+        includeClosed: params.includeClosed === true,
+      },
+      matches: params.limit ? matches.slice(0, params.limit) : matches,
     });
   }
 
@@ -2185,13 +2319,17 @@ export class GHCrawlService {
     return this.github as GitHubClient;
   }
 
-  private requireRepository(owner: string, repo: string): RepositoryDto {
+  private getStoredRepositoryRow(owner: string, repo: string): RepositoryRow {
     const fullName = `${owner}/${repo}`;
-    const row = this.db.prepare('select * from repositories where full_name = ? limit 1').get(fullName) as Record<string, unknown> | undefined;
+    const row = this.db.prepare('select * from repositories where full_name = ? limit 1').get(fullName) as RepositoryRow | undefined;
     if (!row) {
       throw new Error(`Repository ${fullName} not found. Run sync first.`);
     }
-    return repositoryToDto(row);
+    return row;
+  }
+
+  private requireRepository(owner: string, repo: string): RepositoryDto {
+    return repositoryToDto(this.getStoredRepositoryRow(owner, repo));
   }
 
   private upsertRepository(owner: string, repo: string, payload: Record<string, unknown>): number {
