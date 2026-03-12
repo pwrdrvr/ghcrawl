@@ -16,6 +16,7 @@ type PerfBaseline = {
     threadsPerCluster: number;
     clusterBlockWidth: number;
     noiseDimensions: number;
+    assertExactClusterCount?: boolean;
     sourceKinds: EmbeddingSourceKind[];
     k: number;
     minScore: number;
@@ -60,10 +61,15 @@ type SuggestedBaseline = {
   projectedOpenclawMs: number;
 };
 
-const BASELINE_PATH = fileURLToPath(new URL('./perf-baseline.json', import.meta.url));
+const DEFAULT_BASELINE_PATH = fileURLToPath(new URL('./perf-baseline.json', import.meta.url));
+
+function getBaselinePath(): string {
+  const configuredPath = process.env.GHCRAWL_CLUSTER_PERF_CONFIG_PATH?.trim();
+  return configuredPath ? path.resolve(configuredPath) : DEFAULT_BASELINE_PATH;
+}
 
 function loadBaseline(): PerfBaseline {
-  return JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf8')) as PerfBaseline;
+  return JSON.parse(fs.readFileSync(getBaselinePath(), 'utf8')) as PerfBaseline;
 }
 
 function shouldBootstrapBaseline(): boolean {
@@ -83,7 +89,7 @@ function assertBenchmarkShape(
   baseline: PerfBaseline,
   backend: 'exact' | 'vectorlite',
 ): void {
-  if (backend === 'exact') {
+  if (backend === 'exact' && baseline.fixture.assertExactClusterCount !== false) {
     assert.equal(result.clusters, baseline.fixture.clusterCount);
   } else {
     assert.ok(result.clusters > 0);
@@ -339,7 +345,7 @@ async function measureBenchmark(baseline: PerfBaseline): Promise<PerfRunResult> 
   const backend = getPerfBackend();
   if (baseline.baseline.fixtureMedianMs <= 0 && !shouldBootstrapBaseline()) {
     throw new Error(
-      `Cluster perf baseline is not set in ${BASELINE_PATH}. Run the benchmark once, then record fixtureMedianMs before enforcing regressions.`,
+      `Cluster perf baseline is not set in ${getBaselinePath()}. Run the benchmark once, then record fixtureMedianMs before enforcing regressions.`,
     );
   }
 
