@@ -66,6 +66,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Install Node.js and dependencies
         uses: ./.github/actions/configure-nodejs
