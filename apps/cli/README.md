@@ -25,19 +25,20 @@ If you are working from source or maintaining the repo, use [CONTRIBUTING.md](ht
 
 ## Requirements
 
-Normal `ghcrawl` use needs both:
+Normal `ghcrawl` use always needs:
 
 - a GitHub personal access token
-- an OpenAI API key
 
-GitHub is required to crawl issue and PR data. OpenAI is required for embeddings and the maintainer clustering and search workflow. If you already have a populated local DB you can still browse it without live keys, but a fresh `sync` + `embed` + `cluster` or `refresh` run needs both.
+OpenAI is optional for first-run bootstrap and local browsing, but required for local summarize/embed refreshes.
+
+GitHub is required to crawl issue and PR data. OpenAI is required for fresh local embeddings and summaries. If you already have a populated local DB or install the OpenClaw starter sidecar, you can browse clusters without a live OpenAI key.
 
 ## Quick Start
 
 ```bash
 ghcrawl init
 ghcrawl doctor
-ghcrawl refresh owner/repo
+ghcrawl seed-install openclaw/openclaw
 ghcrawl tui owner/repo
 ```
 
@@ -45,18 +46,22 @@ ghcrawl tui owner/repo
 
 - save plaintext keys in `~/.config/ghcrawl/config.json`
 - or guide you through a 1Password CLI (`op`) setup that keeps keys out of the config file
+- and, if you already have a usable GitHub token plus a published seed asset is configured, offer starter data for `openclaw/openclaw`
 
 `ghcrawl refresh owner/repo` is the main pipeline command. It pulls the latest open GitHub issues and pull requests, refreshes embeddings for changed items, and rebuilds the clusters you browse in the TUI.
+
+`ghcrawl seed-install openclaw/openclaw` is the low-cost bootstrap path. It runs a metadata-only sync, then imports published `dedupe_summary` embeddings plus derived similarity edges and rebuilds a local cluster run without needing an OpenAI key on day one.
 
 ## Typical Commands
 
 ```bash
 ghcrawl doctor
+ghcrawl seed-install openclaw/openclaw
 ghcrawl refresh owner/repo
 ghcrawl tui owner/repo
 ```
 
-`refresh`, `sync`, and `embed` call remote services and should be run intentionally.
+`seed-install` and `sync` call GitHub. `refresh` and `embed` call GitHub plus OpenAI. Run them intentionally.
 
 `cluster` does not call remote services, but it is still time consuming. On a repo with roughly `12k` issues and PRs, a full cluster rebuild can take around `10 minutes`.
 
@@ -69,6 +74,22 @@ ghcrawl refresh owner/repo
 ```
 
 ![ghcrawl refresh demo](https://raw.githubusercontent.com/pwrdrvr/ghcrawl/main/docs/images/ghcrawl-refresh-demo.gif)
+
+### TUI Screenshots
+
+| User open issue/PR list modal | Refresh modal |
+| --- | --- |
+| ![User open issue and PR list modal](https://raw.githubusercontent.com/pwrdrvr/ghcrawl/main/docs/images/ghcrawl-tui-user-modal.png) | ![GitHub, embed, and cluster refresh modal](https://raw.githubusercontent.com/pwrdrvr/ghcrawl/main/docs/images/ghcrawl-tui-refresh-modal.png) |
+| Press `u` to open the current user's issue and PR list modal. | Press `g` to open the GitHub/embed/cluster refresh modal. |
+
+| Closed members in a cluster | Fully closed cluster |
+| --- | --- |
+| ![Closed cluster members grayed out](https://raw.githubusercontent.com/pwrdrvr/ghcrawl/main/docs/images/ghcrawl-tui-closed-members.png) | ![Completely closed cluster grayed out](https://raw.githubusercontent.com/pwrdrvr/ghcrawl/main/docs/images/ghcrawl-tui-closed-cluster.png) |
+| Closed members stay visible in gray so overlap is still easy to inspect. | A cluster with no open members is grayed out as a whole until you hide closed items. |
+
+![Stacked TUI layout](https://raw.githubusercontent.com/pwrdrvr/ghcrawl/main/docs/images/ghcrawl-tui-layout-stacked.png)
+
+Press `l` on wide screens to toggle the stacked layout with the cluster list on the left and members/detail stacked on the right.
 
 ## Controlling The Refresh Flow More Intentionally
 
@@ -84,6 +105,24 @@ ghcrawl cluster owner/repo  # rebuild local related-work clusters from the curre
 
 Run them in that order. `refresh` is just the safe convenience command that performs the same sequence for you.
 
+## Starter Data For OpenClaw
+
+`ghcrawl` can import a published sidecar for `openclaw/openclaw`:
+
+```bash
+ghcrawl seed-install openclaw/openclaw
+```
+
+That flow is intentionally narrow:
+
+- it currently only supports `openclaw/openclaw`
+- it imports precomputed `dedupe_summary` embeddings plus derived similarity edges
+- it rebuilds a normal local cluster run from those imported edges
+- it does not overwrite your thread text, comments, summaries, or sync cursor state
+- it does not make semantic query search or summary views fully local-feature-complete; for that you still need an OpenAI key and later local summarize/embed runs
+
+Use `--force` if you intentionally want to import starter data into an existing local repo. Use `--asset-url` to test a local or unpublished sidecar override.
+
 ## Init And Doctor
 
 First run:
@@ -96,12 +135,12 @@ ghcrawl doctor
 `init` behavior:
 
 - prompts you to choose one of two secret-storage modes:
-  - `plaintext`: saves both keys to `~/.config/ghcrawl/config.json`
+  - `plaintext`: saves your GitHub key, and optionally your OpenAI key, to `~/.config/ghcrawl/config.json`
   - `1Password CLI`: stores only vault and item metadata and tells you how to run `ghcrawl` through `op`
 - if you choose plaintext storage, init warns that anyone who can read that file can use your keys and that resulting API charges are your responsibility
 - if you choose 1Password CLI mode, init tells you to create a Secure Note with concealed fields named:
   - `GITHUB_TOKEN`
-  - `OPENAI_API_KEY`
+  - `OPENAI_API_KEY` when you are ready to enable summarize/embed flows
 
 GitHub token guidance:
 
@@ -117,7 +156,7 @@ GitHub token guidance:
 - config file presence and path
 - local DB path wiring
 - GitHub token presence, token-shape validation, and a live auth smoke check
-- OpenAI key presence, key-shape validation, and a live auth smoke check
+- OpenAI key presence, token-shape validation, and a live auth smoke check when configured
 - if init is configured for 1Password CLI but you forgot to run through your `op` wrapper, doctor tells you that explicitly
 
 ### 1Password CLI Example
@@ -125,7 +164,7 @@ GitHub token guidance:
 If you choose 1Password CLI mode, create a 1Password Secure Note with concealed fields named exactly:
 
 - `GITHUB_TOKEN`
-- `OPENAI_API_KEY`
+- `OPENAI_API_KEY` (optional until you want local summarize/embed refreshes)
 
 Then add this wrapper to `~/.zshrc`:
 
@@ -151,16 +190,27 @@ These commands are intended more for scripts, bots, and agent integrations than 
 
 ```bash
 ghcrawl threads owner/repo --numbers 42,43,44
+ghcrawl threads owner/repo --numbers 42,43,44 --include-closed
 ghcrawl author owner/repo --login lqquan
-ghcrawl cluster owner/repo
+ghcrawl seed-install openclaw/openclaw
+ghcrawl close-thread owner/repo --number 42
+ghcrawl close-cluster owner/repo --id 123
 ghcrawl clusters owner/repo --min-size 10 --limit 20
+ghcrawl clusters owner/repo --min-size 10 --limit 20 --include-closed
 ghcrawl cluster-detail owner/repo --id 123
+ghcrawl cluster-detail owner/repo --id 123 --include-closed
 ghcrawl search owner/repo --query "download stalls"
 ```
 
 Use `threads --numbers ...` when you want several specific issue or PR records in one CLI call instead of paying process startup overhead repeatedly.
 
 Use `author --login ...` when you want all currently open issue/PR records from one user plus the strongest stored same-author similarity match for each item.
+
+By default, JSON list commands filter out locally closed issues/PRs and completely closed clusters. Use `--include-closed` when you need to inspect those records too.
+
+Use `close-thread` when you know a local issue/PR should be treated as closed before the next GitHub sync catches up. If that was the last open item in its cluster, `ghcrawl` automatically marks the cluster closed too.
+
+Use `close-cluster` when you want to locally suppress a whole cluster from default JSON exploration without waiting for a rebuild.
 
 ## Cost To Operate
 
@@ -190,6 +240,7 @@ The skill is built around the stable JSON CLI surface and is intentionally conse
 - default mode assumes no valid API keys and stays read-only
 - API-backed operations only become available after `ghcrawl doctor --json` shows healthy auth
 - even then, `refresh`, `sync`, `embed`, and `cluster` should only run when the user explicitly asks for them
+- JSON list commands hide locally closed issues/PRs and closed clusters by default unless `--include-closed` is passed
 
 ```bash
 ghcrawl doctor --json
@@ -210,6 +261,7 @@ The agent and build contract for this repo lives in [SPEC.md](https://github.com
 ## Current Caveats
 
 - `serve` starts the local HTTP API only. The web UI is not built yet.
+- `seed-install` currently supports only `openclaw/openclaw`
 - `sync` only pulls open issues and PRs.
 - a plain `sync owner/repo` is incremental by default after the first full completed open scan for that repo
 - `sync` is metadata-only by default
@@ -217,9 +269,12 @@ The agent and build contract for this repo lives in [SPEC.md](https://github.com
 - `embed` defaults to `text-embedding-3-large`
 - `embed` generates separate vectors for `title` and `body`, and also uses stored summary text when present
 - `embed` stores an input hash per source kind and will not resubmit unchanged text for re-embedding
+- starter sidecars currently import only `dedupe_summary` embeddings plus derived similarity edges
 - `sync --since` accepts ISO timestamps and relative durations like `15m`, `2h`, `7d`, and `1mo`
 - `sync --limit <count>` is the best smoke-test path on a busy repository
 - `tui` remembers sort order and min cluster size per repository in the persisted config file
+- the TUI shows locally closed threads and clusters in gray; press `x` to hide or show them
+- on wide screens, press `l` to toggle between three columns and a wider cluster list with members/detail stacked on the right
 - if you add a brand-new repo from the TUI with `p`, ghcrawl runs sync -> embed -> cluster and opens that repo with min cluster size `1+`
 
 ## Responsibility Attestation

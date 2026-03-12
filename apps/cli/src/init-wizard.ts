@@ -91,8 +91,9 @@ export async function runInitWizard(
   const stored = readPersistedConfig({ cwd, env });
 
   const hasStoredGithub = Boolean(stored.data.githubToken);
+  const hasStoredGithubProvider = stored.data.secretProvider === 'op' && Boolean(stored.data.opVaultName && stored.data.opItemName);
   const hasStoredOpenAi = Boolean(stored.data.openaiApiKey);
-  if (!reconfigure && hasStoredGithub && hasStoredOpenAi) {
+  if (!reconfigure && (hasStoredGithub || hasStoredGithubProvider)) {
     return { configPath: current.configPath, changed: false };
   }
 
@@ -116,7 +117,7 @@ export async function runInitWizard(
       '- For private repos with a classic PAT, repo is the safe fallback',
       '',
       'OpenAI key recommendation:',
-      '- Standard API key for the project/account you want to bill',
+      '- Optional for first-run bootstrap; required later for summarize/embed refreshes',
     ].join('\n'),
     'Setup',
   );
@@ -193,7 +194,19 @@ export async function runInitWizard(
       changed = true;
     }
 
-    if (reconfigure || !hasStoredOpenAi) {
+    const shouldConfigureOpenAi =
+      reconfigure || hasStoredOpenAi
+        ? true
+        : await prompter.confirm({
+            message: 'Would you like to configure an OpenAI API key now? You can skip this and add it later.',
+            initialValue: false,
+          });
+    if (isCancel(shouldConfigureOpenAi)) {
+      prompter.cancel('init cancelled');
+      throw new Error('init cancelled');
+    }
+
+    if (shouldConfigureOpenAi && (reconfigure || !hasStoredOpenAi)) {
       const detectedOpenAi = env.OPENAI_API_KEY;
       let openaiApiKey = stored.data.openaiApiKey;
       let usedDetectedOpenAi = false;
@@ -227,6 +240,9 @@ export async function runInitWizard(
         openaiApiKey = value;
       }
       nextConfig.openaiApiKey = openaiApiKey;
+      changed = true;
+    } else if (reconfigure && !shouldConfigureOpenAi) {
+      nextConfig.openaiApiKey = undefined;
       changed = true;
     }
 
@@ -271,11 +287,11 @@ export async function runInitWizard(
         '',
         'Add concealed fields named exactly:',
         '- GITHUB_TOKEN',
-        '- OPENAI_API_KEY',
+        '- OPENAI_API_KEY (optional for later summarize/embed work)',
         '',
         'Secret refs:',
         `- ${opReferenceBase}/GITHUB_TOKEN`,
-        `- ${opReferenceBase}/OPENAI_API_KEY`,
+        `- ${opReferenceBase}/OPENAI_API_KEY (optional)`,
       ].join('\n'),
       '1Password Setup',
     );

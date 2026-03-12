@@ -56,6 +56,26 @@ test('runInitWizard skips prompting when config already has both API keys', asyn
   assert.equal(fs.existsSync(result.configPath), true);
 });
 
+test('runInitWizard skips prompting when config already has a GitHub token only', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-init-test-'));
+  const env = makeTestEnv({ HOME: home });
+  writePersistedConfig(
+    {
+      githubToken: 'ghp_testtoken1234567890',
+    },
+    { env },
+  );
+
+  const result = await runInitWizard({
+    env,
+    prompter: makePrompter(),
+    isInteractive: true,
+  });
+
+  assert.equal(result.changed, false);
+  assert.equal(fs.existsSync(result.configPath), true);
+});
+
 test('runInitWizard prompts for missing keys and writes the config file', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-init-test-'));
   const env = makeTestEnv({ HOME: home });
@@ -102,6 +122,26 @@ test('runInitWizard can persist detected environment keys without prompting for 
   const persisted = readPersistedConfig({ env });
   assert.equal(persisted.data.githubToken, 'ghp_envtoken1234567890');
   assert.equal(persisted.data.openaiApiKey, 'sk-proj-envkey1234567890');
+});
+
+test('runInitWizard can save a GitHub-only plaintext config', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-init-test-'));
+  const env = makeTestEnv({ HOME: home });
+
+  const result = await runInitWizard({
+    env,
+    prompter: makePrompter({
+      select: async () => 'plaintext',
+      confirm: async ({ message }) => !message.includes('OpenAI API key now'),
+      password: async () => 'ghp_testtoken1234567890',
+    }),
+    isInteractive: true,
+  });
+
+  assert.equal(result.changed, true);
+  const persisted = readPersistedConfig({ env });
+  assert.equal(persisted.data.githubToken, 'ghp_testtoken1234567890');
+  assert.equal(persisted.data.openaiApiKey, undefined);
 });
 
 test('runInitWizard can configure 1Password CLI metadata without persisting plaintext keys', async () => {

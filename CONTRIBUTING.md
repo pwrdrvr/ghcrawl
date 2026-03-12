@@ -15,7 +15,9 @@ Useful local commands from the repo root:
 ```bash
 pnpm tui openclaw/openclaw
 pnpm sync openclaw/openclaw --limit 25
+pnpm seed-install openclaw/openclaw
 pnpm refresh openclaw/openclaw
+pnpm seed-export openclaw/openclaw --output /tmp/ghcrawl-seeds
 pnpm embed openclaw/openclaw
 pnpm cluster openclaw/openclaw
 pnpm search openclaw/openclaw --query "download stalls"
