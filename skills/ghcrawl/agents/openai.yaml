@@ -1,4 +1,4 @@
 interface:
   display_name: "ghcrawl"
-  short_description: "Refresh and inspect local GitHub issue/PR clusters"
-  default_prompt: "Use $ghcrawl to refresh a repo locally, list the latest clusters, and inspect one cluster in detail."
+  short_description: "Inspect local GitHub issue/PR clusters through the ghcrawl CLI"
+  default_prompt: "Use $ghcrawl to inspect a repo through the ghcrawl CLI, list the latest clusters, and inspect one cluster in detail. Refresh only if the user explicitly asks."

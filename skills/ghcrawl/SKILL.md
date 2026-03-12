@@ -1,6 +1,6 @@
 ---
 name: ghcrawl
-description: "Use a local ghcrawl install to refresh GitHub repo data, inspect duplicate clusters, and dump issue/PR summaries from the local SQLite dataset. Use when a user wants to triage related issues or PRs, inspect semantic clusters, or refresh one repo through ghcrawl's staged pipeline."
+description: "Use the local ghcrawl CLI to inspect duplicate clusters and issue/PR summaries from the existing ghcrawl dataset, and refresh one repo only when the user explicitly asks. Use when a user wants to triage related issues or PRs, inspect semantic clusters, or run ghcrawl's staged refresh pipeline."
 allowed-tools: Bash(ghcrawl:*), Bash(pnpm:*), Read(*)
 ---
 
@@ -8,12 +8,16 @@ allowed-tools: Bash(ghcrawl:*), Bash(pnpm:*), Read(*)
 
 Use `ghcrawl` as the machine-facing interface for local GitHub duplicate-cluster analysis.
 
+Never read the ghcrawl SQLite database directly with `sqlite3` or any other database client. If the supported CLI cannot return the needed information, report that CLI problem to the user instead of bypassing the interface.
+
 Do not scrape the TUI. Prefer JSON CLI output.
 
 The skill has two modes:
 
-- Default mode: assume there are no valid API keys and stay read-only.
+- Default mode: assume API credentials are absent, unavailable, or irrelevant and stay read-only on existing local data.
 - API-enabled mode: only after `ghcrawl doctor --json` proves GitHub and OpenAI auth are configured and healthy.
+
+In default mode, do not treat missing credentials as a problem unless the user explicitly asked for an API-backed operation or a supported read-only CLI command failed and `doctor` shows local setup is broken.
 
 Even in API-enabled mode, never run `sync`, `embed`, `cluster`, or `refresh` unless the user explicitly asks for that work. Those commands can take a long time, consume paid API usage, and trigger rate limiting if used too often.
 
@@ -34,6 +38,8 @@ If `ghcrawl` is not on `PATH`, use:
 ```bash
 npx ghcrawl cli ...
 ```
+
+Do not start by running `ghcrawl --help` or `<subcommand> --help`. The documented command surface in this skill and [references/protocol.md](references/protocol.md) is the default source of truth. Only use help output when the user explicitly asks about CLI syntax or you are actively maintaining ghcrawl itself.
 
 ## Core workflow
 
@@ -56,6 +62,8 @@ ghcrawl neighbors owner/repo --number 42 --limit 10
 ```
 
 These operate on the existing local SQLite dataset.
+
+Treat that stored dataset as the default source of truth for read-only analysis. Do not probe credentials, inspect env vars, or explain missing auth unless an API-backed task was requested or the supported CLI path is failing.
 
 By default:
 
@@ -103,7 +111,19 @@ Interpret the result like this:
 - If GitHub/OpenAI auth is missing or unhealthy, stay in read-only mode.
 - If GitHub/OpenAI auth is healthy, API-backed operations are available, but still require explicit user direction.
 
-### 3. Refresh local data only when explicitly requested
+If `doctor` is unhealthy but the user asked only for read-only inspection, say that API-backed refresh is unavailable and continue with read-only CLI commands when possible.
+
+### 3. If the CLI is unavailable or misbehaving
+
+Use one supported fallback path before giving up:
+
+```bash
+pnpm --filter ghcrawl cli ...
+```
+
+If a documented `ghcrawl` command still fails, hangs, or returns unusable output through the supported CLI path, stop and report that to the user. Do not inspect tables, schema, or rows with `sqlite3`, `pragma`, or ad hoc SQL.
+
+### 4. Refresh local data only when explicitly requested
 
 Only if the user explicitly asks to refresh or rebuild data, and doctor says auth is healthy, use:
 
@@ -126,7 +146,7 @@ ghcrawl refresh owner/repo --no-cluster
 
 Do not decide on your own to run `cluster` just because it is local-only. It is still long-running and should be treated as an explicit user-directed operation.
 
-### 4. List clusters
+### 5. List clusters
 
 Use:
 
@@ -140,7 +160,7 @@ This returns:
 - freshness state
 - cluster summaries
 
-### 5. Inspect one cluster
+### 6. Inspect one cluster
 
 Use:
 
@@ -155,7 +175,7 @@ This returns:
 - a body snippet
 - stored summary fields when present
 
-### 6. Optional deeper inspection
+### 7. Optional deeper inspection
 
 Use search or neighbors as needed:
 

@@ -2,13 +2,17 @@
 
 Use the JSON CLI surface. Do not parse the TUI.
 
+Do not query the ghcrawl SQLite database directly with `sqlite3`, `pragma`, or ad hoc SQL. If the supported CLI cannot answer a read-only question, report the CLI problem to the user instead of bypassing the interface.
+
+Do not start with `ghcrawl --help` or `<subcommand> --help`. Use the command surface documented here unless the user explicitly asked about CLI syntax or you are maintaining ghcrawl itself.
+
 ## Commands
 
 ### `ghcrawl doctor --json`
 
 Health and auth smoke check.
 
-Use this first. Treat the result as a gate:
+Use this only when needed. Treat the result as a gate:
 
 - If GitHub/OpenAI auth is missing or unhealthy, stay read-only.
 - If GitHub/OpenAI auth is healthy, API-backed commands are available, but still require explicit user direction.
@@ -17,6 +21,8 @@ Do not call this automatically on every skill invocation. Use it when:
 
 - the user explicitly asked for API-backed work
 - or a read-only request failed and local setup/auth may be the reason
+
+If the user asked only for read-only analysis, missing auth is not itself a blocker. Work from the existing local dataset through the CLI.
 
 ### `ghcrawl threads owner/repo --numbers <n,n,...>`
 
@@ -179,6 +185,8 @@ pnpm --filter ghcrawl cli cluster-detail owner/repo --id 123 --member-limit 20 -
 pnpm --filter ghcrawl cli close-thread owner/repo --number 42
 pnpm --filter ghcrawl cli close-cluster owner/repo --id 123
 ```
+
+If the supported CLI path still fails, hangs, or returns unusable output, stop and tell the user there is a ghcrawl CLI problem. Do not fall back to direct SQLite inspection.
 
 ## Suggested analysis flow
 
