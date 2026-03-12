@@ -372,11 +372,34 @@ function buildSummary(result: PerfRunResult): string {
     .join('\n');
 }
 
+function writeOutput(result: PerfRunResult, summary: string, bootstrap: boolean): void {
+  const outputPath = process.env.GHCRAWL_CLUSTER_PERF_OUTPUT_PATH;
+  if (!outputPath) {
+    return;
+  }
+
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  fs.writeFileSync(
+    outputPath,
+    JSON.stringify(
+      {
+        status: result.deltaPercent > result.maxRegressionPercent ? 'FAIL' : 'PASS',
+        bootstrap,
+        summary,
+        result,
+      },
+      null,
+      2,
+    ) + '\n',
+  );
+}
+
 async function main(): Promise<void> {
   const baseline = loadBaseline();
   const result = await measureBenchmark(baseline);
   const summary = buildSummary(result);
   const bootstrap = shouldBootstrapBaseline();
+  const shouldFail = !bootstrap && result.deltaPercent > result.maxRegressionPercent;
 
   process.stdout.write(`${summary}\n`);
   if (bootstrap) {
@@ -386,8 +409,9 @@ async function main(): Promise<void> {
   if (summaryPath) {
     fs.appendFileSync(summaryPath, `${summary}\n`);
   }
+  writeOutput(result, summary, bootstrap);
 
-  if (!bootstrap && result.deltaPercent > result.maxRegressionPercent) {
+  if (shouldFail) {
     throw new Error(
       `Cluster perf regression exceeded threshold: ${formatPercent(result.deltaPercent)} > ${formatPercent(result.maxRegressionPercent)}`,
     );

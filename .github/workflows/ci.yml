@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   install-deps:
@@ -69,7 +70,58 @@ jobs:
         uses: ./.github/actions/configure-nodejs
 
       - name: Run cluster performance integration test
+        env:
+          GHCRAWL_CLUSTER_PERF_OUTPUT_PATH: ${{ runner.temp }}/cluster-perf.json
         run: pnpm test:cluster-perf
+
+      - name: Update PR cluster perf comment
+        if: ${{ always() && github.event_name == 'pull_request' }}
+        uses: actions/github-script@v8
+        env:
+          CLUSTER_PERF_OUTPUT_PATH: ${{ runner.temp }}/cluster-perf.json
+          CLUSTER_PERF_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const outputPath = process.env.CLUSTER_PERF_OUTPUT_PATH;
+            const marker = '<!-- ghcrawl-cluster-perf -->';
+            const runUrl = process.env.CLUSTER_PERF_RUN_URL;
+            const sha = context.sha.slice(0, 7);
+            let summary = '## Cluster Performance\n\nBenchmark output was not produced. See the workflow run for details.';
+
+            if (outputPath && fs.existsSync(outputPath)) {
+              const parsed = JSON.parse(fs.readFileSync(outputPath, 'utf8'));
+              summary = parsed.summary;
+            }
+
+            const body = `${marker}\n${summary}\n_Run: [workflow run](${runUrl}) for \`${sha}\`_`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+
+            const existing = comments.find((comment) =>
+              comment.user?.login === 'github-actions[bot]' && comment.body?.includes(marker),
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
 
   cli-smoke:
     name: CLI Smoke
