@@ -24,6 +24,7 @@ type CommandName =
   | 'purge-comments'
   | 'embed'
   | 'cluster'
+  | 'cluster-experiment'
   | 'clusters'
   | 'cluster-detail'
   | 'search'
@@ -430,6 +431,8 @@ export function parseRepoFlags(command: CommandName, args: string[]): ParsedRepo
       query: { type: 'string' },
       mode: { type: 'string' },
       k: { type: 'string' },
+      backend: { type: 'string' },
+      'candidate-k': { type: 'string' },
       threshold: { type: 'string' },
       port: { type: 'string' },
       id: { type: 'string' },
@@ -933,6 +936,21 @@ export async function run(
         } finally {
           heapDiagnostics?.dispose();
         }
+      }
+      case 'cluster-experiment': {
+        const { owner, repo, values } = parseRepoFlags(rest);
+        const backend = values.backend === 'vectorlite' ? values.backend : undefined;
+        const result = getService().clusterExperiment({
+          owner,
+          repo,
+          backend,
+          k: typeof values.k === 'string' ? Number(values.k) : undefined,
+          minScore: typeof values.threshold === 'string' ? Number(values.threshold) : undefined,
+          candidateK: typeof values['candidate-k'] === 'string' ? Number(values['candidate-k']) : undefined,
+          onProgress: writeProgress,
+        });
+        stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return;
       }
       case 'clusters': {
         const { owner, repo, values } = parseRepoFlags('clusters', rest);
