@@ -76,6 +76,10 @@ jobs:
         if: ${{ github.event_name == 'pull_request' }}
         run: git worktree add --detach "$RUNNER_TEMP/cluster-perf-base" "${{ github.event.pull_request.base.sha }}"
 
+      - name: Copy large cluster perf fixture into baseline worktree
+        if: ${{ github.event_name == 'pull_request' }}
+        run: cp packages/api-core/src/cluster/perf-large.json "$RUNNER_TEMP/cluster-perf-base/packages/api-core/src/cluster/perf-baseline.json"
+
       - name: Install dependencies for baseline worktree
         if: ${{ github.event_name == 'pull_request' }}
         working-directory: ${{ runner.temp }}/cluster-perf-base
@@ -91,6 +95,7 @@ jobs:
 
       - name: Run PR head exact cluster perf
         env:
+          GHCRAWL_CLUSTER_PERF_CONFIG_PATH: ${{ github.workspace }}/packages/api-core/src/cluster/perf-large.json
           GHCRAWL_CLUSTER_PERF_OUTPUT_PATH: ${{ runner.temp }}/cluster-perf-head-exact.json
         run: pnpm test:cluster-perf
 
@@ -98,6 +103,7 @@ jobs:
         if: ${{ github.event_name == 'pull_request' }}
         env:
           GHCRAWL_CLUSTER_PERF_BACKEND: vectorlite
+          GHCRAWL_CLUSTER_PERF_CONFIG_PATH: ${{ github.workspace }}/packages/api-core/src/cluster/perf-large.json
           GHCRAWL_CLUSTER_PERF_IGNORE_THRESHOLD: 1
           GHCRAWL_CLUSTER_PERF_OUTPUT_PATH: ${{ runner.temp }}/cluster-perf-head-vectorlite.json
         run: |
@@ -151,6 +157,7 @@ jobs:
           const lines = [
             '## Cluster Performance',
             '',
+            `- Fixture shape: ${headExact.result.threadCount} threads x ${headExact.result.sourceKinds.length} source kinds`,
             `- Head exact fixture median (full-run): ${formatDurationMs(headExact.result.medianMs)}`,
             `- Head exact projected openclaw/openclaw: ${formatDurationMs(headExact.result.projectedOpenclawMs)}`,
           ];

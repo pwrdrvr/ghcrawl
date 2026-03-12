@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "fixture": {
-    "clusterCount": 192,
+    "clusterCount": 96,
     "threadsPerCluster": 16,
     "clusterBlockWidth": 4,
     "noiseDimensions": 32,
@@ -22,7 +22,7 @@
     "maxTotalMs": 600000
   },
   "baseline": {
-    "fixtureMedianMs": 0,
+    "fixtureMedianMs": 1800,
     "projectedOpenclawMs": 600000
   },
   "thresholds": {
