@@ -162,6 +162,12 @@ test('parseRepoFlags accepts include-closed boolean flag', () => {
   assert.equal(parsed.values['include-closed'], true);
 });
 
+test('parseRepoFlags accepts kind filter for threads', () => {
+  const parsed = parseRepoFlags(['openclaw/openclaw', '--kind', 'pull_request']);
+  assert.equal(parsed.owner, 'openclaw');
+  assert.equal(parsed.repo, 'openclaw');
+  assert.equal(parsed.values.kind, 'pull_request');
+});
 test('resolveSinceValue keeps ISO timestamps', () => {
   assert.equal(resolveSinceValue('2026-03-01T00:00:00Z'), '2026-03-01T00:00:00.000Z');
 });

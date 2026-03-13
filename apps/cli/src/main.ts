@@ -102,6 +102,7 @@ export function parseRepoFlags(args: string[]): { owner: string; repo: string; v
       'include-comments': { type: 'boolean' },
       'full-reconcile': { type: 'boolean' },
       'include-closed': { type: 'boolean' },
+      kind: { type: 'string' },
       number: { type: 'string' },
       numbers: { type: 'string' },
       login: { type: 'string' },
