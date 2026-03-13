@@ -259,7 +259,29 @@ function closeService(service: GHCrawlService | null): void {
   }
 }
 
+function isBrokenPipeError(error: unknown): boolean {
+  return Boolean(
+    error &&
+      typeof error === 'object' &&
+      'code' in error &&
+      (error as { code?: unknown }).code === 'EPIPE',
+  );
+}
+
+function attachBrokenPipeHandler(stream: NodeJS.WritableStream): void {
+  if (typeof stream.on !== 'function') {
+    return;
+  }
+  stream.on('error', (error) => {
+    if (isBrokenPipeError(error)) {
+      process.exit(0);
+    }
+    throw error;
+  });
+}
+
 export async function run(argv: string[], stdout: NodeJS.WritableStream = process.stdout): Promise<void> {
+  attachBrokenPipeHandler(stdout);
   const parsedGlobals = parseGlobalFlags(argv);
   const [commandRaw, ...rest] = parsedGlobals.argv;
   const command = commandRaw as CommandName | undefined;

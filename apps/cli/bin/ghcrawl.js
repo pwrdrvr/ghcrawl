@@ -7,15 +7,15 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const binDir = path.dirname(fileURLToPath(import.meta.url));
 const distEntrypoint = path.join(binDir, '..', 'dist', 'main.js');
+const sourceEntrypoint = path.join(binDir, '..', 'src', 'main.ts');
 
-if (existsSync(distEntrypoint)) {
+if (!existsSync(sourceEntrypoint) && existsSync(distEntrypoint)) {
   const { run } = await import(pathToFileURL(distEntrypoint).href);
   run(process.argv.slice(2)).catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(1);
   });
 } else {
-  const sourceEntrypoint = path.join(binDir, '..', 'src', 'main.ts');
   const require = createRequire(import.meta.url);
   const tsxLoader = require.resolve('tsx');
   const child = spawn(process.execPath, ['--conditions=development', '--import', tsxLoader, sourceEntrypoint, ...process.argv.slice(2)], {
