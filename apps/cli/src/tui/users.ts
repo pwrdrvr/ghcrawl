@@ -109,10 +109,12 @@ function pushThreadSection(rows: UserThreadRow[], label: string, items: RepoUser
   if (items.length === 0) return;
   rows.push({ key: `${label}-header`, label, selectable: false });
   for (const item of items) {
-    const size =
-      item.kind === 'pull_request'
-        ? `  ${String(item.filesChanged ?? 0).padStart(2, ' ')}f +${String(item.additions ?? 0).padStart(4, ' ')} -${String(item.deletions ?? 0).padStart(4, ' ')}`
-        : '';
+    const hasKnownSize =
+      item.kind === 'pull_request' &&
+      (item.filesChanged !== null || item.additions !== null || item.deletions !== null);
+    const size = hasKnownSize
+      ? `  ${String(item.filesChanged ?? 0).padStart(2, ' ')}f +${String(item.additions ?? 0).padStart(4, ' ')} -${String(item.deletions ?? 0).padStart(4, ' ')}`
+      : '';
     rows.push({
       key: `thread-${item.threadId}`,
       label: `#${item.number}  ${String(item.ageDays ?? 0).padStart(3, ' ')}d${size}  ${escapeUserText(item.title)}`,

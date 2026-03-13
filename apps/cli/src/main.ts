@@ -15,6 +15,7 @@ type CommandName =
   | 'version'
   | 'sync'
   | 'refresh'
+  | 'refresh-user'
   | 'refresh-users'
   | 'threads'
   | 'author'
@@ -45,6 +46,7 @@ function usage(devMode = false): string {
     '  version',
     '  sync <owner/repo> [--since <iso|duration>] [--limit <count>] [--include-comments] [--full-reconcile]',
     '  refresh <owner/repo> [--no-sync] [--no-embed] [--no-cluster]',
+    '  refresh-user <owner/repo> --login <user> [--force]',
     '  refresh-users <owner/repo> [--mode flagged|trusted_prs] [--limit <count>] [--force]',
     '  threads <owner/repo> [--numbers <n,n,...>] [--kind issue|pull_request] [--include-closed]',
     '  author <owner/repo> --login <user> [--include-closed]',
@@ -334,6 +336,20 @@ export async function run(argv: string[], stdout: NodeJS.WritableStream = proces
           embed: values['no-embed'] === true ? false : undefined,
           cluster: values['no-cluster'] === true ? false : undefined,
           onProgress: writeProgress,
+        });
+        stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return;
+      }
+      case 'refresh-user': {
+        const { owner, repo, values } = parseRepoFlags(rest);
+        if (typeof values.login !== 'string' || values.login.trim().length === 0) {
+          throw new Error('Missing --login');
+        }
+        const result = await getService().refreshRepoUser({
+          owner,
+          repo,
+          login: values.login,
+          force: values.force === true,
         });
         stdout.write(`${JSON.stringify(result, null, 2)}\n`);
         return;

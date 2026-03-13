@@ -6,6 +6,8 @@ import type { TuiClusterDetail, TuiRepoStats, TuiThreadDetail } from '@ghcrawl/a
 import {
   buildFooterCommandHints,
   buildRefreshCliArgs,
+  buildRefreshUserCliArgs,
+  buildRefreshUsersCliArgs,
   buildHelpContent,
   buildUpdatePipelineLabels,
   describeUpdateTask,
@@ -226,5 +228,25 @@ test('buildRefreshCliArgs maps the staged selection to refresh skip flags', () =
     'openclaw/openclaw',
     '--no-sync',
     '--no-cluster',
+  ]);
+});
+
+test('buildRefreshUsersCliArgs maps user refresh mode and limit', () => {
+  assert.deepEqual(buildRefreshUsersCliArgs({ owner: 'openclaw', repo: 'openclaw' }, { mode: 'flagged', limit: 25 }), [
+    'refresh-users',
+    'openclaw/openclaw',
+    '--mode',
+    'flagged',
+    '--limit',
+    '25',
+  ]);
+});
+
+test('buildRefreshUserCliArgs maps a selected user refresh', () => {
+  assert.deepEqual(buildRefreshUserCliArgs({ owner: 'openclaw', repo: 'openclaw' }, { login: 'alice' }), [
+    'refresh-user',
+    'openclaw/openclaw',
+    '--login',
+    'alice',
   ]);
 });

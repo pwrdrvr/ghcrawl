@@ -2838,6 +2838,9 @@ function seedRepoUserExplorerFixture(service: GHCrawlService): void {
   insertThread.run(20, 1, '200', 20, 'issue', 'open', 'Carol issue', 'body', 'carol', 'User', 'https://github.com/openclaw/openclaw/issues/20', '[]', '[]', '{}', 'hash-20', 0, '2026-02-15T00:00:00Z', now, null, null, now, now, null, null, null, now);
   insertThread.run(21, 1, '201', 21, 'pull_request', 'open', 'Carol first PR', 'body', 'carol', 'User', 'https://github.com/openclaw/openclaw/pull/21', '[]', '[]', '{}', 'hash-21', 0, '2026-02-01T00:00:00Z', now, null, null, now, now, 5, 80, 10, now);
   insertThread.run(22, 1, '202', 22, 'pull_request', 'open', 'Carol second PR', 'body', 'carol', 'User', 'https://github.com/openclaw/openclaw/pull/22', '[]', '[]', '{}', 'hash-22', 0, '2026-02-10T00:00:00Z', now, null, null, now, now, 2, 20, 4, now);
+  insertThread.run(23, 1, '203', 23, 'pull_request', 'open', 'Carol third PR', 'body', 'carol', 'User', 'https://github.com/openclaw/openclaw/pull/23', '[]', '[]', '{}', 'hash-23', 0, '2026-02-12T00:00:00Z', now, null, null, now, now, 6, 90, 15, now);
+  insertThread.run(24, 1, '204', 24, 'pull_request', 'open', 'Carol fourth PR', 'body', 'carol', 'User', 'https://github.com/openclaw/openclaw/pull/24', '[]', '[]', '{}', 'hash-24', 0, '2026-02-13T00:00:00Z', now, null, null, now, now, 3, 25, 6, now);
+  insertThread.run(25, 1, '205', 25, 'pull_request', 'open', 'Carol fifth PR', 'body', 'carol', 'User', 'https://github.com/openclaw/openclaw/pull/25', '[]', '[]', '{}', 'hash-25', 0, '2026-02-14T00:00:00Z', now, null, null, now, now, 1, 10, 2, now);
   insertThread.run(30, 1, '300', 30, 'pull_request', 'open', 'Alice polished fix', 'body', 'alice', 'User', 'https://github.com/openclaw/openclaw/pull/30', '[]', '[]', '{}', 'hash-30', 0, '2026-01-10T00:00:00Z', now, null, null, now, now, 4, 120, 30, now);
   insertThread.run(31, 1, '301', 31, 'pull_request', 'open', 'Alice follow-up', 'body', 'alice', 'User', 'https://github.com/openclaw/openclaw/pull/31', '[]', '[]', '{}', 'hash-31', 0, '2026-01-05T00:00:00Z', now, null, null, now, now, 7, 200, 40, now);
 
@@ -2938,12 +2941,12 @@ test('listRepoUsers returns flagged and trusted contributor views with totals an
     seedRepoUserExplorerFixture(service);
 
     const flagged = service.listRepoUsers({ owner: 'openclaw', repo: 'openclaw', mode: 'flagged' });
-    assert.deepEqual(flagged.users.map((user) => user.login), ['bob', 'carol']);
+    assert.deepEqual(flagged.users.map((user) => user.login), ['carol', 'bob']);
     assert.equal(flagged.totals.matchingUserCount, 2);
     assert.equal(flagged.totals.openIssueCount, 4);
-    assert.equal(flagged.totals.openPullRequestCount, 3);
-    assert.equal(flagged.users[0]?.matchedLowReputation, true);
-    assert.equal(flagged.users[1]?.matchedLikelyHiddenActivity, true);
+    assert.equal(flagged.totals.openPullRequestCount, 6);
+    assert.equal(flagged.users[0]?.matchedLikelyHiddenActivity, true);
+    assert.equal(flagged.users[1]?.matchedLowReputation, true);
 
     const trusted = service.listRepoUsers({ owner: 'openclaw', repo: 'openclaw', mode: 'trusted_prs' });
     assert.deepEqual(trusted.users.map((user) => user.login), ['alice']);
@@ -2979,6 +2982,41 @@ test('getRepoUserDetail returns repo-local issues, PRs, and sizing metrics', () 
     assert.equal(detail.pullRequests[0]?.additions, 200);
     assert.equal(detail.pullRequests[1]?.number, 30);
     assert.equal(detail.issues.length, 0);
+  } finally {
+    service.close();
+  }
+});
+
+test('getRepoUserDetail falls back to raw_json PR size fields when typed columns are null', () => {
+  const service = makeTestService({
+    checkAuth: async () => undefined,
+    getRepo: async () => ({}),
+    listRepositoryIssues: async () => [],
+    getIssue: async () => ({}),
+    getPull: async () => ({}),
+    listIssueComments: async () => [],
+    listPullReviews: async () => [],
+    listPullReviewComments: async () => [],
+  });
+
+  try {
+    seedRepoUserExplorerFixture(service);
+    service.db
+      .prepare(
+        `update threads
+         set files_changed = null,
+             additions = null,
+             deletions = null,
+             raw_json = ?
+         where id = ?`,
+      )
+      .run(JSON.stringify({ changed_files: 9, additions: 150, deletions: 12 }), 31);
+
+    const detail = service.getRepoUserDetail({ owner: 'openclaw', repo: 'openclaw', login: 'alice' });
+    assert.equal(detail.pullRequests[0]?.number, 31);
+    assert.equal(detail.pullRequests[0]?.filesChanged, 9);
+    assert.equal(detail.pullRequests[0]?.additions, 150);
+    assert.equal(detail.pullRequests[0]?.deletions, 12);
   } finally {
     service.close();
   }

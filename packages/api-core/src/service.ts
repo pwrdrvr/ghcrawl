@@ -445,6 +445,26 @@ function parsePullFilesChanged(payload: Record<string, unknown>): number | null 
   return parseNullableInteger(payload.changed_files ?? payload.files_changed);
 }
 
+function parseThreadSizeFromRawJson(rawJson: string | null | undefined): {
+  filesChanged: number | null;
+  additions: number | null;
+  deletions: number | null;
+} {
+  if (!rawJson) {
+    return { filesChanged: null, additions: null, deletions: null };
+  }
+  try {
+    const parsed = JSON.parse(rawJson) as Record<string, unknown>;
+    return {
+      filesChanged: parsePullFilesChanged(parsed),
+      additions: parseNullableInteger(parsed.additions),
+      deletions: parseNullableInteger(parsed.deletions),
+    };
+  } catch {
+    return { filesChanged: null, additions: null, deletions: null };
+  }
+}
+
 function canSkipRepoUserRefresh(user: UserRow | null, force = false, now: Date = new Date()): boolean {
   return force !== true && Boolean(user) && !isStaleAt(user?.last_global_refresh_at ?? null, now) && !user?.last_refresh_error;
 }
@@ -877,7 +897,10 @@ export class GHCrawlService {
           left.summary.login.localeCompare(right.summary.login)
         );
       }
+      const leftTotal = left.summary.openIssueCount + left.summary.openPullRequestCount;
+      const rightTotal = right.summary.openIssueCount + right.summary.openPullRequestCount;
       return (
+        rightTotal - leftTotal ||
         right.summary.openIssueCount - left.summary.openIssueCount ||
         right.summary.openPullRequestCount - left.summary.openPullRequestCount ||
         (parseIso(left.firstSeenAt) ?? Number.POSITIVE_INFINITY) - (parseIso(right.firstSeenAt) ?? Number.POSITIVE_INFINITY) ||
@@ -2786,6 +2809,7 @@ export class GHCrawlService {
   }
 
   private repoUserThreadToDto(row: ThreadRow): RepoUserDetailResponse['issues'][number] {
+    const rawSize = row.kind === 'pull_request' ? parseThreadSizeFromRawJson(row.raw_json) : { filesChanged: null, additions: null, deletions: null };
     return {
       threadId: row.id,
       number: row.number,
@@ -2797,9 +2821,9 @@ export class GHCrawlService {
       createdAtGh: row.created_at_gh ?? null,
       updatedAtGh: row.updated_at_gh ?? null,
       ageDays: ageDaysFrom(row.created_at_gh ?? row.updated_at_gh ?? null),
-      filesChanged: row.files_changed ?? null,
-      additions: row.additions ?? null,
-      deletions: row.deletions ?? null,
+      filesChanged: row.files_changed ?? rawSize.filesChanged,
+      additions: row.additions ?? rawSize.additions,
+      deletions: row.deletions ?? rawSize.deletions,
     };
   }
 

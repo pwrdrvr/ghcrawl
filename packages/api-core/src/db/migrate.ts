@@ -281,6 +281,16 @@ export function migrate(db: SqliteDatabase): void {
     db.exec('alter table threads add column deletions integer');
   }
 
+  db.exec(`
+    update threads
+    set files_changed = coalesce(files_changed, cast(json_extract(raw_json, '$.changed_files') as integer), cast(json_extract(raw_json, '$.files_changed') as integer)),
+        additions = coalesce(additions, cast(json_extract(raw_json, '$.additions') as integer)),
+        deletions = coalesce(deletions, cast(json_extract(raw_json, '$.deletions') as integer))
+    where kind = 'pull_request'
+      and state = 'open'
+      and (files_changed is null or additions is null or deletions is null)
+  `);
+
   const clusterColumns = new Set(
     (db.prepare('pragma table_info(clusters)').all() as Array<{ name: string }>).map((column) => column.name),
   );

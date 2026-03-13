@@ -19,6 +19,7 @@ test('run prints usage with no command', async () => {
   assert.match(output, /ghcrawl <command>/);
   assert.match(output, /\n  version\n/);
   assert.match(output, /refresh <owner\/repo>/);
+  assert.match(output, /refresh-user <owner\/repo> --login <user>/);
   assert.match(output, /refresh-users <owner\/repo>/);
   assert.match(output, /threads <owner\/repo>/);
   assert.match(output, /author <owner\/repo> --login <user>/);
@@ -43,6 +44,7 @@ test('run prints usage for help flag', async () => {
   assert.match(output, /ghcrawl <command>/);
   assert.match(output, /\n  version\n/);
   assert.match(output, /refresh <owner\/repo>/);
+  assert.match(output, /refresh-user <owner\/repo> --login <user>/);
   assert.match(output, /refresh-users <owner\/repo>/);
   assert.match(output, /threads <owner\/repo>/);
   assert.match(output, /author <owner\/repo> --login <user>/);

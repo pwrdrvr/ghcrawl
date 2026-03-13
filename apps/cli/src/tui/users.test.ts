@@ -140,6 +140,20 @@ test('buildRepoUserThreadRows prioritizes pull requests in trusted mode', () => 
   assert.match(rows[1]?.label ?? '', /#43/);
 });
 
+test('buildRepoUserThreadRows hides unknown PR size columns instead of rendering zeroes', () => {
+  const detail = buildDetail();
+  detail.pullRequests[0] = {
+    ...detail.pullRequests[0],
+    filesChanged: null,
+    additions: null,
+    deletions: null,
+  };
+
+  const rows = buildRepoUserThreadRows(detail, 'trusted_prs');
+
+  assert.doesNotMatch(rows[1]?.label ?? '', /0f \+\s*0 -\s*0/);
+});
+
 test('renderRepoUserDetail includes reputation reasons and selected PR sizing', () => {
   const content = renderRepoUserDetail(buildDetail(), 11);
 
