@@ -9,6 +9,9 @@
   "packageManager": "pnpm@10.29.3",
   "scripts": {
     "build": "pnpm -r build",
+    "clean": "node ./scripts/clean-workspace.mjs dist tsbuildinfo",
+    "clean:dist": "node ./scripts/clean-workspace.mjs dist",
+    "clean:tsbuildinfo": "node ./scripts/clean-workspace.mjs tsbuildinfo",
     "cli": "node ./apps/cli/bin/ghcrawl.js",
     "bootstrap": "node ./apps/cli/bin/ghcrawl.js init",
     "doctor": "node ./apps/cli/bin/ghcrawl.js doctor",
