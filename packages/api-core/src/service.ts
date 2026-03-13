@@ -17,6 +17,7 @@ import {
   embedResultSchema,
   healthResponseSchema,
   neighborsResponseSchema,
+  repoUserBulkRefreshResponseSchema,
   repoUserDetailResponseSchema,
   repoUserModeSchema,
   repoUserRefreshResponseSchema,
@@ -38,6 +39,7 @@ import {
   type EmbedResultDto,
   type HealthResponse,
   type NeighborsResponse,
+  type RepoUserBulkRefreshResponse,
   type RepoUserDetailResponse,
   type RepoUserMode,
   type RepoUserRefreshResponse,
@@ -441,6 +443,10 @@ function parseReasonArray(value: string | null | undefined): string[] {
 
 function parsePullFilesChanged(payload: Record<string, unknown>): number | null {
   return parseNullableInteger(payload.changed_files ?? payload.files_changed);
+}
+
+function canSkipRepoUserRefresh(user: UserRow | null, force = false, now: Date = new Date()): boolean {
+  return force !== true && Boolean(user) && !isStaleAt(user?.last_global_refresh_at ?? null, now) && !user?.last_refresh_error;
 }
 
 function buildReputationProfile(params: {
@@ -941,12 +947,12 @@ export class GHCrawlService {
     }
 
     const existing = this.getUserRow(normalizedLogin);
-    if (params.force !== true && existing && !isStaleAt(existing.last_global_refresh_at) && !existing.last_refresh_error) {
+    if (canSkipRepoUserRefresh(existing, params.force)) {
       return repoUserRefreshResponseSchema.parse({
         ok: true,
         repository,
         login: normalizedLogin,
-        refreshedAt: existing.last_global_refresh_at ?? nowIso(),
+        refreshedAt: existing?.last_global_refresh_at ?? nowIso(),
         profile: this.buildRepoUserProfileDto(repository.id, normalizedLogin, aggregate),
       });
     }
@@ -1025,6 +1031,68 @@ export class GHCrawlService {
       });
       throw new Error(`Failed to refresh ${normalizedLogin}: ${message}`);
     }
+  }
+
+  async refreshRepoUsers(params: {
+    owner: string;
+    repo: string;
+    mode: RepoUserMode;
+    limit?: number;
+    force?: boolean;
+    includeStale?: boolean;
+    onProgress?: (message: string) => void;
+  }): Promise<RepoUserBulkRefreshResponse> {
+    const repository = this.requireRepository(params.owner, params.repo);
+    const mode = repoUserModeSchema.parse(params.mode);
+    const includeStale = params.includeStale ?? true;
+    const selectedUsers = this.listRepoUsers({
+      owner: params.owner,
+      repo: params.repo,
+      mode,
+      limit: params.limit,
+      includeStale,
+    }).users;
+
+    let refreshedCount = 0;
+    let skippedCount = 0;
+    let failedCount = 0;
+    const failures: RepoUserBulkRefreshResponse['failures'] = [];
+
+    for (const [index, user] of selectedUsers.entries()) {
+      const existing = this.getUserRow(user.login);
+      const skipped = canSkipRepoUserRefresh(existing, params.force);
+      params.onProgress?.(`[users] ${index + 1}/${selectedUsers.length} @${user.login}${skipped ? ' (cached)' : ''}`);
+      if (skipped) {
+        skippedCount += 1;
+        continue;
+      }
+      try {
+        await this.refreshRepoUser({
+          owner: params.owner,
+          repo: params.repo,
+          login: user.login,
+          force: params.force,
+        });
+        refreshedCount += 1;
+      } catch (error) {
+        failedCount += 1;
+        failures.push({
+          login: user.login,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return repoUserBulkRefreshResponseSchema.parse({
+      ok: failedCount === 0,
+      repository,
+      mode,
+      selectedUserCount: selectedUsers.length,
+      refreshedCount,
+      skippedCount,
+      failedCount,
+      failures,
+    });
   }
 
   closeThreadLocally(params: { owner: string; repo: string; threadNumber: number }): CloseResponse {

@@ -3048,3 +3048,59 @@ test('refreshRepoUser reuses fresh cache and refreshes stale user data on demand
     service.close();
   }
 });
+
+test('refreshRepoUsers refreshes the current mode in bulk with counts and failures', async () => {
+  let getUserCalls = 0;
+  const service = makeTestService({
+    checkAuth: async () => undefined,
+    getRepo: async () => ({}),
+    listRepositoryIssues: async () => [],
+    getIssue: async () => ({}),
+    getPull: async () => ({}),
+    listIssueComments: async () => [],
+    listPullReviews: async () => [],
+    listPullReviewComments: async () => [],
+    getUser: async (login) => {
+      getUserCalls += 1;
+      if (login === 'carol') {
+        throw new Error('GitHub profile hidden');
+      }
+      return {
+        id: 4000,
+        login,
+        created_at: '2020-01-01T00:00:00Z',
+        public_repos: 15,
+        public_gists: 1,
+        followers: 12,
+        following: 4,
+        html_url: `https://github.com/${login}`,
+        avatar_url: `https://avatars.githubusercontent.com/${login}`,
+        type: 'User',
+      };
+    },
+    listUserPublicEvents: async () => [{ id: 'evt-1' }],
+  });
+
+  try {
+    seedRepoUserExplorerFixture(service);
+    service.db
+      .prepare('update users set last_global_refresh_at = ?, last_refresh_error = null where login in (?, ?)')
+      .run('2020-01-01T00:00:00Z', 'bob', 'carol');
+
+    const result = await service.refreshRepoUsers({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      mode: 'flagged',
+      limit: 2,
+    });
+
+    assert.equal(result.selectedUserCount, 2);
+    assert.equal(result.refreshedCount, 1);
+    assert.equal(result.failedCount, 1);
+    assert.equal(result.skippedCount, 0);
+    assert.equal(result.failures[0]?.login, 'carol');
+    assert.equal(getUserCalls, 2);
+  } finally {
+    service.close();
+  }
+});

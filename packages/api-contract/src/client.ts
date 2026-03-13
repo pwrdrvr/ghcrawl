@@ -6,6 +6,8 @@ import {
   closeThreadRequestSchema,
   authorThreadsResponseSchema,
   repoUserDetailResponseSchema,
+  repoUserBulkRefreshRequestSchema,
+  repoUserBulkRefreshResponseSchema,
   repoUserRefreshRequestSchema,
   repoUserRefreshResponseSchema,
   repoUsersResponseSchema,
@@ -23,6 +25,7 @@ import {
   type CloseResponse,
   type AuthorThreadsResponse,
   type RepoUserDetailResponse,
+  type RepoUserBulkRefreshResponse,
   type RepoUserMode,
   type RepoUserRefreshResponse,
   type RepoUsersResponse,
@@ -46,6 +49,7 @@ export type GitcrawlClient = {
   listRepoUsers: (params: { owner: string; repo: string; mode: RepoUserMode; limit?: number; includeStale?: boolean }) => Promise<RepoUsersResponse>;
   getRepoUserDetail: (params: { owner: string; repo: string; login: string }) => Promise<RepoUserDetailResponse>;
   refreshRepoUser: (request: { owner: string; repo: string; login: string; force?: boolean }) => Promise<RepoUserRefreshResponse>;
+  refreshRepoUsers: (request: { owner: string; repo: string; mode: RepoUserMode; limit?: number; force?: boolean; includeStale?: boolean }) => Promise<RepoUserBulkRefreshResponse>;
   search: (params: { owner: string; repo: string; query: string; mode?: SearchMode }) => Promise<SearchResponse>;
   listClusters: (params: { owner: string; repo: string; includeClosed?: boolean }) => Promise<ClustersResponse>;
   listClusterSummaries: (params: {
@@ -128,6 +132,15 @@ export function createGitcrawlClient(baseUrl: string, fetchImpl: FetchLike = fet
         body: JSON.stringify(body),
       });
       return readJson(res, repoUserRefreshResponseSchema);
+    },
+    async refreshRepoUsers(request) {
+      const body = repoUserBulkRefreshRequestSchema.parse(request);
+      const res = await fetchImpl(`${normalized}/actions/refresh-users`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return readJson(res, repoUserBulkRefreshResponseSchema);
     },
     async search(params) {
       const search = new URLSearchParams({

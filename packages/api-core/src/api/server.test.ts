@@ -8,6 +8,7 @@ import {
   clusterSummariesResponseSchema,
   healthResponseSchema,
   neighborsResponseSchema,
+  repoUserBulkRefreshResponseSchema,
   repoUserDetailResponseSchema,
   repoUserRefreshResponseSchema,
   repoUsersResponseSchema,
@@ -494,6 +495,15 @@ test('repo user endpoints expose summaries, detail, and refresh', async () => {
     assert.equal(refreshResponse.status, 200);
     const refreshPayload = repoUserRefreshResponseSchema.parse((await refreshResponse.json()) as unknown);
     assert.equal(refreshPayload.profile.reputationTier, 'high');
+
+    const bulkRefreshResponse = await fetch(`http://127.0.0.1:${address.port}/actions/refresh-users`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ owner: 'openclaw', repo: 'openclaw', mode: 'trusted_prs', limit: 1 }),
+    });
+    assert.equal(bulkRefreshResponse.status, 200);
+    const bulkRefreshPayload = repoUserBulkRefreshResponseSchema.parse((await bulkRefreshResponse.json()) as unknown);
+    assert.equal(bulkRefreshPayload.selectedUserCount, 1);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     service.close();

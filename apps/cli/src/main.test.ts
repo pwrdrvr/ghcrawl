@@ -19,6 +19,7 @@ test('run prints usage with no command', async () => {
   assert.match(output, /ghcrawl <command>/);
   assert.match(output, /\n  version\n/);
   assert.match(output, /refresh <owner\/repo>/);
+  assert.match(output, /refresh-users <owner\/repo>/);
   assert.match(output, /threads <owner\/repo>/);
   assert.match(output, /author <owner\/repo> --login <user>/);
   assert.match(output, /close-thread <owner\/repo> --number <thread>/);
@@ -42,6 +43,7 @@ test('run prints usage for help flag', async () => {
   assert.match(output, /ghcrawl <command>/);
   assert.match(output, /\n  version\n/);
   assert.match(output, /refresh <owner\/repo>/);
+  assert.match(output, /refresh-users <owner\/repo>/);
   assert.match(output, /threads <owner\/repo>/);
   assert.match(output, /author <owner\/repo> --login <user>/);
   assert.match(output, /close-thread <owner\/repo> --number <thread>/);
@@ -160,6 +162,13 @@ test('parseRepoFlags accepts include-closed boolean flag', () => {
   assert.equal(parsed.owner, 'openclaw');
   assert.equal(parsed.repo, 'openclaw');
   assert.equal(parsed.values['include-closed'], true);
+});
+
+test('parseRepoFlags accepts force boolean flag', () => {
+  const parsed = parseRepoFlags(['openclaw/openclaw', '--force']);
+  assert.equal(parsed.owner, 'openclaw');
+  assert.equal(parsed.repo, 'openclaw');
+  assert.equal(parsed.values.force, true);
 });
 
 test('resolveSinceValue keeps ISO timestamps', () => {

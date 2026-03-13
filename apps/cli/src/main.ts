@@ -15,6 +15,7 @@ type CommandName =
   | 'version'
   | 'sync'
   | 'refresh'
+  | 'refresh-users'
   | 'threads'
   | 'author'
   | 'close-thread'
@@ -44,6 +45,7 @@ function usage(devMode = false): string {
     '  version',
     '  sync <owner/repo> [--since <iso|duration>] [--limit <count>] [--include-comments] [--full-reconcile]',
     '  refresh <owner/repo> [--no-sync] [--no-embed] [--no-cluster]',
+    '  refresh-users <owner/repo> [--mode flagged|trusted_prs] [--limit <count>] [--force]',
     '  threads <owner/repo> [--numbers <n,n,...>] [--kind issue|pull_request] [--include-closed]',
     '  author <owner/repo> --login <user> [--include-closed]',
     '  close-thread <owner/repo> --number <thread>',
@@ -119,6 +121,7 @@ export function parseRepoFlags(args: string[]): { owner: string; repo: string; v
       'no-sync': { type: 'boolean' },
       'no-embed': { type: 'boolean' },
       'no-cluster': { type: 'boolean' },
+      force: { type: 'boolean' },
     },
   });
 
@@ -330,6 +333,20 @@ export async function run(argv: string[], stdout: NodeJS.WritableStream = proces
           sync: values['no-sync'] === true ? false : undefined,
           embed: values['no-embed'] === true ? false : undefined,
           cluster: values['no-cluster'] === true ? false : undefined,
+          onProgress: writeProgress,
+        });
+        stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return;
+      }
+      case 'refresh-users': {
+        const { owner, repo, values } = parseRepoFlags(rest);
+        const mode = values.mode === 'trusted_prs' ? 'trusted_prs' : 'flagged';
+        const result = await getService().refreshRepoUsers({
+          owner,
+          repo,
+          mode,
+          limit: typeof values.limit === 'string' ? parsePositiveInteger('limit', values.limit) : undefined,
+          force: values.force === true,
           onProgress: writeProgress,
         });
         stdout.write(`${JSON.stringify(result, null, 2)}\n`);

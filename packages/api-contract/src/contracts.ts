@@ -188,6 +188,34 @@ export const repoUserRefreshResponseSchema = z.object({
 });
 export type RepoUserRefreshResponse = z.infer<typeof repoUserRefreshResponseSchema>;
 
+export const repoUserBulkRefreshRequestSchema = z.object({
+  owner: z.string(),
+  repo: z.string(),
+  mode: repoUserModeSchema,
+  limit: z.number().int().positive().optional(),
+  force: z.boolean().optional(),
+  includeStale: z.boolean().optional(),
+});
+export type RepoUserBulkRefreshRequest = z.infer<typeof repoUserBulkRefreshRequestSchema>;
+
+export const repoUserBulkRefreshFailureSchema = z.object({
+  login: z.string(),
+  error: z.string(),
+});
+export type RepoUserBulkRefreshFailure = z.infer<typeof repoUserBulkRefreshFailureSchema>;
+
+export const repoUserBulkRefreshResponseSchema = z.object({
+  ok: z.boolean(),
+  repository: repositorySchema,
+  mode: repoUserModeSchema,
+  selectedUserCount: z.number().int().nonnegative(),
+  refreshedCount: z.number().int().nonnegative(),
+  skippedCount: z.number().int().nonnegative(),
+  failedCount: z.number().int().nonnegative(),
+  failures: z.array(repoUserBulkRefreshFailureSchema),
+});
+export type RepoUserBulkRefreshResponse = z.infer<typeof repoUserBulkRefreshResponseSchema>;
+
 export const searchHitSchema = z.object({
   thread: threadSchema,
   keywordScore: z.number().nullable(),

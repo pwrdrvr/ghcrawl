@@ -5,6 +5,7 @@ import {
   actionRequestSchema,
   healthResponseSchema,
   neighborsResponseSchema,
+  repoUserBulkRefreshResponseSchema,
   repoUserDetailResponseSchema,
   repoUsersResponseSchema,
   searchResponseSchema,
@@ -195,4 +196,27 @@ test('repo user detail schema accepts profile metrics and PR sizing', () => {
   });
 
   assert.equal(parsed.pullRequests[0]?.filesChanged, 4);
+});
+
+test('repo user bulk refresh schema accepts summary counts and failures', () => {
+  const parsed = repoUserBulkRefreshResponseSchema.parse({
+    ok: true,
+    repository: {
+      id: 1,
+      owner: 'openclaw',
+      name: 'openclaw',
+      fullName: 'openclaw/openclaw',
+      githubRepoId: null,
+      updatedAt: new Date().toISOString(),
+    },
+    mode: 'flagged',
+    selectedUserCount: 25,
+    refreshedCount: 20,
+    skippedCount: 4,
+    failedCount: 1,
+    failures: [{ login: 'alice', error: 'rate limited' }],
+  });
+
+  assert.equal(parsed.failedCount, 1);
+  assert.equal(parsed.failures[0]?.login, 'alice');
 });

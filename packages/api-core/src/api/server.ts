@@ -1,6 +1,6 @@
 import http from 'node:http';
 
-import { actionRequestSchema, closeClusterRequestSchema, closeThreadRequestSchema, refreshRequestSchema, repoUserRefreshRequestSchema } from '@ghcrawl/api-contract';
+import { actionRequestSchema, closeClusterRequestSchema, closeThreadRequestSchema, refreshRequestSchema, repoUserBulkRefreshRequestSchema, repoUserRefreshRequestSchema } from '@ghcrawl/api-contract';
 import { ZodError } from 'zod';
 
 import { GHCrawlService, parseRepoParams } from '../service.js';
@@ -212,6 +212,12 @@ export function createApiServer(service: GHCrawlService): http.Server {
       if (req.method === 'POST' && url.pathname === '/actions/refresh-user') {
         const body = repoUserRefreshRequestSchema.parse(await readBody(req));
         sendJson(res, 200, await service.refreshRepoUser(body));
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/actions/refresh-users') {
+        const body = repoUserBulkRefreshRequestSchema.parse(await readBody(req));
+        sendJson(res, 200, await service.refreshRepoUsers(body));
         return;
       }
 

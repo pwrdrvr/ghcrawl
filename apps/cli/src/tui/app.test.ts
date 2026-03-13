@@ -190,7 +190,9 @@ test('buildHelpContent includes the full key command list', () => {
   assert.match(content, /\/users\s+switch to the flagged contributor explorer/);
   assert.match(content, /\/users flagged\s+show low-reputation, stale, or hidden-activity contributors/);
   assert.match(content, /\/users trusted\s+show high-reputation contributors with open PRs/);
+  assert.match(content, /\/refresh\s+reload the current view, or open the user refresh menu on \/users/);
   assert.match(content, /\/user-refresh\s+refresh the selected user profile and reputation signals/);
+  assert.match(content, /\/user-refresh-bulk\s+open the bulk user refresh menu for the current user mode/);
   assert.match(content, /\/filter\s+open the cluster filter prompt/);
   assert.match(content, /Tab \/ Shift-Tab/);
   assert.match(content, /Left \/ Right\s+cycle focus backward or forward across panes/);
@@ -210,8 +212,8 @@ test('buildHelpContent includes the full key command list', () => {
 
 test('buildFooterCommandHints leads with slash commands for each screen', () => {
   assert.match(buildFooterCommandHints('clusters')[0], /\/clusters \/users \/filter \/repos \/update \/help \/quit/);
-  assert.match(buildFooterCommandHints('users')[0], /\/users flagged \/users trusted \/user-refresh \/user-open \/repos \/help \/quit/);
-  assert.match(buildFooterCommandHints('users')[1], /o profile/);
+  assert.match(buildFooterCommandHints('users')[0], /\/users flagged \/users trusted \/refresh \/user-refresh-bulk \/user-open \/repos \/help \/quit/);
+  assert.match(buildFooterCommandHints('users')[1], /r refresh menu/);
 });
 
 test('buildRefreshCliArgs maps the staged selection to refresh skip flags', () => {

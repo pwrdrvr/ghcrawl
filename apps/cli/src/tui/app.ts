@@ -82,6 +82,11 @@ type AuthorThreadChoice = {
   label: string;
 };
 
+type UserRefreshChoice =
+  | { kind: 'reload-local'; label: string }
+  | { kind: 'selected-user'; label: string }
+  | { kind: 'bulk'; label: string; limit: number | null };
+
 type Widgets = {
   screen: blessed.Widgets.Screen;
   header: blessed.Widgets.BoxElement;
@@ -1234,6 +1239,41 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     }
   };
 
+  const withProgressOverlay = async <T>(
+    label: string,
+    initialMessage: string,
+    task: (updateMessage: (message: string) => void) => T | Promise<T>,
+  ): Promise<T> => {
+    const box = blessed.box({
+      parent: widgets.screen,
+      border: 'line',
+      label: ` ${label} `,
+      width: '62%',
+      height: 8,
+      top: 'center',
+      left: 'center',
+      tags: true,
+      content: `${initialMessage}\n\nThis may take a while on large repositories.`,
+      style: {
+        border: { fg: '#5bc0eb' },
+        fg: 'white',
+        bg: '#101522',
+      },
+    });
+    const updateMessage = (message: string): void => {
+      box.setContent(`${message}\n\nThis may take a while on large repositories.`);
+      widgets.screen.render();
+    };
+    widgets.screen.render();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    try {
+      return await task(updateMessage);
+    } finally {
+      box.destroy();
+      widgets.screen.render();
+    }
+  };
+
   const switchRepository = (
     target: RepositoryTarget,
     overrides?: Partial<{
@@ -1382,11 +1422,11 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   };
 
   const refreshAction = (): void => {
-    status = 'Refreshing';
     if (activeScreen === 'users') {
-      refreshUserExplorer(true);
+      promptUserRefreshAction();
       return;
     }
+    status = 'Refreshing';
     refreshAll(true);
   };
 
@@ -1423,6 +1463,85 @@ export async function startTui(params: StartTuiParams): Promise<void> {
         render();
       } finally {
         modalOpen = false;
+      }
+    })();
+  };
+
+  const refreshBulkUsersAction = (limit: number | null): void => {
+    if (activeScreen !== 'users') {
+      status = 'Open User Explorer first';
+      render();
+      return;
+    }
+    const selectedCount = limit ?? userList?.totals.matchingUserCount ?? userRows.length;
+    if (selectedCount <= 0) {
+      status = 'No matching users to refresh';
+      render();
+      return;
+    }
+
+    void (async () => {
+      modalOpen = true;
+      try {
+        const result = await withProgressOverlay(
+          ' User Refresh ',
+          `Refreshing ${selectedCount} contributor profile(s)...`,
+          async (updateMessage) =>
+            params.service.refreshRepoUsers({
+              owner: currentRepository.owner,
+              repo: currentRepository.repo,
+              mode: userMode,
+              limit: limit ?? undefined,
+              onProgress: (message) => updateMessage(message.replace(/^\[users\]\s*/, '')),
+            }),
+        );
+        refreshUserExplorer(true);
+        status = `User refresh: ${result.refreshedCount} refreshed, ${result.skippedCount} skipped, ${result.failedCount} failed`;
+        if (result.failures.length > 0) {
+          pushActivity(`[users] refresh failures: ${result.failures.slice(0, 5).map((failure) => `@${failure.login}`).join(', ')}`);
+        }
+        render();
+      } catch (error) {
+        status = error instanceof Error ? error.message : 'Failed to refresh users';
+        render();
+      } finally {
+        modalOpen = false;
+      }
+    })();
+  };
+
+  const promptUserRefreshAction = (): void => {
+    if (activeScreen !== 'users' || modalOpen) return;
+    void (async () => {
+      let delegated = false;
+      modalOpen = true;
+      try {
+        const choice = await promptUserRefreshChoice(
+          widgets.screen,
+          describeRepoUserMode(userMode),
+          userList?.totals.matchingUserCount ?? userRows.length,
+          selectedUserLogin,
+        );
+        if (!choice) {
+          render();
+          return;
+        }
+        if (choice.kind === 'reload-local') {
+          status = 'Refreshing local user view';
+          refreshUserExplorer(true);
+          return;
+        }
+        if (choice.kind === 'selected-user') {
+          delegated = true;
+          refreshSelectedUserAction();
+          return;
+        }
+        delegated = true;
+        refreshBulkUsersAction(choice.limit);
+      } finally {
+        if (!delegated) {
+          modalOpen = false;
+        }
       }
     })();
   };
@@ -1585,6 +1704,18 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       screens: ['users'],
       getAvailability: () => ({ enabled: selectedUserLogin !== null, reason: 'select a user first' }),
       execute: () => refreshSelectedUserAction(),
+    },
+    {
+      id: 'data.user-refresh-bulk',
+      slash: 'user-refresh-bulk',
+      label: 'Bulk refresh users',
+      description: 'Refresh the top contributors in the current user mode.',
+      screens: ['users'],
+      getAvailability: () => ({
+        enabled: (userList?.totals.matchingUserCount ?? userRows.length) > 0,
+        reason: 'no matching users',
+      }),
+      execute: () => promptUserRefreshAction(),
     },
     {
       id: 'data.user-open',
@@ -2038,11 +2169,11 @@ export function buildFooterCommandHints(activeScreen: TuiScreenId): [string, str
   const screenHint =
     activeScreen === 'clusters'
       ? '/clusters /users /filter /repos /update /help /quit'
-      : '/users flagged /users trusted /user-refresh /user-open /repos /help /quit';
+      : '/users flagged /users trusted /refresh /user-refresh-bulk /user-open /repos /help /quit';
   const hotkeyHint =
     activeScreen === 'clusters'
       ? 'Hotkeys: Tab/arrows move  # jump  p repos  g update  q quit'
-      : 'Hotkeys: Tab/arrows move  o profile  p repos  g update  q quit';
+      : 'Hotkeys: Tab/arrows move  r refresh menu  o profile  p repos  g update  q quit';
   return [`/ commands: ${screenHint}`, hotkeyHint];
 }
 
@@ -2057,7 +2188,9 @@ export function buildHelpContent(): string {
     '/users flagged    show low-reputation, stale, or hidden-activity contributors',
     '/users trusted    show high-reputation contributors with open PRs',
     '/filter           open the cluster filter prompt',
+    '/refresh          reload the current view, or open the user refresh menu on /users',
     '/user-refresh     refresh the selected user profile and reputation signals',
+    '/user-refresh-bulk open the bulk user refresh menu for the current user mode',
     '/user-open        open the selected user profile in your browser',
     '/repos            browse repositories or sync a new one',
     '/update           start the staged background refresh pipeline',
@@ -2080,7 +2213,7 @@ export function buildHelpContent(): string {
     'l                 toggle wide layout: columns vs. wide-left stacked-right',
     'x                 show or hide locally closed clusters and members',
     '/filter           filter clusters by title/member text',
-    'r                 refresh the current local view from SQLite',
+    'r                 refresh the current view, or open the user refresh menu on /users',
     '',
     '{bold}Actions{/bold}',
     'g                 start the staged update pipeline in the background (GitHub, embeddings, clusters)',
@@ -2261,6 +2394,89 @@ async function promptUpdatePipelineSelection(
 
     screen.on('keypress', handleKeypress);
     box.on('select', () => finish({ ...selection }));
+  });
+}
+
+async function promptUserRefreshChoice(
+  screen: blessed.Widgets.Screen,
+  modeLabel: string,
+  matchingUserCount: number,
+  selectedUserLogin: string | null,
+): Promise<UserRefreshChoice | null> {
+  const choices: UserRefreshChoice[] = [
+    { kind: 'reload-local', label: 'Reload the local user view only' },
+    ...(selectedUserLogin ? [{ kind: 'selected-user' as const, label: `Refresh selected user @${selectedUserLogin}` }] : []),
+  ];
+  for (const limit of [25, 100]) {
+    if (matchingUserCount >= limit) {
+      choices.push({
+        kind: 'bulk',
+        limit,
+        label: `Refresh top ${limit} ${modeLabel.toLowerCase()} contributor${limit === 1 ? '' : 's'}`,
+      });
+    }
+  }
+  if (matchingUserCount > 0) {
+    choices.push({
+      kind: 'bulk',
+      limit: null,
+      label: `Refresh all ${matchingUserCount} matched contributor${matchingUserCount === 1 ? '' : 's'} (slow)`,
+    });
+  }
+
+  const box = blessed.list({
+    parent: screen,
+    border: 'line',
+    label: ' User Refresh ',
+    keys: true,
+    vi: true,
+    mouse: false,
+    top: 'center',
+    left: 'center',
+    width: '74%',
+    height: 11,
+    style: {
+      border: { fg: '#5bc0eb' },
+      item: { fg: 'white' },
+      selected: { bg: '#5bc0eb', fg: 'black', bold: true },
+    },
+    items: choices.map((choice) => choice.label),
+  });
+  const help = blessed.box({
+    parent: screen,
+    top: 'center-4',
+    left: 'center',
+    width: '74%',
+    height: 4,
+    style: { fg: 'white', bg: '#101522' },
+    content:
+      `Current mode: ${modeLabel}. Bulk refresh uses cached data and skips fresh profiles automatically.\n` +
+      'Use Enter to choose. Start with top 25 or top 100 before trying all matched users.',
+  });
+
+  box.focus();
+  box.select(0);
+  screen.render();
+
+  return await new Promise<UserRefreshChoice | null>((resolve) => {
+    const teardown = (): void => {
+      screen.off('keypress', handleKeypress);
+      box.destroy();
+      help.destroy();
+      screen.render();
+    };
+    const finish = (value: UserRefreshChoice | null): void => {
+      teardown();
+      resolve(value);
+    };
+    const handleKeypress = (_char: string, key: blessed.Widgets.Events.IKeyEventArg): void => {
+      if (key.name === 'escape' || key.name === 'q') {
+        finish(null);
+      }
+    };
+
+    screen.on('keypress', handleKeypress);
+    box.on('select', (_item, index) => finish(choices[index] ?? null));
   });
 }
 
