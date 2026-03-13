@@ -2972,6 +2972,127 @@ test('findPullRequestTemplateMatches prefers section distance when summary-to-ri
   }
 });
 
+test('findPullRequestTemplateMatches normalizes LF and CRLF bodies before exact template comparison', () => {
+  const service = makeTestService({
+    checkAuth: async () => undefined,
+    getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+    getFileContents: async () => {
+      throw new Error('not expected');
+    },
+    listRepositoryIssues: async () => [],
+    getIssue: async () => {
+      throw new Error('not expected');
+    },
+    getPull: async () => {
+      throw new Error('not expected');
+    },
+    listIssueComments: async () => [],
+    listPullReviews: async () => [],
+    listPullReviewComments: async () => [],
+  });
+
+  try {
+    const now = '2026-03-09T00:00:00Z';
+    service.db
+      .prepare(
+        `insert into repositories (id, owner, name, full_name, github_repo_id, raw_json, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '1', '{"default_branch":"main"}', now);
+    const insertThread = service.db.prepare(
+      `insert into threads (
+        id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
+        labels_json, assignees_json, raw_json, content_hash, is_draft, created_at_gh, updated_at_gh, closed_at_gh,
+        merged_at_gh, first_pulled_at, last_pulled_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insertThread.run(
+      31,
+      1,
+      '301',
+      91,
+      'pull_request',
+      'open',
+      'Windows body line endings',
+      'Intro\r\n\r\n## Summary\r\n\r\n- Problem:\r\n- Fix:\r\n\r\nFooter',
+      'alice',
+      'User',
+      'https://github.com/openclaw/openclaw/pull/91',
+      '[]',
+      '[]',
+      '{}',
+      'hash-91',
+      0,
+      now,
+      now,
+      null,
+      null,
+      now,
+      now,
+      now,
+    );
+    insertThread.run(
+      32,
+      1,
+      '302',
+      92,
+      'pull_request',
+      'open',
+      'Unix body line endings',
+      'Intro\n\n## Summary\n\n- Problem:\n- Fix:\n\nFooter',
+      'bob',
+      'User',
+      'https://github.com/openclaw/openclaw/pull/92',
+      '[]',
+      '[]',
+      '{}',
+      'hash-92',
+      0,
+      now,
+      now,
+      null,
+      null,
+      now,
+      now,
+      now,
+    );
+
+    const windowsTemplate = '## Summary\r\n\r\n- Problem:\r\n- Fix:';
+    const unixTemplate = '## Summary\n\n- Problem:\n- Fix:';
+
+    const windowsResult = service.findPullRequestTemplateMatches({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      templateText: unixTemplate,
+      templateSource: {
+        mode: 'file',
+        label: '/tmp/unix-template.md',
+      },
+      maxDistance: 10,
+    });
+    const unixResult = service.findPullRequestTemplateMatches({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      templateText: windowsTemplate,
+      templateSource: {
+        mode: 'file',
+        label: '/tmp/windows-template.md',
+      },
+      maxDistance: 10,
+    });
+
+    const windowsMatch = windowsResult.matches.find((match) => match.thread.number === 91);
+    const unixMatch = unixResult.matches.find((match) => match.thread.number === 92);
+
+    assert.equal(windowsMatch?.exactMatch, true);
+    assert.equal(windowsMatch?.exactMatchOffset, 7);
+    assert.equal(unixMatch?.exactMatch, true);
+    assert.equal(unixMatch?.exactMatchOffset, 7);
+  } finally {
+    service.close();
+  }
+});
+
 test('getPullRequestTemplate auto-discovers a common GitHub template path', async () => {
   const attemptedPaths: string[] = [];
   const service = makeTestService({
