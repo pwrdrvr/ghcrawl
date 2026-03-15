@@ -15,6 +15,7 @@ Why:
 - Cache key is based on the lockfile and workspace manifests.
 - When the key changes, parallel jobs can all miss cache, run full installs, and race to save the same key.
 - The `install-deps` job should call the action with `lookup-only: true` so a cache hit returns immediately without unpacking `node_modules`.
+- In that lookup-only hit path, the action also skips `corepack enable`, so the seed job does not set up `pnpm` unless it actually needs to populate the cache.
 - If the lookup misses, that same job runs `pnpm install --frozen-lockfile` once and saves the cache.
 - Dependent jobs should use the default `lookup-only: false` so they restore `node_modules` from the populated cache and skip install on an exact hit.
 

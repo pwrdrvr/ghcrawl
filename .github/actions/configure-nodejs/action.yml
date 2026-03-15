@@ -17,10 +17,6 @@ runs:
         node-version: ${{ inputs.node-version }}
         package-manager-cache: false
 
-    - name: Enable Corepack
-      shell: bash
-      run: corepack enable
-
     - name: Restore workspace node_modules from cache
       id: cache-node-modules
       uses: actions/cache@v5
@@ -32,6 +28,11 @@ runs:
           !node_modules/.cache
         key: node-modules-${{ inputs.node-version }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml', 'package.json', 'pnpm-workspace.yaml', 'apps/*/package.json', 'packages/*/package.json') }}
         lookup-only: ${{ inputs.lookup-only }}
+
+    - name: Enable Corepack
+      if: inputs.lookup-only != 'true' || steps.cache-node-modules.outputs.cache-hit != 'true'
+      shell: bash
+      run: corepack enable
 
     - name: Install dependencies
       if: steps.cache-node-modules.outputs.cache-hit != 'true'
