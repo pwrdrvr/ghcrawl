@@ -1,6 +1,11 @@
 # configure-nodejs action
 
-Sets up Node.js, enables Corepack, restores a lockfile-keyed workspace `node_modules` cache, and only runs `pnpm install --frozen-lockfile` when the cache misses.
+Sets up Node.js, enables Corepack, checks or restores a lockfile-keyed workspace `node_modules` cache, and only runs `pnpm install --frozen-lockfile` when the cache misses.
+
+## Inputs
+
+- `node-version`: Node.js major version to install. Defaults to `22`.
+- `lookup-only`: When `true`, checks whether the cache key exists without downloading the archive. Defaults to `false`.
 
 ## Required workflow usage pattern
 
@@ -9,7 +14,9 @@ Use this action in a dedicated `install-deps` job first, then make all build/tes
 Why:
 - Cache key is based on the lockfile and workspace manifests.
 - When the key changes, parallel jobs can all miss cache, run full installs, and race to save the same key.
-- Running one install job first seeds the new cache key once; dependent jobs then restore `node_modules` and skip install entirely on an exact cache hit.
+- The `install-deps` job should call the action with `lookup-only: true` so a cache hit returns immediately without unpacking `node_modules`.
+- If the lookup misses, that same job runs `pnpm install --frozen-lockfile` once and saves the cache.
+- Dependent jobs should use the default `lookup-only: false` so they restore `node_modules` from the populated cache and skip install on an exact hit.
 
 ## Example
 
@@ -20,6 +27,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/configure-nodejs
+        with:
+          lookup-only: true
 
   typecheck:
     runs-on: ubuntu-latest
