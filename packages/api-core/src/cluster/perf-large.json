@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "fixture": {
+    "clusterCount": 96,
+    "threadsPerCluster": 16,
+    "clusterBlockWidth": 4,
+    "noiseDimensions": 32,
+    "assertExactClusterCount": false,
+    "sourceKinds": [
+      "title",
+      "body",
+      "dedupe_summary"
+    ],
+    "k": 7,
+    "minScore": 0.82
+  },
+  "benchmark": {
+    "warmupRuns": 0,
+    "runsPerSample": 1,
+    "minSamples": 1,
+    "maxSamples": 1,
+    "maxTotalMs": 600000
+  },
+  "baseline": {
+    "fixtureMedianMs": 1800,
+    "projectedOpenclawMs": 600000
+  },
+  "thresholds": {
+    "maxRegressionPercent": 1000
+  }
+}
