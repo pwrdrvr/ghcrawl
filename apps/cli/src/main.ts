@@ -5,7 +5,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
-import { createApiServer, GHCrawlService } from '@ghcrawl/api-core';
+import { createApiServer, formatTriageMarkdown, GHCrawlService } from '@ghcrawl/api-core';
 import { runInitWizard } from './init-wizard.js';
 import { startTui } from './tui/app.js';
 
@@ -25,6 +25,7 @@ type CommandName =
   | 'cluster'
   | 'clusters'
   | 'cluster-detail'
+  | 'triage'
   | 'search'
   | 'neighbors'
   | 'tui'
@@ -52,6 +53,7 @@ function usage(devMode = false): string {
     '  cluster <owner/repo> [--k <count>] [--threshold <score>]',
     '  clusters <owner/repo> [--min-size <count>] [--limit <count>] [--sort recent|size] [--search <text>] [--include-closed]',
     '  cluster-detail <owner/repo> --id <cluster-id> [--member-limit <count>] [--body-chars <count>] [--include-closed]',
+    '  triage <owner/repo> [--limit <count>] [--min-size <count>] [--json]',
     '  search <owner/repo> --query <text> [--mode keyword|semantic|hybrid]',
     '  neighbors <owner/repo> --number <thread> [--limit <count>] [--threshold <score>]',
     '  tui [owner/repo]',
@@ -120,6 +122,7 @@ export function parseRepoFlags(args: string[]): { owner: string; repo: string; v
       'no-sync': { type: 'boolean' },
       'no-embed': { type: 'boolean' },
       'no-cluster': { type: 'boolean' },
+      json: { type: 'boolean' },
     },
   });
 
@@ -492,6 +495,21 @@ export async function run(argv: string[], stdout: NodeJS.WritableStream = proces
           includeClosed: values['include-closed'] === true,
         });
         stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return;
+      }
+      case 'triage': {
+        const { owner, repo, values } = parseRepoFlags(rest);
+        const report = getService().generateTriageReport({
+          owner,
+          repo,
+          limit: typeof values.limit === 'string' ? parsePositiveInteger('limit', values.limit) : undefined,
+          minSize: typeof values['min-size'] === 'string' ? parsePositiveInteger('min-size', values['min-size']) : undefined,
+        });
+        if (values.json === true) {
+          stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+        } else {
+          stdout.write(`${formatTriageMarkdown(report)}\n`);
+        }
         return;
       }
       case 'search': {
