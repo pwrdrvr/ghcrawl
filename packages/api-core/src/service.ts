@@ -3330,9 +3330,11 @@ export class GHCrawlService {
   }
 
   private pruneOldClusterRuns(repoId: number, keepRunId: number): void {
+    // Keep transitions pointing TO the current run (they record what changed
+    // between the previous run and keepRunId). Only delete old-to-old transitions.
     this.db
-      .prepare('delete from cluster_transitions where from_run_id in (select id from cluster_runs where repo_id = ? and id <> ?)')
-      .run(repoId, keepRunId);
+      .prepare('delete from cluster_transitions where from_run_id in (select id from cluster_runs where repo_id = ? and id <> ?) and to_run_id <> ?')
+      .run(repoId, keepRunId, keepRunId);
     this.db.prepare('delete from cluster_runs where repo_id = ? and id <> ?').run(repoId, keepRunId);
   }
 
