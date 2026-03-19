@@ -1,7 +1,7 @@
 ---
 name: ghcrawl
 description: "Use the local ghcrawl CLI to inspect duplicate clusters and issue/PR summaries from the existing ghcrawl dataset, and refresh one repo only when the user explicitly asks. Use when a user wants to triage related issues or PRs, inspect semantic clusters, or run ghcrawl's staged refresh pipeline."
-allowed-tools: Bash(ghcrawl:*), Bash(pnpm:*), Read(*)
+allowed-tools: Bash(ghcrawl:*), Read(*)
 ---
 
 # ghcrawl
@@ -31,13 +31,9 @@ Also never run `close-thread` or `close-cluster` unless the user explicitly asks
 
 ## Command preference
 
-Prefer the installed `ghcrawl` bin.
+Use the installed `ghcrawl` bin directly.
 
-If `ghcrawl` is not on `PATH`, use:
-
-```bash
-npx ghcrawl cli ...
-```
+If `ghcrawl` is not on `PATH`, stop and tell the user the local `ghcrawl` binary is unavailable. Do not fall back to repo-local wrappers. If the user is actively maintaining `ghcrawl` itself and explicitly wants source-tree commands, use the maintainer workflow in `CONTRIBUTING.md`.
 
 Do not start by running `ghcrawl --help` or `<subcommand> --help`. The documented command surface in this skill and [references/protocol.md](references/protocol.md) is the default source of truth. Only use help output when the user explicitly asks about CLI syntax or you are actively maintaining ghcrawl itself.
 
@@ -95,12 +91,6 @@ Run:
 ghcrawl doctor --json
 ```
 
-If the bin is unavailable, fall back to:
-
-```bash
-pnpm --filter ghcrawl cli doctor --json
-```
-
 Only do this when:
 
 - the user explicitly wants an API-backed operation such as `refresh`, `sync`, `embed`, or `cluster`
@@ -114,12 +104,6 @@ Interpret the result like this:
 If `doctor` is unhealthy but the user asked only for read-only inspection, say that API-backed refresh is unavailable and continue with read-only CLI commands when possible.
 
 ### 3. If the CLI is unavailable or misbehaving
-
-Use one supported fallback path before giving up:
-
-```bash
-pnpm --filter ghcrawl cli ...
-```
 
 If a documented `ghcrawl` command still fails, hangs, or returns unusable output through the supported CLI path, stop and report that to the user. Do not inspect tables, schema, or rows with `sqlite3`, `pragma`, or ad hoc SQL.
 

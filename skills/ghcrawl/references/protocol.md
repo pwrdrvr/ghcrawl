@@ -167,26 +167,11 @@ Useful for semantic or keyword follow-up.
 
 Useful for inspecting nearest semantic matches for one thread.
 
-## Fallback invocation
+## CLI availability
 
-If `ghcrawl` is not installed globally:
+Use the installed `ghcrawl` binary directly.
 
-```bash
-pnpm --filter ghcrawl cli doctor --json
-pnpm --filter ghcrawl cli threads owner/repo --numbers 12345
-pnpm --filter ghcrawl cli threads owner/repo --numbers 42,43,44
-pnpm --filter ghcrawl cli threads owner/repo --numbers 42,43,44 --include-closed
-pnpm --filter ghcrawl cli author owner/repo --login lqquan
-pnpm --filter ghcrawl cli refresh owner/repo
-pnpm --filter ghcrawl cli clusters owner/repo --min-size 10 --limit 20 --sort recent
-pnpm --filter ghcrawl cli clusters owner/repo --min-size 10 --limit 20 --sort recent --include-closed
-pnpm --filter ghcrawl cli cluster-detail owner/repo --id 123 --member-limit 20 --body-chars 280
-pnpm --filter ghcrawl cli cluster-detail owner/repo --id 123 --member-limit 20 --body-chars 280 --include-closed
-pnpm --filter ghcrawl cli close-thread owner/repo --number 42
-pnpm --filter ghcrawl cli close-cluster owner/repo --id 123
-```
-
-If the supported CLI path still fails, hangs, or returns unusable output, stop and tell the user there is a ghcrawl CLI problem. Do not fall back to direct SQLite inspection.
+If `ghcrawl` is missing on `PATH`, stop and tell the user the local `ghcrawl` binary is unavailable. Do not fall back to project-local wrappers or direct SQLite inspection. If the user is actively maintaining `ghcrawl` itself and explicitly wants source-tree commands, use the maintainer workflow documented in `CONTRIBUTING.md`.
 
 ## Suggested analysis flow
 
