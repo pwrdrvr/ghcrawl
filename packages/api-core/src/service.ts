@@ -2988,7 +2988,8 @@ export class GHCrawlService {
       return aggregated;
     }
 
-    const shouldParallelize = sourceKinds.length > 1 && totalItems >= CLUSTER_PARALLEL_MIN_EMBEDDINGS && os.availableParallelism() > 1;
+    const workerRuntime = this.resolveEdgeWorkerRuntime();
+    const shouldParallelize = workerRuntime !== null && sourceKinds.length > 1 && totalItems >= CLUSTER_PARALLEL_MIN_EMBEDDINGS && os.availableParallelism() > 1;
     if (!shouldParallelize) {
       const rows = this.loadParsedStoredEmbeddings(repoId);
       const bySource = new Map<EmbeddingSourceKind, Array<{ id: number; normalizedEmbedding: number[] }>>();
@@ -3019,14 +3020,13 @@ export class GHCrawlService {
       return aggregated;
     }
 
-    const workerUrl = this.resolveEdgeWorkerUrl();
     const progressBySource = new Map<EmbeddingSourceKind, { processedItems: number; totalItems: number; currentEdgeEstimate: number }>();
 
     const edgeSets = await Promise.all(
       sourceKinds.map(
         (sourceKind) =>
           new Promise<Array<{ leftThreadId: number; rightThreadId: number; score: number }>>((resolve, reject) => {
-            const worker = new Worker(workerUrl, {
+            const worker = new Worker(workerRuntime.url, {
               workerData: {
                 dbPath: this.config.dbPath,
                 repoId,
@@ -3121,12 +3121,13 @@ export class GHCrawlService {
     return row.count;
   }
 
-  private resolveEdgeWorkerUrl(): URL {
+  private resolveEdgeWorkerRuntime(): { url: URL } | null {
     const jsUrl = new URL('./cluster/edge-worker.js', import.meta.url);
     if (existsSync(fileURLToPath(jsUrl))) {
-      return jsUrl;
+      return { url: jsUrl };
     }
-    return new URL('./cluster/edge-worker.ts', import.meta.url);
+    // Source-mode runs do not have a compiled worker entrypoint, so keep clustering in-process.
+    return null;
   }
 
   private persistClusterRun(
