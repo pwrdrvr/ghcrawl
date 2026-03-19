@@ -42,6 +42,16 @@ Current priorities:
 - operator overview: [README.md](./README.md)
 - maintainer workflow and release notes: [CONTRIBUTING.md](./CONTRIBUTING.md)
 
+## Project Management
+
+Use the repo-local [`project-manager`](./.agents/skills/project-manager/SKILL.md) skill for GitHub issue and project-board work in this repository.
+
+- Repo/project config: `.agents/project-manager.config.json`
+- Project board: <https://github.com/orgs/pwrdrvr/projects/9>
+- Canonical local tracker: `.local/work-items.yaml` (derived; refresh with `pnpm project:sync`)
+- Canonical local issue drafts: `.local/issue-drafts/`
+- Do not create parallel scratch trackers or alternate temp directories for issue workups.
+
 ## Code Areas
 
 - CLI entrypoint: [apps/cli/src/main.ts](./apps/cli/src/main.ts)
