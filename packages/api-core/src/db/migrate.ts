@@ -254,4 +254,30 @@ export function migrate(db: SqliteDatabase): void {
   db.exec('create index if not exists idx_cluster_runs_repo_status_id on cluster_runs(repo_id, status, id)');
   db.exec('create index if not exists idx_clusters_repo_run_id on clusters(repo_id, cluster_run_id, id)');
   db.exec('create index if not exists idx_cluster_members_thread_cluster on cluster_members(thread_id, cluster_id)');
+
+  // Snapshot-then-merge tables: store per-run cluster snapshots and track
+  // active/previous run pointers per repo (see docs/designs/cluster-storage-cleanup.md)
+  db.exec(`
+    create table if not exists repo_cluster_state (
+      repo_id integer primary key references repositories(id) on delete cascade,
+      active_cluster_run_id integer references cluster_runs(id) on delete set null,
+      previous_cluster_run_id integer references cluster_runs(id) on delete set null,
+      updated_at text not null
+    )
+  `);
+  db.exec(`
+    create table if not exists cluster_snapshots (
+      id integer primary key autoincrement,
+      repo_id integer not null references repositories(id) on delete cascade,
+      cluster_run_id integer not null references cluster_runs(id) on delete cascade,
+      cluster_id integer not null references clusters(id) on delete cascade,
+      representative_thread_id integer,
+      member_thread_ids text not null,
+      member_count integer not null,
+      created_at text not null default (datetime('now'))
+    )
+  `);
+  db.exec(
+    'create index if not exists idx_cluster_snapshots_repo_run on cluster_snapshots(repo_id, cluster_run_id)',
+  );
 }
