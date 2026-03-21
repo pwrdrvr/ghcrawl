@@ -211,6 +211,44 @@ export const clusterResultSchema = z.object({
 });
 export type ClusterResultDto = z.infer<typeof clusterResultSchema>;
 
+export const transitionTypeSchema = z.enum(['continuing', 'growing', 'shrinking', 'splitting', 'merging', 'forming', 'dissolving']);
+export type TransitionType = z.infer<typeof transitionTypeSchema>;
+
+export const clusterTransitionSchema = z.object({
+  fromClusterId: z.number().int().nullable(),
+  toClusterId: z.number().int().nullable(),
+  transition: transitionTypeSchema,
+  jaccardScore: z.number().nullable(),
+  membersAdded: z.number().int().nonnegative(),
+  membersRemoved: z.number().int().nonnegative(),
+  membersRetained: z.number().int().nonnegative(),
+});
+export type ClusterTransitionDto = z.infer<typeof clusterTransitionSchema>;
+
+export const clusterDiffResponseSchema = z.object({
+  repository: repositorySchema,
+  fromRunId: z.number().int().positive(),
+  toRunId: z.number().int().positive(),
+  transitions: z.array(clusterTransitionSchema),
+  summary: z.object({
+    continuing: z.number().int().nonnegative(),
+    growing: z.number().int().nonnegative(),
+    shrinking: z.number().int().nonnegative(),
+    splitting: z.number().int().nonnegative(),
+    merging: z.number().int().nonnegative(),
+    forming: z.number().int().nonnegative(),
+    dissolving: z.number().int().nonnegative(),
+  }),
+});
+export type ClusterDiffResponse = z.infer<typeof clusterDiffResponseSchema>;
+
+export const diffResultSchema = z.object({
+  fromRunId: z.number().int().positive(),
+  toRunId: z.number().int().positive(),
+  transitionCount: z.number().int().nonnegative(),
+});
+export type DiffResultDto = z.infer<typeof diffResultSchema>;
+
 export const refreshRequestSchema = z.object({
   owner: z.string(),
   repo: z.string(),
