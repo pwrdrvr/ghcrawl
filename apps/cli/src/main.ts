@@ -42,8 +42,8 @@ function usage(devMode = false): string {
     '  init [--reconfigure]',
     '  doctor',
     '  version',
-    '  sync <owner/repo> [--since <iso|duration>] [--limit <count>] [--include-comments] [--full-reconcile]',
-    '  refresh <owner/repo> [--no-sync] [--no-embed] [--no-cluster]',
+    '  sync <owner/repo> [--since <iso|duration>] [--limit <count>] [--include-comments] [--include-discussions] [--full-reconcile]',
+    '  refresh <owner/repo> [--no-sync] [--no-embed] [--no-cluster] [--include-discussions]',
     '  threads <owner/repo> [--numbers <n,n,...>] [--kind issue|pull_request] [--include-closed]',
     '  author <owner/repo> --login <user> [--include-closed]',
     '  close-thread <owner/repo> --number <thread>',
@@ -100,6 +100,7 @@ export function parseRepoFlags(args: string[]): { owner: string; repo: string; v
       since: { type: 'string' },
       limit: { type: 'string' },
       'include-comments': { type: 'boolean' },
+      'include-discussions': { type: 'boolean' },
       'full-reconcile': { type: 'boolean' },
       'include-closed': { type: 'boolean' },
       kind: { type: 'string' },
@@ -339,6 +340,7 @@ export async function run(argv: string[], stdout: NodeJS.WritableStream = proces
           since: typeof values.since === 'string' ? resolveSinceValue(values.since) : undefined,
           limit: typeof values.limit === 'string' ? Number(values.limit) : undefined,
           includeComments: values['include-comments'] === true,
+          includeDiscussions: values['include-discussions'] === true,
           fullReconcile: values['full-reconcile'] === true,
           onProgress: writeProgress,
         });
@@ -353,6 +355,7 @@ export async function run(argv: string[], stdout: NodeJS.WritableStream = proces
           sync: values['no-sync'] === true ? false : undefined,
           embed: values['no-embed'] === true ? false : undefined,
           cluster: values['no-cluster'] === true ? false : undefined,
+          includeDiscussions: values['include-discussions'] === true,
           onProgress: writeProgress,
         });
         stdout.write(`${JSON.stringify(result, null, 2)}\n`);

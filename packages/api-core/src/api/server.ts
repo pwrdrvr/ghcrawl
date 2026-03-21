@@ -42,7 +42,7 @@ export function createApiServer(service: GHCrawlService): http.Server {
       if (req.method === 'GET' && url.pathname === '/threads') {
         const params = parseRepoParams(url);
         const kindParam = url.searchParams.get('kind');
-        const kind = kindParam === 'issue' || kindParam === 'pull_request' ? kindParam : undefined;
+        const kind = kindParam === 'issue' || kindParam === 'pull_request' || kindParam === 'discussion' ? kindParam : undefined;
         const numbersValue = url.searchParams.get('numbers');
         const numbers =
           numbersValue && numbersValue.trim().length > 0
