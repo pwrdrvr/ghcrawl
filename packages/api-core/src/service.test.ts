@@ -1034,6 +1034,141 @@ test('embedRepository isolates a failing oversized item from a mixed batch and r
   }
 });
 
+test('embedRepository recovers from wrapped maximum input length errors by shrinking the offending item in steps', async () => {
+  const embedCalls: string[][] = [];
+  const service = new GHCrawlService({
+    config: makeTestConfig({
+      embedBatchSize: 8,
+      embedConcurrency: 1,
+      embedMaxUnread: 2,
+    }),
+    github: {
+      checkAuth: async () => undefined,
+      getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+      listRepositoryIssues: async () => [],
+      getIssue: async () => {
+        throw new Error('not expected');
+      },
+      getPull: async () => {
+        throw new Error('not expected');
+      },
+      listIssueComments: async () => [],
+      listPullReviews: async () => [],
+      listPullReviewComments: async () => [],
+    },
+    ai: {
+      checkAuth: async () => undefined,
+      summarizeThread: async () => {
+        throw new Error('not expected');
+      },
+      embedTexts: async ({ texts }) => {
+        embedCalls.push(texts);
+        const overLimitIndex = texts.findIndex((text) => text.length > 18000);
+        if (overLimitIndex !== -1) {
+          throw new Error(
+            `OpenAI embeddings failed after 5 attempts: 400 Invalid 'input[${overLimitIndex}]': maximum input length is 8192 tokens.`,
+          );
+        }
+        return texts.map((text, index) => [text.length, index]);
+      },
+    },
+  });
+
+  try {
+    const now = '2026-03-09T00:00:00Z';
+    service.db
+      .prepare(
+        `insert into repositories (id, owner, name, full_name, github_repo_id, raw_json, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '1', '{}', now);
+    service.db
+      .prepare(
+        `insert into threads (
+          id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
+          labels_json, assignees_json, raw_json, content_hash, is_draft, created_at_gh, updated_at_gh, closed_at_gh,
+          merged_at_gh, first_pulled_at, last_pulled_at, updated_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        10,
+        1,
+        '100',
+        42,
+        'issue',
+        'open',
+        'Short title',
+        'short body',
+        'alice',
+        'User',
+        'https://github.com/openclaw/openclaw/issues/42',
+        '[]',
+        '[]',
+        '{}',
+        'hash-42',
+        0,
+        now,
+        now,
+        null,
+        null,
+        now,
+        now,
+        now,
+      );
+    service.db
+      .prepare(
+        `insert into threads (
+          id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
+          labels_json, assignees_json, raw_json, content_hash, is_draft, created_at_gh, updated_at_gh, closed_at_gh,
+          merged_at_gh, first_pulled_at, last_pulled_at, updated_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        11,
+        1,
+        '101',
+        43,
+        'issue',
+        'open',
+        'Large body',
+        'x'.repeat(24000),
+        'bob',
+        'User',
+        'https://github.com/openclaw/openclaw/issues/43',
+        '[]',
+        '[]',
+        '{}',
+        'hash-43',
+        0,
+        now,
+        now,
+        null,
+        null,
+        now,
+        now,
+        now,
+      );
+
+    const result = await service.embedRepository({ owner: 'openclaw', repo: 'openclaw' });
+
+    assert.equal(result.embedded, 4);
+    const shortenedAttempts = Array.from(
+      new Set(
+        embedCalls
+          .flat()
+          .filter((text) => text.includes('[truncated for embedding]'))
+          .map((text) => text.length),
+      ),
+    );
+    assert.ok(shortenedAttempts.length >= 3);
+    assert.ok(shortenedAttempts[0] > shortenedAttempts[1]);
+    assert.ok(shortenedAttempts[1] > shortenedAttempts[2]);
+    assert.ok(shortenedAttempts[2] <= 18000);
+  } finally {
+    service.close();
+  }
+});
+
 test('listNeighbors returns exact nearest neighbors for an embedded thread', () => {
   const service = makeTestService({
     checkAuth: async () => undefined,

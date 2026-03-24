@@ -268,6 +268,9 @@ const EMBED_ESTIMATED_CHARS_PER_TOKEN = 3;
 const EMBED_MAX_ITEM_TOKENS = 7000;
 const EMBED_MAX_BATCH_TOKENS = 250000;
 const EMBED_TRUNCATION_MARKER = '\n\n[truncated for embedding]';
+const EMBED_CONTEXT_RETRY_ATTEMPTS = 5;
+const EMBED_CONTEXT_RETRY_FALLBACK_SHRINK_RATIO = 0.9;
+const EMBED_CONTEXT_RETRY_TARGET_BUFFER_RATIO = 0.95;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -2651,9 +2654,26 @@ export class GHCrawlService {
     return Math.max(1, Math.ceil(text.length / EMBED_ESTIMATED_CHARS_PER_TOKEN));
   }
 
-  private isEmbeddingContextError(error: unknown): boolean {
+  private parseEmbeddingContextError(error: unknown): { limitTokens: number | null; requestedTokens: number | null } | null {
     const message = error instanceof Error ? error.message : String(error);
-    return /maximum context length/i.test(message) || /requested \d+ tokens/i.test(message);
+    const requestedMatch = message.match(/requested\s+(\d+)\s+tokens/i);
+    const contextLimitMatch = message.match(/maximum context length is\s+(\d+)\s+tokens/i);
+    const inputLimitMatch = message.match(/maximum input length is\s+(\d+)\s+tokens/i);
+    const limitTokens = Number(contextLimitMatch?.[1] ?? inputLimitMatch?.[1] ?? NaN);
+    const requestedTokens = Number(requestedMatch?.[1] ?? NaN);
+
+    if (!Number.isFinite(limitTokens) && !Number.isFinite(requestedTokens)) {
+      return null;
+    }
+
+    return {
+      limitTokens: Number.isFinite(limitTokens) ? limitTokens : null,
+      requestedTokens: Number.isFinite(requestedTokens) ? requestedTokens : null,
+    };
+  }
+
+  private isEmbeddingContextError(error: unknown): boolean {
+    return this.parseEmbeddingContextError(error) !== null;
   }
 
   private async embedBatchWithRecovery(
@@ -2695,7 +2715,7 @@ export class GHCrawlService {
   ): Promise<{ task: EmbeddingTask; embedding: number[] }> {
     let current = task;
 
-    for (let attempt = 0; attempt < 4; attempt += 1) {
+    for (let attempt = 0; attempt < EMBED_CONTEXT_RETRY_ATTEMPTS; attempt += 1) {
       try {
         const [embedding] = await ai.embedTexts({
           model: this.config.embedModel,
@@ -2703,11 +2723,12 @@ export class GHCrawlService {
         });
         return { task: current, embedding };
       } catch (error) {
-        if (!this.isEmbeddingContextError(error)) {
+        const context = this.parseEmbeddingContextError(error);
+        if (!context) {
           throw error;
         }
 
-        const next = this.shrinkEmbeddingTask(current);
+        const next = this.shrinkEmbeddingTask(current, context);
         if (!next || next.text === current.text) {
           throw error;
         }
@@ -2721,7 +2742,10 @@ export class GHCrawlService {
     throw new Error(`Unable to shrink embedding input for #${task.threadNumber}:${task.sourceKind} below model limits`);
   }
 
-  private shrinkEmbeddingTask(task: EmbeddingTask): EmbeddingTask | null {
+  private shrinkEmbeddingTask(
+    task: EmbeddingTask,
+    context?: { limitTokens: number | null; requestedTokens: number | null },
+  ): EmbeddingTask | null {
     const withoutMarker = task.text.endsWith(EMBED_TRUNCATION_MARKER)
       ? task.text.slice(0, -EMBED_TRUNCATION_MARKER.length)
       : task.text;
@@ -2729,7 +2753,13 @@ export class GHCrawlService {
       return null;
     }
 
-    const nextLength = Math.max(256, Math.floor(withoutMarker.length * 0.5));
+    const nextLength = Math.max(
+      256,
+      this.projectEmbeddingRetryLength(withoutMarker.length, task.estimatedTokens, context),
+    );
+    if (nextLength >= withoutMarker.length) {
+      return null;
+    }
     const nextText = `${withoutMarker.slice(0, Math.max(0, nextLength - EMBED_TRUNCATION_MARKER.length)).trimEnd()}${EMBED_TRUNCATION_MARKER}`;
     return {
       ...task,
@@ -2738,6 +2768,26 @@ export class GHCrawlService {
       estimatedTokens: this.estimateEmbeddingTokens(nextText),
       wasTruncated: true,
     };
+  }
+
+  private projectEmbeddingRetryLength(
+    textLength: number,
+    estimatedTokens: number,
+    context?: { limitTokens: number | null; requestedTokens: number | null },
+  ): number {
+    const limitTokens = context?.limitTokens ?? null;
+    const requestedTokens = context?.requestedTokens ?? null;
+    if (limitTokens && requestedTokens && requestedTokens > limitTokens) {
+      const targetRatio = (limitTokens * EMBED_CONTEXT_RETRY_TARGET_BUFFER_RATIO) / requestedTokens;
+      return Math.floor(textLength * Math.max(0.1, Math.min(targetRatio, EMBED_CONTEXT_RETRY_FALLBACK_SHRINK_RATIO)));
+    }
+
+    if (limitTokens && estimatedTokens > limitTokens) {
+      const targetRatio = (limitTokens * EMBED_CONTEXT_RETRY_TARGET_BUFFER_RATIO) / estimatedTokens;
+      return Math.floor(textLength * Math.max(0.1, Math.min(targetRatio, EMBED_CONTEXT_RETRY_FALLBACK_SHRINK_RATIO)));
+    }
+
+    return Math.floor(textLength * EMBED_CONTEXT_RETRY_FALLBACK_SHRINK_RATIO);
   }
 
   private chunkEmbeddingTasks(items: EmbeddingTask[], maxItems: number, maxEstimatedTokens: number): EmbeddingTask[][] {
