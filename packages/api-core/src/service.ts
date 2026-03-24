@@ -62,6 +62,7 @@ import { openDb, type SqliteDatabase } from './db/sqlite.js';
 import { buildCanonicalDocument, isBotLikeAuthor } from './documents/normalize.js';
 import { makeGitHubClient, type GitHubClient } from './github/client.js';
 import { OpenAiProvider, type AiProvider } from './openai/provider.js';
+import { generateSuggestedActions, type TriageReport } from './report/triage.js';
 import { cosineSimilarity, normalizeEmbedding, rankNearestNeighbors } from './search/exact.js';
 
 type RunTable = 'sync_runs' | 'summary_runs' | 'embedding_runs' | 'cluster_runs';
@@ -1471,6 +1472,37 @@ export class GHCrawlService {
         representativeKind: cluster.representativeKind,
       })),
     });
+  }
+
+  generateTriageReport(params: { owner: string; repo: string; limit?: number; minSize?: number }): TriageReport {
+    const repository = this.requireRepository(params.owner, params.repo);
+    const limit = params.limit ?? 20;
+    const minSize = params.minSize ?? 3;
+
+    const summariesResponse = this.listClusterSummaries({
+      owner: params.owner,
+      repo: params.repo,
+      minSize,
+      limit,
+      sort: 'size',
+    });
+
+    const suggestedActions = generateSuggestedActions(summariesResponse.clusters);
+
+    return {
+      repository: {
+        id: repository.id,
+        owner: repository.owner,
+        name: repository.name,
+        fullName: repository.fullName,
+        githubRepoId: repository.githubRepoId ?? null,
+        updatedAt: repository.updatedAt,
+      },
+      generatedAt: new Date().toISOString(),
+      stats: summariesResponse.stats,
+      topClusters: summariesResponse.clusters,
+      suggestedActions,
+    };
   }
 
   getClusterDetailDump(params: {
