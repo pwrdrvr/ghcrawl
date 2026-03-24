@@ -50,9 +50,9 @@
     "@octokit/plugin-retry": "^8.0.3",
     "@octokit/plugin-throttling": "^11.0.1",
     "octokit": "^5.0.3",
-    "better-sqlite3": "^12.2.0",
+    "better-sqlite3": "^12.8.0",
     "dotenv": "^17.2.2",
-    "openai": "^6.27.0",
+    "openai": "^6.32.0",
     "zod": "^4.3.6"
   }
 }

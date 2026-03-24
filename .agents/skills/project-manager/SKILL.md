@@ -1,0 +1,150 @@
+---
+name: project-manager
+description: "Manage GitHub issues and the GitHub Project board for the current repository, while keeping the local tracker in sync. Use when the user wants to capture freeform requirements as issues, flesh out issue descriptions from repo or upstream research, triage Priority/Size/Workflow/Status, add issues or PRs to the repo's configured project board, or reconcile GitHub state with `.local/work-items.yaml`."
+---
+
+# Project Manager
+
+Use this skill for repo-local project management.
+
+## Automation Preference
+
+- Prefer Node scripts for repo-local automation.
+- If a script needs dependencies, add them as repo `devDependencies` and invoke them through `pnpm` or `node`.
+- Avoid Python for repo-local skill automation unless a Python-native library is clearly worth the extra runtime dependency.
+
+## Canonical Locations
+
+- Treat GitHub Issues and PRs as the public source of truth.
+- Treat `.local/work-items.yaml` as a derived repo-local cross-reference map that can be regenerated from the project board.
+- Put temporary issue writeups only in `.local/issue-drafts/`.
+- Do not create parallel scratch directories or alternate tracker files for the same purpose.
+- Read repo-specific values from `.agents/project-manager.config.json` before taking action.
+
+Expected config shape:
+
+```json
+{
+  "repo": "owner/repo",
+  "projectOwner": "owner",
+  "projectNumber": 7,
+  "projectUrl": "https://github.com/orgs/owner/projects/7",
+  "trackerPath": ".local/work-items.yaml",
+  "issueDraftDir": ".local/issue-drafts",
+  "localIdPrefix": "item-"
+}
+```
+
+Refresh the derived tracker with:
+
+```bash
+pnpm project:sync
+```
+
+## Workflow
+
+1. Explore before filing.
+
+- Read local code, tests, docs, and upstream references before creating or expanding an issue.
+- Prefer issue bodies with concrete findings, source pointers, and proposed scope over vague placeholders.
+
+2. Draft locally when the issue is non-trivial.
+
+- Write or refresh the issue body in `.local/issue-drafts/<nn>-<slug>.md`.
+- Reuse that file for edits; do not fork the same issue into multiple local scratch notes.
+
+3. Create or update the GitHub issue.
+
+- Use `gh issue create`, `gh issue edit`, and `gh issue comment`.
+- Keep titles short and imperative, usually starting with `Plugin:`.
+
+4. Add the issue or PR to the configured project board.
+
+- Read the configured project number and owner from `.agents/project-manager.config.json`.
+- Use `gh project item-add <project-number> --owner <project-owner> --url <issue-or-pr-url>`.
+- For issues, set `Status`, `Priority`, `Size`, and `Workflow`.
+- For PRs, usually set `Status` and `Workflow`; `Priority` and `Size` are issue-planning fields unless there is a specific reason to set them on the PR item.
+
+5. Sync `.local/work-items.yaml`.
+
+- Treat the tracker as derived state, not a hand-edited source of truth.
+- Regenerate it with `pnpm project:sync` after issue/project changes.
+- Prefer pushing durable notes into GitHub issues or `.local/issue-drafts/`; the tracker should stay compact.
+
+6. Reconcile if anything drifted.
+
+- Use `gh issue list`, `gh project item-list`, and `gh project field-list` to confirm GitHub matches the local tracker.
+
+## Field Conventions
+
+- `Status`: `Inbox`, `Ready`, `In Progress`, `In Review`, `Done`
+- `Workflow`: `Plan`, `Review`, `Threads`, `Worktrees`, `Branches`
+
+Triage heuristic for this repo:
+
+- `P0`: quick wins that shrink the board fast, plus high-visibility completeness or pizazz work
+- `P1`: larger user-visible completeness work
+- `P2`: infrastructure, refactors, planning spikes, and corner-case cleanup unless they are very quick
+
+Size heuristic:
+
+- `XS` or `S`: obvious quick wins
+- `M`: bounded feature or bug fix with a few moving parts
+- `L`: visible feature touching multiple flows
+- `XL`: large architectural or cross-cutting work
+
+## Command Pattern
+
+Start by discovering current project field ids instead of assuming they never change:
+
+```bash
+gh repo view --json nameWithOwner,url
+gh project view <project-number> --owner <project-owner> --format json
+gh project field-list <project-number> --owner <project-owner> --format json
+```
+
+Typical flow:
+
+```bash
+gh issue create --repo <owner/repo> --title "<title>" --body-file .local/issue-drafts/<file>.md
+gh project item-add <project-number> --owner <project-owner> --url <issue-or-pr-url> --format json
+gh project item-edit --project-id <project-id> --id <item-id> --field-id <field-id> --single-select-option-id <option-id>
+gh project item-list <project-number> --owner <project-owner> --format json
+```
+
+Refresh the local tracker:
+
+```bash
+pnpm project:sync
+```
+
+## Gotchas
+
+- Verify the repo slug before issue commands. Treat `.agents/project-manager.config.json` as canonical when it is present.
+- `gh project item-edit` needs opaque ids for the project, item, field, and single-select option. Always discover them with `gh project view ...` and `gh project field-list ...` instead of assuming cached ids still match.
+- GitHub Projects custom views are not well-supported by `gh` or GraphQL mutations. Reading views works, but creating/editing/copying views is still better done in the web UI or browser automation. `gh project copy` does not carry over custom views.
+- `.local/work-items.yaml` is currently issue-only. Add PRs to the project board, but do not expect `pnpm project:sync` to mirror PR items into the local tracker.
+- `.local/issue-drafts/<nn>-<slug>.md` filenames are local scratch ids, not GitHub issue numbers. Keep them stable enough to reuse, but do not try to force them to match the eventual GitHub issue number.
+
+## Tracker Shape
+
+Each `.local/work-items.yaml` item should keep:
+
+- `local_id`
+- `title`
+- `repo`
+- `source_note`
+- `github.issue_number`
+- `github.issue_url`
+- `github.project_number`
+- `github.project_url`
+- `github.project_item_id`
+- `state.issue_state`
+- `state.project_status`
+- `state.workflow`
+- `state.priority`
+- `state.size`
+- optional branch / PR fields
+- concise `notes`
+
+Keep notes factual and short. Store raw findings and writeups in the issue draft file or GitHub issue, not as sprawling tracker prose.
