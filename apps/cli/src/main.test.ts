@@ -20,6 +20,7 @@ test('run prints usage with no command', async () => {
   assert.match(output, /\n  version\n/);
   assert.match(output, /refresh <owner\/repo>/);
   assert.match(output, /threads <owner\/repo>/);
+  assert.match(output, /pr-template <owner\/repo>/);
   assert.match(output, /author <owner\/repo> --login <user>/);
   assert.match(output, /close-thread <owner\/repo> --number <thread>/);
   assert.match(output, /close-cluster <owner\/repo> --id <cluster-id>/);
@@ -43,6 +44,7 @@ test('run prints usage for help flag', async () => {
   assert.match(output, /\n  version\n/);
   assert.match(output, /refresh <owner\/repo>/);
   assert.match(output, /threads <owner\/repo>/);
+  assert.match(output, /pr-template <owner\/repo>/);
   assert.match(output, /author <owner\/repo> --login <user>/);
   assert.match(output, /close-thread <owner\/repo> --number <thread>/);
   assert.match(output, /tui \[owner\/repo\]/);
@@ -167,6 +169,14 @@ test('parseRepoFlags accepts kind filter for threads', () => {
   assert.equal(parsed.owner, 'openclaw');
   assert.equal(parsed.repo, 'openclaw');
   assert.equal(parsed.values.kind, 'pull_request');
+});
+
+test('parseRepoFlags accepts pr-template options', () => {
+  const parsed = parseRepoFlags(['openclaw/openclaw', '--template-file', './template.md', '--max-distance', '200']);
+  assert.equal(parsed.owner, 'openclaw');
+  assert.equal(parsed.repo, 'openclaw');
+  assert.equal(parsed.values['template-file'], './template.md');
+  assert.equal(parsed.values['max-distance'], '200');
 });
 test('resolveSinceValue keeps ISO timestamps', () => {
   assert.equal(resolveSinceValue('2026-03-01T00:00:00Z'), '2026-03-01T00:00:00.000Z');

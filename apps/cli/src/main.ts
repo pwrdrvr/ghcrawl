@@ -16,6 +16,7 @@ type CommandName =
   | 'sync'
   | 'refresh'
   | 'threads'
+  | 'pr-template'
   | 'author'
   | 'close-thread'
   | 'close-cluster'
@@ -45,6 +46,7 @@ function usage(devMode = false): string {
     '  sync <owner/repo> [--since <iso|duration>] [--limit <count>] [--include-comments] [--full-reconcile]',
     '  refresh <owner/repo> [--no-sync] [--no-embed] [--no-cluster]',
     '  threads <owner/repo> [--numbers <n,n,...>] [--kind issue|pull_request] [--include-closed]',
+    '  pr-template <owner/repo> [--template-file <path>] [--max-distance <count>] [--limit <count>] [--include-closed]',
     '  author <owner/repo> --login <user> [--include-closed]',
     '  close-thread <owner/repo> --number <thread>',
     '  close-cluster <owner/repo> --id <cluster-id>',
@@ -105,6 +107,8 @@ export function parseRepoFlags(args: string[]): { owner: string; repo: string; v
       kind: { type: 'string' },
       number: { type: 'string' },
       numbers: { type: 'string' },
+      'template-file': { type: 'string' },
+      'max-distance': { type: 'string' },
       login: { type: 'string' },
       query: { type: 'string' },
       mode: { type: 'string' },
@@ -202,6 +206,14 @@ function formatBooleanStatus(value: boolean): string {
 function parsePositiveInteger(name: string, value: string): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`Invalid ${name}: ${value}`);
+  }
+  return parsed;
+}
+
+function parseNonNegativeInteger(name: string, value: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
     throw new Error(`Invalid ${name}: ${value}`);
   }
   return parsed;
@@ -366,6 +378,36 @@ export async function run(argv: string[], stdout: NodeJS.WritableStream = proces
           repo,
           kind,
           numbers: typeof values.numbers === 'string' ? parsePositiveIntegerList('numbers', values.numbers) : undefined,
+          includeClosed: values['include-closed'] === true,
+        });
+        stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return;
+      }
+      case 'pr-template': {
+        const { owner, repo, values } = parseRepoFlags(rest);
+        const templatePath =
+          typeof values['template-file'] === 'string' && values['template-file'].trim().length > 0
+            ? path.resolve(values['template-file'])
+            : null;
+        const template = templatePath
+          ? {
+              text: readFileSync(templatePath, 'utf8'),
+              source: {
+                mode: 'file' as const,
+                label: templatePath,
+              },
+            }
+          : await getService().getPullRequestTemplate({ owner, repo });
+        const result = getService().findPullRequestTemplateMatches({
+          owner,
+          repo,
+          templateText: template.text,
+          templateSource: template.source,
+          maxDistance:
+            typeof values['max-distance'] === 'string'
+              ? parseNonNegativeInteger('max-distance', values['max-distance'])
+              : undefined,
+          limit: typeof values.limit === 'string' ? parsePositiveInteger('limit', values.limit) : undefined,
           includeClosed: values['include-closed'] === true,
         });
         stdout.write(`${JSON.stringify(result, null, 2)}\n`);

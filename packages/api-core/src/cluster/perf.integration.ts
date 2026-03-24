@@ -95,6 +95,7 @@ function createGitHubStub(): GHCrawlService['github'] {
   return {
     checkAuth: async () => undefined,
     getRepo: async () => ({}),
+    getFileContents: async () => { throw new Error("not expected"); },
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
     getPull: async () => ({}),

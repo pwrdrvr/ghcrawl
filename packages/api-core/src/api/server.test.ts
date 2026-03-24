@@ -30,6 +30,7 @@ test('health endpoint returns contract payload', async () => {
     github: {
       checkAuth: async () => undefined,
       getRepo: async () => ({}),
+      getFileContents: async () => { throw new Error("not expected"); },
       listRepositoryIssues: async () => [],
       getIssue: async () => ({}),
       getPull: async () => ({}),
@@ -80,6 +81,7 @@ test('neighbors endpoint returns contract payload', async () => {
     github: {
       checkAuth: async () => undefined,
       getRepo: async () => ({}),
+      getFileContents: async () => { throw new Error("not expected"); },
       listRepositoryIssues: async () => [],
       getIssue: async () => ({}),
       getPull: async () => ({}),
@@ -172,6 +174,7 @@ test('threads endpoint can filter by a bulk number list', async () => {
     github: {
       checkAuth: async () => undefined,
       getRepo: async () => ({}),
+      getFileContents: async () => { throw new Error("not expected"); },
       listRepositoryIssues: async () => [],
       getIssue: async () => ({}),
       getPull: async () => ({}),
@@ -241,6 +244,7 @@ test('author-threads endpoint returns one author with strongest same-author matc
     github: {
       checkAuth: async () => undefined,
       getRepo: async () => ({}),
+      getFileContents: async () => { throw new Error("not expected"); },
       listRepositoryIssues: async () => [],
       getIssue: async () => ({}),
       getPull: async () => ({}),
@@ -320,6 +324,7 @@ test('close-thread and includeClosed thread routes expose locally closed items',
     github: {
       checkAuth: async () => undefined,
       getRepo: async () => ({}),
+      getFileContents: async () => { throw new Error("not expected"); },
       listRepositoryIssues: async () => [],
       getIssue: async () => ({}),
       getPull: async () => ({}),
@@ -403,6 +408,7 @@ test('server returns 400 for malformed request inputs', async () => {
     github: {
       checkAuth: async () => undefined,
       getRepo: async () => ({}),
+      getFileContents: async () => { throw new Error("not expected"); },
       listRepositoryIssues: async () => [],
       getIssue: async () => ({}),
       getPull: async () => ({}),
@@ -457,6 +463,7 @@ test('cluster summary and detail endpoints return contract payloads', async () =
     github: {
       checkAuth: async () => undefined,
       getRepo: async () => ({}),
+      getFileContents: async () => { throw new Error("not expected"); },
       listRepositoryIssues: async () => [],
       getIssue: async () => ({}),
       getPull: async () => ({}),
