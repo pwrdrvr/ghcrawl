@@ -1,6 +1,6 @@
 ---
 name: release
-description: "Plan and publish a GitHub Release in a tag-driven repository. Use when a user asks to cut, prepare, or publish a software release, propose the next vX.Y.Z tag, draft better release notes from PRs and direct commits since the last release, update CHANGELOG.md, create the tag pinned to an exact commit, and watch the publish workflow."
+description: "Plan and publish a GitHub Release in a tag-driven repository. Use when a user asks to cut, prepare, or publish a software release, propose the next vX.Y.Z tag, support prerelease tags like vX.Y.Z-beta.N, draft better release notes from PRs and direct commits since the last release, update CHANGELOG.md, create the tag pinned to an exact commit, and watch the publish workflow."
 ---
 
 # Release
@@ -16,9 +16,10 @@ Use this skill for repos that publish from GitHub Releases and want human-writte
 - Fast-forward the default branch before editing: `git pull --ff-only origin <default-branch>`.
 - Never force-push the default branch.
 - Never use GitHub generated release notes for this workflow.
-- Always create the release tag with a leading `v`, for example `v0.6.0`.
+- Always create the release tag with a leading `v`, for example `v0.6.0` or `v0.6.0-beta.1`.
 - Always pin the release to the exact changelog commit SHA with `gh release create --target <sha>`.
 - If `origin/<default-branch>` moves after planning or before pushing, stop and regenerate the release plan.
+- If the tag is a prerelease such as `v0.6.0-beta.1`, the GitHub release must be created as a prerelease too.
 
 ## Helper Script
 
@@ -123,8 +124,20 @@ release_sha=$(git rev-parse HEAD)
 
 5. Create the release from that exact commit.
 
+Stable release:
+
 ```bash
 gh release create "<tag>" \
+  --target "$release_sha" \
+  --title "<tag>" \
+  --notes-file .local/release/release-notes.md
+```
+
+Prerelease:
+
+```bash
+gh release create "<tag>" \
+  --prerelease \
   --target "$release_sha" \
   --title "<tag>" \
   --notes-file .local/release/release-notes.md
