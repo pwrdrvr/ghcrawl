@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 import { createApiServer, GHCrawlService } from '@ghcrawl/api-core';
+import { createHeapDiagnostics, type HeapDiagnostics } from './heap-diagnostics.js';
 import { runInitWizard } from './init-wizard.js';
 import { startTui } from './tui/app.js';
 
@@ -43,13 +44,13 @@ function usage(devMode = false): string {
     '  doctor',
     '  version',
     '  sync <owner/repo> [--since <iso|duration>] [--limit <count>] [--include-comments] [--full-reconcile]',
-    '  refresh <owner/repo> [--no-sync] [--no-embed] [--no-cluster]',
+    '  refresh <owner/repo> [--no-sync] [--no-embed] [--no-cluster] [--heap-snapshot-dir <dir>] [--heap-log-interval-ms <ms>]',
     '  threads <owner/repo> [--numbers <n,n,...>] [--kind issue|pull_request] [--include-closed]',
     '  author <owner/repo> --login <user> [--include-closed]',
     '  close-thread <owner/repo> --number <thread>',
     '  close-cluster <owner/repo> --id <cluster-id>',
     '  embed <owner/repo> [--number <thread>]',
-    '  cluster <owner/repo> [--k <count>] [--threshold <score>]',
+    '  cluster <owner/repo> [--k <count>] [--threshold <score>] [--heap-snapshot-dir <dir>] [--heap-log-interval-ms <ms>]',
     '  clusters <owner/repo> [--min-size <count>] [--limit <count>] [--sort recent|size] [--search <text>] [--include-closed]',
     '  cluster-detail <owner/repo> --id <cluster-id> [--member-limit <count>] [--body-chars <count>] [--include-closed]',
     '  search <owner/repo> --query <text> [--mode keyword|semantic|hybrid]',
@@ -61,6 +62,7 @@ function usage(devMode = false): string {
     '  refresh/sync/embed call remote services and should be run intentionally.',
     '  cluster is local-only but can still take ~10 minutes on a ~12k issue/PR repo.',
     '  clusters reads the existing local cluster data and is intended to be fast.',
+    '  heap diagnostics can be enabled for refresh/cluster and support SIGUSR2-triggered heap snapshots.',
   ];
   if (devMode) {
     lines.push('', 'Advanced Commands:', '  summarize <owner/repo> [--number <thread>] [--include-comments]', '  purge-comments <owner/repo> [--number <thread>]');
@@ -120,6 +122,8 @@ export function parseRepoFlags(args: string[]): { owner: string; repo: string; v
       'no-sync': { type: 'boolean' },
       'no-embed': { type: 'boolean' },
       'no-cluster': { type: 'boolean' },
+      'heap-snapshot-dir': { type: 'string' },
+      'heap-log-interval-ms': { type: 'string' },
     },
   });
 
@@ -280,6 +284,22 @@ function attachBrokenPipeHandler(stream: NodeJS.WritableStream): void {
   });
 }
 
+function createOptionalHeapDiagnostics(values: Record<string, string | boolean>): HeapDiagnostics | null {
+  const snapshotDir = typeof values['heap-snapshot-dir'] === 'string' ? values['heap-snapshot-dir'] : undefined;
+  const logIntervalMs =
+    typeof values['heap-log-interval-ms'] === 'string'
+      ? parsePositiveInteger('heap-log-interval-ms', values['heap-log-interval-ms'])
+      : undefined;
+  if (!snapshotDir && !logIntervalMs) {
+    return null;
+  }
+  return createHeapDiagnostics({
+    snapshotDir,
+    logIntervalMs,
+    log: writeProgress,
+  });
+}
+
 export async function run(argv: string[], stdout: NodeJS.WritableStream = process.stdout): Promise<void> {
   attachBrokenPipeHandler(stdout);
   const parsedGlobals = parseGlobalFlags(argv);
@@ -347,16 +367,25 @@ export async function run(argv: string[], stdout: NodeJS.WritableStream = proces
       }
       case 'refresh': {
         const { owner, repo, values } = parseRepoFlags(rest);
-        const result = await getService().refreshRepository({
-          owner,
-          repo,
-          sync: values['no-sync'] === true ? false : undefined,
-          embed: values['no-embed'] === true ? false : undefined,
-          cluster: values['no-cluster'] === true ? false : undefined,
-          onProgress: writeProgress,
-        });
-        stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-        return;
+        const heapDiagnostics = createOptionalHeapDiagnostics(values);
+        try {
+          const result = await getService().refreshRepository({
+            owner,
+            repo,
+            sync: values['no-sync'] === true ? false : undefined,
+            embed: values['no-embed'] === true ? false : undefined,
+            cluster: values['no-cluster'] === true ? false : undefined,
+            onProgress: heapDiagnostics?.wrapProgress(writeProgress) ?? writeProgress,
+          });
+          heapDiagnostics?.capture('refresh-complete');
+          stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+          return;
+        } catch (error) {
+          heapDiagnostics?.capture('refresh-error');
+          throw error;
+        } finally {
+          heapDiagnostics?.dispose();
+        }
       }
       case 'threads': {
         const { owner, repo, values } = parseRepoFlags(rest);
@@ -447,15 +476,24 @@ export async function run(argv: string[], stdout: NodeJS.WritableStream = proces
       }
       case 'cluster': {
         const { owner, repo, values } = parseRepoFlags(rest);
-        const result = await getService().clusterRepository({
-          owner,
-          repo,
-          k: typeof values.k === 'string' ? Number(values.k) : undefined,
-          minScore: typeof values.threshold === 'string' ? Number(values.threshold) : undefined,
-          onProgress: writeProgress,
-        });
-        stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-        return;
+        const heapDiagnostics = createOptionalHeapDiagnostics(values);
+        try {
+          const result = await getService().clusterRepository({
+            owner,
+            repo,
+            k: typeof values.k === 'string' ? Number(values.k) : undefined,
+            minScore: typeof values.threshold === 'string' ? Number(values.threshold) : undefined,
+            onProgress: heapDiagnostics?.wrapProgress(writeProgress) ?? writeProgress,
+          });
+          heapDiagnostics?.capture('cluster-complete');
+          stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+          return;
+        } catch (error) {
+          heapDiagnostics?.capture('cluster-error');
+          throw error;
+        } finally {
+          heapDiagnostics?.dispose();
+        }
       }
       case 'clusters': {
         const { owner, repo, values } = parseRepoFlags(rest);
