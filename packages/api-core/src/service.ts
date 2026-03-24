@@ -2848,6 +2848,30 @@ export class GHCrawlService {
     return parsed;
   }
 
+  private loadNormalizedEmbeddingsForSourceKind(
+    repoId: number,
+    sourceKind: EmbeddingSourceKind,
+  ): Array<{ id: number; normalizedEmbedding: number[] }> {
+    const rows = this.db
+      .prepare(
+        `select t.id, e.embedding_json
+         from threads t
+         join document_embeddings e on e.thread_id = t.id
+         where t.repo_id = ?
+           and t.state = 'open'
+           and t.closed_at_local is null
+           and e.model = ?
+           and e.source_kind = ?
+         order by t.number asc`,
+      )
+      .all(repoId, this.config.embedModel, sourceKind) as Array<{ id: number; embedding_json: string }>;
+
+    return rows.map((row) => ({
+      id: row.id,
+      normalizedEmbedding: normalizeEmbedding(JSON.parse(row.embedding_json) as number[]).normalized,
+    }));
+  }
+
   private loadClusterableThreadMeta(repoId: number): {
     items: Array<{ id: number; number: number; title: string }>;
     sourceKinds: EmbeddingSourceKind[];
@@ -3041,17 +3065,9 @@ export class GHCrawlService {
     const workerRuntime = this.resolveEdgeWorkerRuntime();
     const shouldParallelize = workerRuntime !== null && sourceKinds.length > 1 && totalItems >= CLUSTER_PARALLEL_MIN_EMBEDDINGS && os.availableParallelism() > 1;
     if (!shouldParallelize) {
-      const rows = this.loadParsedStoredEmbeddings(repoId);
-      const bySource = new Map<EmbeddingSourceKind, Array<{ id: number; normalizedEmbedding: number[] }>>();
-      for (const row of rows) {
-        const list = bySource.get(row.source_kind) ?? [];
-        list.push({ id: row.id, normalizedEmbedding: row.normalizedEmbedding });
-        bySource.set(row.source_kind, list);
-      }
-
       let processedItems = 0;
       for (const sourceKind of sourceKinds) {
-        const items = bySource.get(sourceKind) ?? [];
+        const items = this.loadNormalizedEmbeddingsForSourceKind(repoId, sourceKind);
         const edges = buildSourceKindEdges(items, {
           limit: params.limit,
           minScore: params.minScore,
