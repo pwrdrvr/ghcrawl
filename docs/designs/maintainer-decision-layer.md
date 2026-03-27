@@ -45,6 +45,37 @@ It cannot yet say:
 - this variant likely lost
 - this neighbor is related but should stay excluded
 
+## Current State vs Target State
+
+The architectural gap is small but important.
+
+Today, `ghcrawl` mainly stops at semantic grouping:
+
+```mermaid
+flowchart LR
+    A[Sync / Summaries / Embeddings] --> B[Neighbors / Clusters]
+    B --> C[Similarity grouping]
+    C --> D[Cluster summary and detail]
+```
+
+The proposed target keeps that pipeline and adds one reusable decision layer above it:
+
+```mermaid
+flowchart LR
+    A[Sync / Summaries / Embeddings] --> B[Neighbors / Clusters]
+    B --> C[Candidate retrieval]
+    C --> D[Decision analysis]
+    D --> E[Maintainer-facing outputs]
+
+    E --> E1[best_base]
+    E --> E2[superseded_candidate]
+    E --> E3[excluded_neighbor]
+    E --> E4[decision trace]
+
+    style D fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    style E fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
+```
+
 ## Target Shape
 
 The next architecture step should be a reusable decision-analysis layer above retrieval and clustering.
@@ -137,6 +168,31 @@ Consumers should include:
 - local API responses
 - future TUI or web views
 
+## Current Work Fit
+
+This proposal is designed to give the current open work a clearer long-term shape rather than competing with it.
+
+```mermaid
+flowchart TD
+    A[PR #29<br/>snapshot and current-view foundation]
+    B[PR #20<br/>triage report surface]
+    C[PR #14<br/>deterministic PR-template heuristic]
+    D[Maintainer decision layer]
+    E[Future maintainer outputs]
+
+    A --> D
+    B --> D
+    C --> D
+    D --> E
+
+    E --> E1[analyze-pr]
+    E --> E2[triage suggestions]
+    E --> E3[API payloads]
+    E --> E4[future UI]
+
+    style D fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+```
+
 ## Proposed Initial Roles
 
 The first decision-aware outputs should stay explicit and narrow:
@@ -217,6 +273,36 @@ Turn the decision layer into a measured subsystem instead of a one-off feature.
 - add regression fixtures for best-base and superseded classification
 - track false positives and false negatives
 - tune thresholds and explanations using real maintainer review cases
+
+## Delivery Sequence
+
+The intended delivery path is incremental rather than rewrite-oriented.
+
+```mermaid
+flowchart TD
+    P0[Phase 0<br/>fix current contracts]
+    P1[Phase 1<br/>reusable decision core]
+    P2[Phase 2<br/>analyze-pr]
+    P3[Phase 3<br/>triage and API reuse]
+    P4[Phase 4<br/>decision artifacts on run state]
+    P5[Phase 5<br/>evaluation loop]
+
+    P0 --> P1 --> P2 --> P3 --> P4 --> P5
+
+    P0 --> P0a[soften triage claims]
+    P0 --> P0b[improve template heuristics]
+    P0 --> P0c[keep storage extensible]
+
+    P1 --> P1a[candidate retrieval]
+    P1 --> P1b[stage-2 rerank]
+    P1 --> P1c[role classification]
+    P1 --> P1d[explanations]
+
+    P2 --> P2a[JSON-first CLI output]
+    P3 --> P3a[shared API payloads]
+    P4 --> P4a[snapshot annotations]
+    P5 --> P5a[labeled maintainer fixtures]
+```
 
 ## Relationship To Current Work
 
