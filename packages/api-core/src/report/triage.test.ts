@@ -68,7 +68,7 @@ test('generateSuggestedActions returns close, growth, and stale actions when tri
     }),
   ]);
 
-  assert(actions.some((action) => action.action === 'close_duplicates' && action.clusterId === 1));
+  assert(actions.some((action) => action.action === 'review_duplicate_candidates' && action.clusterId === 1));
   assert(actions.some((action) => action.action === 'investigate_growth' && action.clusterId === 1));
   assert(actions.some((action) => action.action === 'investigate_growth' && action.clusterId === 2));
   assert(actions.some((action) => action.action === 'stale_cluster' && action.clusterId === 3));

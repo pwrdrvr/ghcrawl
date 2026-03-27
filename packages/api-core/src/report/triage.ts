@@ -1,7 +1,7 @@
 import type { ClusterSummaryDto, RepoStatsDto, RepositoryDto } from '@ghcrawl/api-contract';
 
 export type TriageAction = {
-  action: 'close_duplicates' | 'investigate_growth' | 'stale_cluster';
+  action: 'review_duplicate_candidates' | 'investigate_growth' | 'stale_cluster';
   clusterId: number;
   displayTitle: string;
   reason: string;
@@ -22,10 +22,10 @@ export function generateSuggestedActions(clusters: ClusterSummaryDto[]): TriageA
   for (const cluster of clusters) {
     if (cluster.totalCount >= 5 && cluster.pullRequestCount === 0) {
       actions.push({
-        action: 'close_duplicates',
+        action: 'review_duplicate_candidates',
         clusterId: cluster.clusterId,
         displayTitle: cluster.displayTitle,
-        reason: `${cluster.totalCount} issues all describe the same problem`,
+        reason: `${cluster.totalCount} clustered reports with similar content`,
       });
     }
 
@@ -37,7 +37,7 @@ export function generateSuggestedActions(clusters: ClusterSummaryDto[]): TriageA
           action: 'investigate_growth',
           clusterId: cluster.clusterId,
           displayTitle: cluster.displayTitle,
-          reason: `${cluster.totalCount} open members with activity in the last ${Math.max(0, Math.floor(daysSince))} days`,
+          reason: `${cluster.totalCount} clustered items with activity in the last ${Math.max(0, Math.floor(daysSince))} days`,
         });
       }
     }
@@ -50,7 +50,7 @@ export function generateSuggestedActions(clusters: ClusterSummaryDto[]): TriageA
           action: 'stale_cluster',
           clusterId: cluster.clusterId,
           displayTitle: cluster.displayTitle,
-          reason: `last updated ${Math.floor(daysSince)} days ago with ${cluster.totalCount} open members`,
+          reason: `last updated ${Math.floor(daysSince)} days ago with ${cluster.totalCount} clustered items`,
         });
       }
     }
@@ -103,8 +103,8 @@ export function formatTriageMarkdown(report: TriageReport): string {
 
     for (const action of report.suggestedActions) {
       const prefix =
-        action.action === 'close_duplicates'
-          ? 'Close duplicates in'
+        action.action === 'review_duplicate_candidates'
+          ? 'Review candidates in'
           : action.action === 'investigate_growth'
             ? 'Investigate'
             : 'Stale:';
