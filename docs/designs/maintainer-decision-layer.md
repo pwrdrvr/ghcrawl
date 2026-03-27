@@ -126,6 +126,15 @@ Inputs may include:
 
 This layer should optimize for recall, not for final ranking.
 
+The candidate set should preserve retrieval provenance explicitly, for example:
+
+- `cluster_member`
+- `semantic_neighbor`
+- `path_overlap`
+- `issue_linked`
+
+Those are not decision outcomes. They are evidence about how a candidate entered the set.
+
 ### Decision Analysis Layer
 
 Purpose:
@@ -146,7 +155,9 @@ This layer should optimize for maintainer usefulness, not for raw semantic simil
 
 This is the part that should carry the main maintainer-facing value.
 
-The first iteration should ship with an explicit score model instead of hiding the decision logic behind vague heuristics. The exact weights can be tuned later, but the shape should be clear from the start.
+The first iteration should ship with an explicit score model instead of hiding the decision logic behind vague heuristics. The roadmap should be concrete about feature families and monotonic direction, but exact coefficients should live in code or config plus fixture-based evaluation.
+
+There is already an existence proof for weighted stage-two scoring in `claw-maintainer-tui`. That implementation uses explicit weighted composition for semantic reranking and related maintainer decision heuristics in a live maintainer workflow. This roadmap should treat that as a reference implementation and starting point, rather than presenting one fixed coefficient set as universal truth for `ghcrawl`.
 
 ```mermaid
 flowchart LR
@@ -172,19 +183,7 @@ flowchart LR
     style G fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
 ```
 
-Suggested v1 score shape:
-
-```text
-decisionScore =
-  0.35 * semanticSimilarity
-  + 0.20 * linkedIssueOverlap
-  + 0.20 * pathRelevance
-  + 0.15 * companionTestRelevance
-  + 0.10 * stateRecencyBonus
-  - 0.20 * unrelatedChurnPenalty
-```
-
-The exact coefficients above are a starting point, not a claim that tuning is finished. The important part is the composition:
+The important part is the composition:
 
 - semantic similarity keeps the decision layer grounded in the current retrieval model
 - linked issue overlap adds deterministic problem affinity
@@ -193,20 +192,95 @@ The exact coefficients above are a starting point, not a claim that tuning is fi
 - state and recency give maintainers a slight operational preference
 - unrelated churn penalty suppresses broad but noisy neighbors
 
-One reasonable normalization target for the first iteration is a `[0, 1]` score per positive signal and a `[0, 1]` penalty for unrelated churn.
+One reasonable starting rule is:
+
+- normalize each positive feature into a bounded local score
+- normalize unrelated churn into a bounded penalty
+- keep the exact weighting and thresholds in implementation config
+- allow the first `ghcrawl` implementation to start from the `claw-maintainer-tui` weighting profile and then retune against `ghcrawl` fixtures
+- tune those values against labeled fixtures before widening the feature set
+
+## Feature Availability Boundary
+
+The roadmap should be explicit about what the first iteration can use without hidden live fetches or ad hoc parsing.
+
+### V1 default
+
+V1 should be local-data-only by default.
+
+That means the first implementation should prefer signals that are already cheap and local:
+
+- semantic similarity
+- retrieval provenance such as active-cluster membership or semantic-neighbor membership
+- thread kind and thread state
+- draft / merged / closed facts when locally available
+- updated-at recency
+- PR-template residue, if the PR-template heuristic lands
+
+### Later feature providers
+
+These are good targets, but should be treated as later feature providers unless they become first-class normalized local signals:
+
+- rich linked-issue overlap
+- changed-path relevance
+- companion test relevance
+- unrelated-churn metrics derived from structured diff data
+
+This keeps the analyzer deterministic and stops V1 from quietly becoming a live GitHub fetch workflow.
+
+## Seed And Candidate Contract
+
+The core contract should separate retrieval provenance from decision outcome.
+
+Suggested shape:
+
+```ts
+analyzeSeed(seedThreadId, opts) => {
+  seed,
+  activeClusterRunId,
+  candidates: [
+    {
+      thread,
+      retrievalSources: ["cluster_member", "semantic_neighbor"],
+      features: {
+        semanticSimilarity,
+        inActiveCluster,
+        isSemanticNeighbor,
+        threadKind,
+        threadState,
+        updatedAt,
+        templateResidue,
+      },
+      score,
+      decisionRole,
+      reasonCodes,
+    },
+  ],
+  bestBaseThreadId,
+}
+```
+
+This is the main contract boundary that future CLI, API, triage, and UI surfaces should share.
 
 ### Suggested Role Logic
 
 The role assignment should stay explicit and rule-driven on top of the score model.
 
-- `excluded_neighbor`
-  - semantic candidate is below the minimum affinity threshold, or the noise penalty dominates the score
+- retrieval provenance and decision role should remain separate fields
+- role eligibility should depend on thread kind
+
 - `best_base`
-  - highest non-excluded candidate after score and tie-break review
+  - only valid for pull request candidates
+  - highest non-excluded pull request after score and tie-break review
 - `superseded_candidate`
+  - only valid for pull request candidates
   - strong affinity but materially lower score than the best base, especially when coverage or validation is weaker
 - `same_cluster_candidate`
-  - strong enough to keep, but not clearly dominant or clearly superseded
+  - valid for retained neighbors, but should not mean “won the decision”
+- `excluded_neighbor`
+  - semantic candidate is below the minimum affinity threshold, or the noise penalty dominates the score
+
+Issues may still appear as candidates and evidence, but they should not compete for `best_base`.
 
 This makes the decision layer stronger than raw cluster membership while still being auditable.
 
@@ -292,8 +366,9 @@ Add a reusable analysis module, not just a command-specific heuristic bundle.
 - stage-two scoring
 - explicit role classification
 - explanation payload
+- a tiny labeled fixture set for regression protection
 
-This phase should not require storage redesign.
+This phase should not require storage redesign and should stay local-data-only by default.
 
 ### Phase 2: Add `analyze-pr`
 
@@ -327,11 +402,11 @@ This prevents decision logic from being duplicated in each surface.
 
 After the decision model is useful and stable:
 
-- attach decision metadata to cluster snapshots or adjacent run-state tables
+- persist results in adjacent `decision_runs` or `decision_candidates` style tables
 - preserve explanation and lineage context across rebuilds
 - make it easier to compare how maintainer recommendations evolve over time
 
-This phase should build on the snapshot/current-view work rather than replace it.
+This phase should build on the snapshot/current-view work rather than replace it, and should stay decoupled from cluster snapshots themselves.
 
 ### Phase 5: Evaluation And Feedback Loop
 

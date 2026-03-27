@@ -122,8 +122,12 @@ Decision note:
 - [ ] Add a reusable decision-analysis layer above clusters and semantic neighbors.
 - [ ] Introduce a seed-centric `analyze-pr` style workflow for explicit maintainer decisions.
 - [ ] Reuse a shared score/explanation model instead of duplicating logic across CLI, report, and API surfaces.
-- [ ] Define explicit first-pass roles such as `best_base`, `same_cluster_candidate`, `superseded_candidate`, and `excluded_neighbor`.
+- [ ] Split retrieval provenance from decision role so candidates can say how they were found separately from what decision they received.
+- [ ] Define explicit first-pass roles such as `best_base`, `same_cluster_candidate`, `superseded_candidate`, and `excluded_neighbor`, with role eligibility depending on thread kind.
+- [ ] Keep the first iteration local-data-only by default and add richer feature providers only after the data is first-class and normalized.
+- [ ] Add small golden fixtures early so score tuning and role classification have regression protection from the first implementation.
 - [ ] Keep the first iteration additive: no cluster-model replacement and no storage redesign required.
+- [ ] If persisted later, store decision artifacts in adjacent decision tables rather than cluster snapshots.
 - [ ] Track the target shape in `docs/designs/maintainer-decision-layer.md`.
 
 ## Phase 7: API And Future UI
