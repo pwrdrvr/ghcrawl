@@ -124,7 +124,7 @@ Decision note:
 - [ ] Reuse a shared score/explanation model instead of duplicating logic across CLI, report, and API surfaces.
 - [ ] Split retrieval provenance from decision role so candidates can say how they were found separately from what decision they received.
 - [ ] Define explicit first-pass roles such as `best_base`, `same_cluster_candidate`, `superseded_candidate`, and `excluded_neighbor`, with role eligibility depending on thread kind.
-- [ ] Keep the first iteration local-data-only by default and add richer feature providers only after the data is first-class and normalized.
+- [ ] Keep the first iteration read-only against the latest local snapshot, with freshness coming from the existing explicit `refresh` or `sync -> embed -> cluster` pipeline rather than hidden live fetches during scoring.
 - [ ] Add small golden fixtures early so score tuning and role classification have regression protection from the first implementation.
 - [ ] Keep the first iteration additive: no cluster-model replacement and no storage redesign required.
 - [ ] If persisted later, store decision artifacts in adjacent decision tables rather than cluster snapshots.

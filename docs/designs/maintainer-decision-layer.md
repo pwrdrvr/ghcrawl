@@ -72,8 +72,8 @@ flowchart LR
     E --> E3[excluded_neighbor]
     E --> E4[decision trace]
 
-    style D fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
-    style E fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
+    style D fill:#173042,stroke:#7dd3fc,stroke-width:2px,color:#ffffff
+    style E fill:#3a2812,stroke:#fbbf24,stroke-width:2px,color:#ffffff
 ```
 
 ## Target Shape
@@ -180,7 +180,7 @@ flowchart LR
     G --> J[superseded_candidate]
     G --> K[excluded_neighbor]
 
-    style G fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    style G fill:#173042,stroke:#7dd3fc,stroke-width:2px,color:#ffffff
 ```
 
 The important part is the composition:
@@ -204,9 +204,16 @@ One reasonable starting rule is:
 
 The roadmap should be explicit about what the first iteration can use without hidden live fetches or ad hoc parsing.
 
-### V1 default
+### V1 boundary
 
-V1 should be local-data-only by default.
+V1 analysis should operate on the latest local repository snapshot by default.
+
+Freshness should come from the existing explicit maintenance pipeline:
+
+- `refresh`
+- or `sync` -> `embed` -> `cluster`
+
+The decision layer itself should stay read-only against that local state. Scoring should not perform hidden live GitHub or OpenAI fetches.
 
 That means the first implementation should prefer signals that are already cheap and local:
 
@@ -226,7 +233,7 @@ These are good targets, but should be treated as later feature providers unless 
 - companion test relevance
 - unrelated-churn metrics derived from structured diff data
 
-This keeps the analyzer deterministic and stops V1 from quietly becoming a live GitHub fetch workflow.
+This keeps the analyzer deterministic, preserves a clear operator contract for freshness, and stops V1 from quietly becoming a live GitHub fetch workflow.
 
 ## Seed And Candidate Contract
 
@@ -332,7 +339,7 @@ flowchart TD
     E --> E3[API payloads]
     E --> E4[future UI]
 
-    style D fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    style D fill:#173042,stroke:#7dd3fc,stroke-width:2px,color:#ffffff
 ```
 
 ## Proposed Initial Roles
@@ -368,7 +375,7 @@ Add a reusable analysis module, not just a command-specific heuristic bundle.
 - explanation payload
 - a tiny labeled fixture set for regression protection
 
-This phase should not require storage redesign and should stay local-data-only by default.
+This phase should not require storage redesign and should analyze the latest local snapshot without introducing hidden live fetches into the scoring path.
 
 ### Phase 2: Add `analyze-pr`
 
