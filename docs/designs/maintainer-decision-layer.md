@@ -142,6 +142,74 @@ Expected signals:
 
 This layer should optimize for maintainer usefulness, not for raw semantic similarity.
 
+## Initial Scoring Proposal
+
+This is the part that should carry the main maintainer-facing value.
+
+The first iteration should ship with an explicit score model instead of hiding the decision logic behind vague heuristics. The exact weights can be tuned later, but the shape should be clear from the start.
+
+```mermaid
+flowchart LR
+    A[semantic similarity]
+    B[linked issue overlap]
+    C[path relevance]
+    D[companion test relevance]
+    E[state and recency]
+    F[unrelated churn penalty]
+
+    A --> G[decision score]
+    B --> G
+    C --> G
+    D --> G
+    E --> G
+    F --> G
+
+    G --> H[best_base]
+    G --> I[same_cluster_candidate]
+    G --> J[superseded_candidate]
+    G --> K[excluded_neighbor]
+
+    style G fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+```
+
+Suggested v1 score shape:
+
+```text
+decisionScore =
+  0.35 * semanticSimilarity
+  + 0.20 * linkedIssueOverlap
+  + 0.20 * pathRelevance
+  + 0.15 * companionTestRelevance
+  + 0.10 * stateRecencyBonus
+  - 0.20 * unrelatedChurnPenalty
+```
+
+The exact coefficients above are a starting point, not a claim that tuning is finished. The important part is the composition:
+
+- semantic similarity keeps the decision layer grounded in the current retrieval model
+- linked issue overlap adds deterministic problem affinity
+- path relevance rewards candidates that touch the same implementation area
+- companion test relevance rewards candidates that validate the same fix surface
+- state and recency give maintainers a slight operational preference
+- unrelated churn penalty suppresses broad but noisy neighbors
+
+One reasonable normalization target for the first iteration is a `[0, 1]` score per positive signal and a `[0, 1]` penalty for unrelated churn.
+
+### Suggested Role Logic
+
+The role assignment should stay explicit and rule-driven on top of the score model.
+
+- `excluded_neighbor`
+  - semantic candidate is below the minimum affinity threshold, or the noise penalty dominates the score
+- `best_base`
+  - highest non-excluded candidate after score and tie-break review
+- `superseded_candidate`
+  - strong affinity but materially lower score than the best base, especially when coverage or validation is weaker
+- `same_cluster_candidate`
+  - strong enough to keep, but not clearly dominant or clearly superseded
+
+This makes the decision layer stronger than raw cluster membership while still being auditable.
+
 ### Explanation Layer
 
 Purpose:
