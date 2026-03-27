@@ -31,8 +31,10 @@
     "neighbors": "node ./apps/cli/bin/ghcrawl.js neighbors",
     "tui": "node ./apps/cli/bin/ghcrawl.js tui",
     "serve": "node ./apps/cli/bin/ghcrawl.js serve",
+    "project:sync": "node ./.agents/skills/project-manager/scripts/sync-work-items.mjs",
     "test:cluster-perf": "pnpm --filter @ghcrawl/api-core test:cluster-perf",
     "pack:smoke": "node ./scripts/pack-smoke.mjs",
+    "release:metadata": "node ./scripts/release-metadata.mjs",
     "release:apply-version": "node ./scripts/apply-release-version.mjs",
     "typecheck": "pnpm build && pnpm -r typecheck",
     "test": "pnpm -r test"
@@ -47,6 +49,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.3.0",
     "tsx": "^4.20.5",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "yaml": "^2.8.3"
   }
 }

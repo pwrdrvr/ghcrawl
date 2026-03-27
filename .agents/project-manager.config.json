@@ -1,0 +1,9 @@
+{
+  "repo": "pwrdrvr/ghcrawl",
+  "projectOwner": "pwrdrvr",
+  "projectNumber": 9,
+  "projectUrl": "https://github.com/orgs/pwrdrvr/projects/9",
+  "trackerPath": ".local/work-items.yaml",
+  "issueDraftDir": ".local/issue-drafts",
+  "localIdPrefix": "ghc-"
+}

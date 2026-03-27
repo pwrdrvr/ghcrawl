@@ -168,6 +168,14 @@ test('parseRepoFlags accepts kind filter for threads', () => {
   assert.equal(parsed.repo, 'openclaw');
   assert.equal(parsed.values.kind, 'pull_request');
 });
+
+test('parseRepoFlags accepts heap diagnostics options', () => {
+  const parsed = parseRepoFlags(['openclaw/openclaw', '--heap-snapshot-dir', './tmp/heaps', '--heap-log-interval-ms', '5000']);
+  assert.equal(parsed.owner, 'openclaw');
+  assert.equal(parsed.repo, 'openclaw');
+  assert.equal(parsed.values['heap-snapshot-dir'], './tmp/heaps');
+  assert.equal(parsed.values['heap-log-interval-ms'], '5000');
+});
 test('resolveSinceValue keeps ISO timestamps', () => {
   assert.equal(resolveSinceValue('2026-03-01T00:00:00Z'), '2026-03-01T00:00:00.000Z');
 });

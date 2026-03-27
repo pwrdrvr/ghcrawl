@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Release tag in the form vX.Y.Z
+        description: Release tag in the form vX.Y.Z or vX.Y.Z-beta.N
         required: true
         type: string
 
@@ -28,6 +28,21 @@ jobs:
       - name: Install Node.js and dependencies
         uses: ./.github/actions/configure-nodejs
 
+      - name: Resolve release metadata
+        id: release_meta
+        run: pnpm release:metadata "$RELEASE_TAG"
+
+      - name: Validate GitHub prerelease flag
+        if: ${{ github.event_name == 'release' }}
+        env:
+          EXPECTED_PRERELEASE: ${{ steps.release_meta.outputs.is_prerelease }}
+          ACTUAL_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          if [ "$EXPECTED_PRERELEASE" != "$ACTUAL_PRERELEASE" ]; then
+            echo "Release tag prerelease state ($EXPECTED_PRERELEASE) does not match GitHub release.prerelease ($ACTUAL_PRERELEASE)." >&2
+            exit 1
+          fi
+
       - name: Apply release version from tag
         run: pnpm release:apply-version "$RELEASE_TAG"
 
@@ -48,10 +63,16 @@ jobs:
           EOF
 
       - name: Publish @ghcrawl/api-contract
-        run: pnpm --filter @ghcrawl/api-contract publish --no-git-checks --access public
+        env:
+          NPM_DIST_TAG: ${{ steps.release_meta.outputs.npm_dist_tag }}
+        run: pnpm --filter @ghcrawl/api-contract publish --no-git-checks --access public --tag "$NPM_DIST_TAG"
 
       - name: Publish @ghcrawl/api-core
-        run: pnpm --filter @ghcrawl/api-core publish --no-git-checks --access public
+        env:
+          NPM_DIST_TAG: ${{ steps.release_meta.outputs.npm_dist_tag }}
+        run: pnpm --filter @ghcrawl/api-core publish --no-git-checks --access public --tag "$NPM_DIST_TAG"
 
       - name: Publish ghcrawl
-        run: pnpm --filter ghcrawl publish --no-git-checks --access public
+        env:
+          NPM_DIST_TAG: ${{ steps.release_meta.outputs.npm_dist_tag }}
+        run: pnpm --filter ghcrawl publish --no-git-checks --access public --tag "$NPM_DIST_TAG"
