@@ -1503,7 +1503,7 @@ test('clusterRepository prunes older cluster runs for the repo after a successfu
   }
 });
 
-test('clusterRepository does not populate the parsed embedding cache for in-process clustering', async () => {
+test('clusterRepository does not retain a parsed embedding cache in-process', async () => {
   const service = makeTestService({
     checkAuth: async () => undefined,
     getRepo: async () => ({}),
@@ -1550,8 +1550,7 @@ test('clusterRepository does not populate the parsed embedding cache for in-proc
       minScore: 0.5,
     });
 
-    const cache = (service as unknown as { parsedEmbeddingCache: Map<number, unknown> }).parsedEmbeddingCache;
-    assert.equal(cache.size, 0);
+    assert.equal('parsedEmbeddingCache' in (service as Record<string, unknown>), false);
   } finally {
     service.close();
   }

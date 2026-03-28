@@ -114,12 +114,6 @@ type StoredEmbeddingRow = ThreadRow & {
   embedding_json: string;
 };
 
-type ParsedStoredEmbeddingRow = Omit<StoredEmbeddingRow, 'embedding_json'> & {
-  embedding: number[];
-  normalizedEmbedding: number[];
-  embeddingNorm: number;
-};
-
 type EmbeddingWorkset = {
   rows: Array<{
     id: number;
@@ -434,7 +428,6 @@ export class GHCrawlService {
   readonly db: SqliteDatabase;
   readonly github?: GitHubClient;
   readonly ai?: AiProvider;
-  private readonly parsedEmbeddingCache = new Map<number, ParsedStoredEmbeddingRow[]>();
 
   constructor(options: {
     config?: GitcrawlConfig;
@@ -451,7 +444,6 @@ export class GHCrawlService {
   }
 
   close(): void {
-    this.parsedEmbeddingCache.clear();
     this.db.close();
   }
 
@@ -704,8 +696,6 @@ export class GHCrawlService {
          where id = ?`,
       )
       .run(closedAt, closedAt, row.id);
-    this.parsedEmbeddingCache.delete(repository.id);
-
     const clusterIds = this.getLatestRunClusterIdsForThread(repository.id, row.id);
     const clusterClosed = this.reconcileClusterCloseState(repository.id, clusterIds) > 0;
     const updated = this.db.prepare('select * from threads where id = ? limit 1').get(row.id) as ThreadRow;
@@ -855,7 +845,6 @@ export class GHCrawlService {
           })
         : 0;
       const threadsClosed = threadsClosedFromClosedSweep + threadsClosedFromDirectReconcile;
-      this.parsedEmbeddingCache.delete(repoId);
       if (threadsClosed > 0) {
         this.reconcileClusterCloseState(repoId);
       }
@@ -1164,9 +1153,8 @@ export class GHCrawlService {
 
     if (mode !== 'keyword' && this.ai) {
       const [queryEmbedding] = await this.ai.embedTexts({ model: this.config.embedModel, texts: [params.query] });
-      const rows = this.loadParsedStoredEmbeddings(repository.id);
-      for (const row of rows) {
-        const score = cosineSimilarity(queryEmbedding, row.embedding);
+      for (const row of this.iterateStoredEmbeddings(repository.id)) {
+        const score = cosineSimilarity(queryEmbedding, JSON.parse(row.embedding_json) as number[]);
         if (score < 0.2) continue;
         semanticScores.set(row.id, Math.max(semanticScores.get(row.id) ?? -1, score));
       }
@@ -1264,8 +1252,7 @@ export class GHCrawlService {
     const limit = params.limit ?? 10;
     const minScore = params.minScore ?? 0.2;
 
-    const rows = this.loadParsedStoredEmbeddings(repository.id);
-    const targetRows = rows.filter((row) => row.number === params.threadNumber);
+    const targetRows = this.loadStoredEmbeddingsForThreadNumber(repository.id, params.threadNumber);
     if (targetRows.length === 0) {
       throw new Error(
         `Thread #${params.threadNumber} for ${repository.fullName} was not found with an embedding. Run embed first.`,
@@ -1274,15 +1261,15 @@ export class GHCrawlService {
     const targetRow = targetRows[0];
     const targetBySource = new Map<EmbeddingSourceKind, number[]>();
     for (const row of targetRows) {
-      targetBySource.set(row.source_kind, row.embedding);
+      targetBySource.set(row.source_kind, JSON.parse(row.embedding_json) as number[]);
     }
 
     const aggregated = new Map<number, { number: number; kind: 'issue' | 'pull_request'; title: string; score: number }>();
-    for (const row of rows) {
+    for (const row of this.iterateStoredEmbeddings(repository.id)) {
       if (row.id === targetRow.id) continue;
       const targetEmbedding = targetBySource.get(row.source_kind);
       if (!targetEmbedding) continue;
-      const score = cosineSimilarity(targetEmbedding, row.embedding);
+      const score = cosineSimilarity(targetEmbedding, JSON.parse(row.embedding_json) as number[]);
       if (score < minScore) continue;
       const previous = aggregated.get(row.id);
       if (!previous || score > previous.score) {
@@ -2828,24 +2815,36 @@ export class GHCrawlService {
       .all(repoId, this.config.embedModel) as StoredEmbeddingRow[];
   }
 
-  private loadParsedStoredEmbeddings(repoId: number): ParsedStoredEmbeddingRow[] {
-    const cached = this.parsedEmbeddingCache.get(repoId);
-    if (cached) {
-      return cached;
-    }
+  private loadStoredEmbeddingsForThreadNumber(repoId: number, threadNumber: number): StoredEmbeddingRow[] {
+    return this.db
+      .prepare(
+        `select t.id, t.repo_id, t.number, t.kind, t.state, t.closed_at_gh, t.closed_at_local, t.close_reason_local,
+                t.title, t.body, t.author_login, t.html_url, t.labels_json,
+                t.updated_at_gh, t.first_pulled_at, t.last_pulled_at, e.source_kind, e.embedding_json
+         from threads t
+         join document_embeddings e on e.thread_id = t.id
+         where t.repo_id = ?
+           and t.number = ?
+           and t.state = 'open'
+           and t.closed_at_local is null
+           and e.model = ?
+         order by e.source_kind asc`,
+      )
+      .all(repoId, threadNumber, this.config.embedModel) as StoredEmbeddingRow[];
+  }
 
-    const parsed = this.loadStoredEmbeddings(repoId).map((row) => {
-      const embedding = JSON.parse(row.embedding_json) as number[];
-      const normalized = normalizeEmbedding(embedding);
-      return {
-        ...row,
-        embedding,
-        normalizedEmbedding: normalized.normalized,
-        embeddingNorm: normalized.norm,
-      };
-    });
-    this.parsedEmbeddingCache.set(repoId, parsed);
-    return parsed;
+  private iterateStoredEmbeddings(repoId: number): IterableIterator<StoredEmbeddingRow> {
+    return this.db
+      .prepare(
+        `select t.id, t.repo_id, t.number, t.kind, t.state, t.closed_at_gh, t.closed_at_local, t.close_reason_local,
+                t.title, t.body, t.author_login, t.html_url, t.labels_json,
+                t.updated_at_gh, t.first_pulled_at, t.last_pulled_at, e.source_kind, e.embedding_json
+         from threads t
+         join document_embeddings e on e.thread_id = t.id
+         where t.repo_id = ? and t.state = 'open' and t.closed_at_local is null and e.model = ?
+         order by t.number asc, e.source_kind asc`,
+      )
+      .iterate(repoId, this.config.embedModel) as IterableIterator<StoredEmbeddingRow>;
   }
 
   private loadNormalizedEmbeddingsForSourceKind(
@@ -3288,10 +3287,6 @@ export class GHCrawlService {
         nowIso(),
         nowIso(),
       );
-    const row = this.db.prepare('select repo_id from threads where id = ? limit 1').get(threadId) as { repo_id: number } | undefined;
-    if (row) {
-      this.parsedEmbeddingCache.delete(row.repo_id);
-    }
   }
 
   private startRun(table: RunTable, repoId: number, scope: string): number {
