@@ -60,6 +60,32 @@ ghcrawl tui owner/repo
 
 `clusters` explores the clusters already stored in the local SQLite database and is expected to be the fast, read-only inspection path.
 
+## CLI Help And Machine Output
+
+Every public command now supports both:
+
+```bash
+ghcrawl help refresh
+ghcrawl refresh --help
+```
+
+For agent-facing and script-facing commands, prefer explicit machine mode:
+
+```bash
+ghcrawl doctor --json
+ghcrawl threads owner/repo --numbers 42,43,44 --json
+ghcrawl clusters owner/repo --min-size 10 --limit 20 --sort recent --json
+```
+
+Contract notes:
+
+- `doctor` keeps a human-readable TTY default unless you pass `--json`
+- JSON-oriented commands accept `--json` explicitly; current JSON-by-default behavior is still available as a compatibility path
+- machine payloads are written to `stdout`
+- progress logs and error messages are written to `stderr`
+- use `--config-path <path>` to force a specific persisted config file
+- use `--workspace-root <path>` to force `.env.local` and workspace-local DB discovery
+
 ### Refresh Command Example
 
 ```bash
@@ -164,16 +190,16 @@ ghcrawl-op tui owner/repo
 These commands are intended more for scripts, bots, and agent integrations than for normal day-to-day terminal browsing:
 
 ```bash
-ghcrawl threads owner/repo --numbers 42,43,44
-ghcrawl threads owner/repo --numbers 42,43,44 --include-closed
-ghcrawl author owner/repo --login lqquan
-ghcrawl close-thread owner/repo --number 42
-ghcrawl close-cluster owner/repo --id 123
-ghcrawl clusters owner/repo --min-size 10 --limit 20
-ghcrawl clusters owner/repo --min-size 10 --limit 20 --include-closed
-ghcrawl cluster-detail owner/repo --id 123
-ghcrawl cluster-detail owner/repo --id 123 --include-closed
-ghcrawl search owner/repo --query "download stalls"
+ghcrawl threads owner/repo --numbers 42,43,44 --json
+ghcrawl threads owner/repo --numbers 42,43,44 --include-closed --json
+ghcrawl author owner/repo --login lqquan --json
+ghcrawl close-thread owner/repo --number 42 --json
+ghcrawl close-cluster owner/repo --id 123 --json
+ghcrawl clusters owner/repo --min-size 10 --limit 20 --json
+ghcrawl clusters owner/repo --min-size 10 --limit 20 --include-closed --json
+ghcrawl cluster-detail owner/repo --id 123 --json
+ghcrawl cluster-detail owner/repo --id 123 --include-closed --json
+ghcrawl search owner/repo --query "download stalls" --json
 ```
 
 Use `threads --numbers ...` when you want several specific issue or PR records in one CLI call instead of paying process startup overhead repeatedly.
@@ -219,9 +245,9 @@ The skill is built around the stable JSON CLI surface and is intentionally conse
 ```bash
 ghcrawl doctor --json
 ghcrawl refresh owner/repo
-ghcrawl threads owner/repo --numbers 42,43,44
-ghcrawl clusters owner/repo --min-size 10 --limit 20 --sort recent
-ghcrawl cluster-detail owner/repo --id 123 --member-limit 20 --body-chars 280
+ghcrawl threads owner/repo --numbers 42,43,44 --json
+ghcrawl clusters owner/repo --min-size 10 --limit 20 --sort recent --json
+ghcrawl cluster-detail owner/repo --id 123 --member-limit 20 --body-chars 280 --json
 ```
 
 ### Video Walkthrough

@@ -105,17 +105,36 @@ Important repo-analysis facts that drive the schema:
 
 The product must keep these machine-facing surfaces working:
 
+### CLI discoverability contract
+
+- `ghcrawl --help`
+- `ghcrawl help`
+- `ghcrawl help <command>`
+- `ghcrawl <command> --help`
+- `ghcrawl <command> -h`
+- public commands must include command-specific synopsis, option descriptions, and copy-paste examples
+- usage and validation failures must exit with code `2` and print a command-specific help hint to `stderr`
+- runtime failures must exit with code `1`
+- payloads belong on `stdout`; progress and error logs belong on `stderr`
+- global config selection flags:
+  - `--config-path <path>`
+  - `--workspace-root <path>`
+
 ### CLI JSON surface
 
 - `ghcrawl doctor --json`
-- `ghcrawl sync owner/repo`
-- `ghcrawl refresh owner/repo`
-- `ghcrawl embed owner/repo`
-- `ghcrawl cluster owner/repo`
-- `ghcrawl clusters owner/repo`
-- `ghcrawl cluster-detail owner/repo --id <cluster-id>`
-- `ghcrawl search owner/repo --query <text>`
-- `ghcrawl neighbors owner/repo --number <thread-number>`
+- `ghcrawl sync owner/repo --json`
+- `ghcrawl refresh owner/repo --json`
+- `ghcrawl threads owner/repo --numbers <n,n,...> --json`
+- `ghcrawl author owner/repo --login <user> --json`
+- `ghcrawl close-thread owner/repo --number <thread-number> --json`
+- `ghcrawl close-cluster owner/repo --id <cluster-id> --json`
+- `ghcrawl embed owner/repo --json`
+- `ghcrawl cluster owner/repo --json`
+- `ghcrawl clusters owner/repo --json`
+- `ghcrawl cluster-detail owner/repo --id <cluster-id> --json`
+- `ghcrawl search owner/repo --query <text> --json`
+- `ghcrawl neighbors owner/repo --number <thread-number> --json`
 
 ### Local HTTP API
 
@@ -175,6 +194,7 @@ The installable skill lives in:
 - service tests for refresh sequencing and cluster dump payloads
 - server tests for cluster summary/detail endpoints
 - CLI help tests for the public agent-facing commands
+- CLI tests for usage exit codes, help hints, and explicit `--json` support
 
 ## Release Requirements
 

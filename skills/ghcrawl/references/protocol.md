@@ -4,7 +4,7 @@ Use the JSON CLI surface. Do not parse the TUI.
 
 Do not query the ghcrawl SQLite database directly with `sqlite3`, `pragma`, or ad hoc SQL. If the supported CLI cannot answer a read-only question, report the CLI problem to the user instead of bypassing the interface.
 
-Do not start with `ghcrawl --help` or `<subcommand> --help`. Use the command surface documented here unless the user explicitly asked about CLI syntax or you are maintaining ghcrawl itself.
+Do not start with `ghcrawl --help` or `<subcommand> --help`. Use the command surface documented here unless the user explicitly asked about CLI syntax or you are maintaining ghcrawl itself. If syntax is genuinely uncertain while maintaining `ghcrawl`, use `ghcrawl help <command>` or `ghcrawl <command> --help`.
 
 ## Commands
 
@@ -24,7 +24,7 @@ Do not call this automatically on every skill invocation. Use it when:
 
 If the user asked only for read-only analysis, missing auth is not itself a blocker. Work from the existing local dataset through the CLI.
 
-### `ghcrawl threads owner/repo --numbers <n,n,...>`
+### `ghcrawl threads owner/repo --numbers <n,n,...> --json`
 
 Bulk read path for specific issue/PR numbers from the local DB.
 
@@ -48,7 +48,7 @@ Useful flags:
 - `--kind issue|pull_request`
 - `--include-closed`
 
-### `ghcrawl author owner/repo --login <user>`
+### `ghcrawl author owner/repo --login <user> --json`
 
 Bulk read path for all open issue/PR records from one author in the local DB.
 
@@ -74,7 +74,7 @@ Optional skips:
 
 Do not run this unless the user explicitly asked for a refresh/rebuild.
 
-### `ghcrawl clusters owner/repo`
+### `ghcrawl clusters owner/repo --json`
 
 Useful flags:
 
@@ -115,7 +115,7 @@ This is the normal read-only exploration command for existing local data.
 
 By default it hides locally closed clusters.
 
-### `ghcrawl cluster-detail owner/repo --id <cluster-id>`
+### `ghcrawl cluster-detail owner/repo --id <cluster-id> --json`
 
 Useful flags:
 
@@ -145,7 +145,7 @@ Each member includes:
 
 By default this hides locally closed clusters; use `--include-closed` when the user explicitly wants them.
 
-### `ghcrawl close-thread owner/repo --number <thread-number>`
+### `ghcrawl close-thread owner/repo --number <thread-number> --json`
 
 Marks one local issue/PR closed without waiting for the next GitHub sync.
 
@@ -153,17 +153,17 @@ Use this only when the user explicitly asked to mark that thread closed locally.
 
 If that thread was the last open member of its cluster, ghcrawl also marks the cluster closed locally.
 
-### `ghcrawl close-cluster owner/repo --id <cluster-id>`
+### `ghcrawl close-cluster owner/repo --id <cluster-id> --json`
 
 Marks one cluster closed locally.
 
 Use this only when the user explicitly asked to suppress that cluster from default JSON exploration.
 
-### `ghcrawl search owner/repo --query <text>`
+### `ghcrawl search owner/repo --query <text> --json`
 
 Useful for semantic or keyword follow-up.
 
-### `ghcrawl neighbors owner/repo --number <thread-number>`
+### `ghcrawl neighbors owner/repo --number <thread-number> --json`
 
 Useful for inspecting nearest semantic matches for one thread.
 
@@ -173,17 +173,17 @@ If `ghcrawl` is not installed globally:
 
 ```bash
 pnpm --filter ghcrawl cli doctor --json
-pnpm --filter ghcrawl cli threads owner/repo --numbers 12345
-pnpm --filter ghcrawl cli threads owner/repo --numbers 42,43,44
-pnpm --filter ghcrawl cli threads owner/repo --numbers 42,43,44 --include-closed
-pnpm --filter ghcrawl cli author owner/repo --login lqquan
+pnpm --filter ghcrawl cli threads owner/repo --numbers 12345 --json
+pnpm --filter ghcrawl cli threads owner/repo --numbers 42,43,44 --json
+pnpm --filter ghcrawl cli threads owner/repo --numbers 42,43,44 --include-closed --json
+pnpm --filter ghcrawl cli author owner/repo --login lqquan --json
 pnpm --filter ghcrawl cli refresh owner/repo
-pnpm --filter ghcrawl cli clusters owner/repo --min-size 10 --limit 20 --sort recent
-pnpm --filter ghcrawl cli clusters owner/repo --min-size 10 --limit 20 --sort recent --include-closed
-pnpm --filter ghcrawl cli cluster-detail owner/repo --id 123 --member-limit 20 --body-chars 280
-pnpm --filter ghcrawl cli cluster-detail owner/repo --id 123 --member-limit 20 --body-chars 280 --include-closed
-pnpm --filter ghcrawl cli close-thread owner/repo --number 42
-pnpm --filter ghcrawl cli close-cluster owner/repo --id 123
+pnpm --filter ghcrawl cli clusters owner/repo --min-size 10 --limit 20 --sort recent --json
+pnpm --filter ghcrawl cli clusters owner/repo --min-size 10 --limit 20 --sort recent --include-closed --json
+pnpm --filter ghcrawl cli cluster-detail owner/repo --id 123 --member-limit 20 --body-chars 280 --json
+pnpm --filter ghcrawl cli cluster-detail owner/repo --id 123 --member-limit 20 --body-chars 280 --include-closed --json
+pnpm --filter ghcrawl cli close-thread owner/repo --number 42 --json
+pnpm --filter ghcrawl cli close-cluster owner/repo --id 123 --json
 ```
 
 If the supported CLI path still fails, hangs, or returns unusable output, stop and tell the user there is a ghcrawl CLI problem. Do not fall back to direct SQLite inspection.
@@ -194,6 +194,6 @@ If the supported CLI path still fails, hangs, or returns unusable output, stop a
 2. Only if API-backed work is needed or a read-only request failed, run `ghcrawl doctor --json`
 3. If auth is unavailable, stay read-only
 4. Only if doctor is healthy and the user explicitly asked, run `ghcrawl refresh owner/repo`
-5. `ghcrawl clusters owner/repo --min-size 10 --limit 20 --sort recent`
-6. `ghcrawl cluster-detail owner/repo --id <cluster-id>`
-7. optionally `threads`, `author`, `search`, or `neighbors`
+5. `ghcrawl clusters owner/repo --min-size 10 --limit 20 --sort recent --json`
+6. `ghcrawl cluster-detail owner/repo --id <cluster-id> --json`
+7. optionally `threads`, `author`, `search`, or `neighbors` with `--json`
