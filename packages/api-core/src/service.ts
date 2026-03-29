@@ -117,12 +117,6 @@ type StoredEmbeddingRow = ThreadRow & {
   embedding_json: string;
 };
 
-type ParsedStoredEmbeddingRow = Omit<StoredEmbeddingRow, 'embedding_json'> & {
-  embedding: number[];
-  normalizedEmbedding: number[];
-  embeddingNorm: number;
-};
-
 type ClusterExperimentMemoryStats = {
   rssBeforeBytes: number;
   rssAfterBytes: number;
@@ -1231,17 +1225,6 @@ export class GHCrawlService {
           recordMemory();
         }
       } else {
-        const loadStartedAt = Date.now();
-        const rows = this.loadParsedStoredEmbeddings(repository.id);
-        const bySource = new Map<EmbeddingSourceKind, ParsedStoredEmbeddingRow[]>();
-        for (const row of rows) {
-          const list = bySource.get(row.source_kind) ?? [];
-          list.push(row);
-          bySource.set(row.source_kind, list);
-        }
-        loadMs += Date.now() - loadStartedAt;
-        recordMemory();
-
         const setupStartedAt = Date.now();
         tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-vectorlite-'));
         tempDbPath = path.join(tempDir, 'cluster-experiment.db');
@@ -1255,40 +1238,50 @@ export class GHCrawlService {
         recordMemory();
 
         for (const sourceKind of sourceKinds) {
-          const sourceRows = bySource.get(sourceKind) ?? [];
-          if (sourceRows.length === 0) {
+          const sourceRowCount = this.countEmbeddingsForSourceKind(repository.id, sourceKind);
+          if (sourceRowCount === 0) {
+            continue;
+          }
+
+          const firstRow = this.loadNormalizedEmbeddingForSourceKindHead(repository.id, sourceKind);
+          if (!firstRow) {
             continue;
           }
 
           const tableName = `vector_${sourceKind}`;
-          const dimension = sourceRows[0]?.normalizedEmbedding.length ?? 0;
-          const safeCandidateK = Math.min(candidateK, Math.max(1, sourceRows.length - 1));
+          const dimension = firstRow.normalizedEmbedding.length;
+          const safeCandidateK = Math.min(candidateK, Math.max(1, sourceRowCount - 1));
 
           params.onProgress?.(
-            `[cluster-experiment] building ${sourceKind} HNSW index with ${sourceRows.length} vector(s)`,
+            `[cluster-experiment] building ${sourceKind} HNSW index with ${sourceRowCount} vector(s)`,
           );
           const indexStartedAt = Date.now();
           tempDb.exec(
-            `create virtual table ${tableName} using vectorlite(vec float32[${dimension}], hnsw(max_elements=${sourceRows.length}));`,
+            `create virtual table ${tableName} using vectorlite(vec float32[${dimension}], hnsw(max_elements=${sourceRowCount}));`,
           );
           const insert = tempDb.prepare(`insert into ${tableName}(rowid, vec) values (?, ?)`);
           tempDb.transaction(() => {
-            for (const row of sourceRows) {
+            const loadStartedAt = Date.now();
+            for (const row of this.iterateNormalizedEmbeddingsForSourceKind(repository.id, sourceKind)) {
               insert.run(row.id, this.normalizedEmbeddingBuffer(row.normalizedEmbedding));
             }
+            loadMs += Date.now() - loadStartedAt;
           })();
           indexBuildMs += Date.now() - indexStartedAt;
           recordMemory();
 
-          const rowsById = new Map(sourceRows.map((row) => [row.id, row]));
           const queryStartedAt = Date.now();
           const query = tempDb.prepare(
-            `select rowid from ${tableName} where knn_search(vec, knn_param(?, ${safeCandidateK + 1}))`,
+            `select rowid, distance from ${tableName} where knn_search(vec, knn_param(?, ${safeCandidateK + 1}))`,
           );
           let processed = 0;
           let lastProgressAt = Date.now();
-          for (const row of sourceRows) {
-            const candidates = query.all(this.normalizedEmbeddingBuffer(row.normalizedEmbedding)) as Array<{ rowid: number }>;
+          const queryLoadStartedAt = Date.now();
+          for (const row of this.iterateNormalizedEmbeddingsForSourceKind(repository.id, sourceKind)) {
+            const candidates = query.all(this.normalizedEmbeddingBuffer(row.normalizedEmbedding)) as Array<{
+              rowid: number;
+              distance: number;
+            }>;
             const ranked = rankNearestNeighborsByScore(candidates, {
               limit: k,
               minScore,
@@ -1296,19 +1289,13 @@ export class GHCrawlService {
                 if (candidate.rowid === row.id) {
                   return -1;
                 }
-                const candidateRow = rowsById.get(candidate.rowid);
-                if (!candidateRow) {
-                  return -1;
-                }
-                return dotProduct(row.normalizedEmbedding, candidateRow.normalizedEmbedding);
+                return this.normalizedDistanceToScore(candidate.distance);
               },
             });
             let addedThisRow = 0;
             for (const candidate of ranked) {
-              const candidateRow = rowsById.get(candidate.item.rowid);
-              if (!candidateRow) continue;
               const score = candidate.score;
-              const key = this.edgeKey(row.id, candidateRow.id);
+              const key = this.edgeKey(row.id, candidate.item.rowid);
               const existing = aggregated.get(key);
               if (existing) {
                 existing.score = Math.max(existing.score, score);
@@ -1316,8 +1303,8 @@ export class GHCrawlService {
                 continue;
               }
               aggregated.set(key, {
-                leftThreadId: Math.min(row.id, candidateRow.id),
-                rightThreadId: Math.max(row.id, candidateRow.id),
+                leftThreadId: Math.min(row.id, candidate.item.rowid),
+                rightThreadId: Math.max(row.id, candidate.item.rowid),
                 score,
                 sourceKinds: new Set([sourceKind]),
               });
@@ -1328,11 +1315,12 @@ export class GHCrawlService {
             if (params.onProgress && now - lastProgressAt >= CLUSTER_PROGRESS_INTERVAL_MS) {
               recordMemory();
               params.onProgress(
-                `[cluster-experiment] querying ${sourceKind} index ${processed}/${sourceRows.length} current_edges=${aggregated.size} added_this_step=${addedThisRow}`,
+                `[cluster-experiment] querying ${sourceKind} index ${processed}/${sourceRowCount} current_edges=${aggregated.size} added_this_step=${addedThisRow}`,
               );
               lastProgressAt = now;
             }
           }
+          loadMs += Date.now() - queryLoadStartedAt;
           queryMs += Date.now() - queryStartedAt;
           tempDb.exec(`drop table ${tableName}`);
           recordMemory();
@@ -3086,19 +3074,6 @@ export class GHCrawlService {
       .all(repoId, this.config.embedModel) as StoredEmbeddingRow[];
   }
 
-  private loadParsedStoredEmbeddings(repoId: number): ParsedStoredEmbeddingRow[] {
-    return this.loadStoredEmbeddings(repoId).map((row) => {
-      const embedding = JSON.parse(row.embedding_json) as number[];
-      const normalized = normalizeEmbedding(embedding);
-      return {
-        ...row,
-        embedding,
-        normalizedEmbedding: normalized.normalized,
-        embeddingNorm: normalized.norm,
-      };
-    });
-  }
-
   private loadStoredEmbeddingsForThreadNumber(repoId: number, threadNumber: number): StoredEmbeddingRow[] {
     return this.db
       .prepare(
@@ -3131,6 +3106,59 @@ export class GHCrawlService {
       .iterate(repoId, this.config.embedModel) as IterableIterator<StoredEmbeddingRow>;
   }
 
+  private loadNormalizedEmbeddingForSourceKindHead(
+    repoId: number,
+    sourceKind: EmbeddingSourceKind,
+  ): { id: number; normalizedEmbedding: number[] } | null {
+    const row = this.db
+      .prepare(
+        `select t.id, e.embedding_json
+         from threads t
+         join document_embeddings e on e.thread_id = t.id
+         where t.repo_id = ?
+           and t.state = 'open'
+           and t.closed_at_local is null
+           and e.model = ?
+           and e.source_kind = ?
+         order by t.number asc
+         limit 1`,
+      )
+      .get(repoId, this.config.embedModel, sourceKind) as { id: number; embedding_json: string } | undefined;
+    if (!row) {
+      return null;
+    }
+    return {
+      id: row.id,
+      normalizedEmbedding: normalizeEmbedding(JSON.parse(row.embedding_json) as number[]).normalized,
+    };
+  }
+
+  private *iterateNormalizedEmbeddingsForSourceKind(
+    repoId: number,
+    sourceKind: EmbeddingSourceKind,
+  ): IterableIterator<{ id: number; normalizedEmbedding: number[] }> {
+    const rows = this.db
+      .prepare(
+        `select t.id, e.embedding_json
+         from threads t
+         join document_embeddings e on e.thread_id = t.id
+         where t.repo_id = ?
+           and t.state = 'open'
+           and t.closed_at_local is null
+           and e.model = ?
+           and e.source_kind = ?
+         order by t.number asc`,
+      )
+      .iterate(repoId, this.config.embedModel, sourceKind) as IterableIterator<{ id: number; embedding_json: string }>;
+
+    for (const row of rows) {
+      yield {
+        id: row.id,
+        normalizedEmbedding: normalizeEmbedding(JSON.parse(row.embedding_json) as number[]).normalized,
+      };
+    }
+  }
+
   private loadNormalizedEmbeddingsForSourceKind(
     repoId: number,
     sourceKind: EmbeddingSourceKind,
@@ -3157,6 +3185,10 @@ export class GHCrawlService {
 
   private normalizedEmbeddingBuffer(values: number[]): Buffer {
     return Buffer.from(Float32Array.from(values).buffer);
+  }
+
+  private normalizedDistanceToScore(distance: number): number {
+    return 1 - distance / 2;
   }
 
   private loadClusterableThreadMeta(repoId: number): {
