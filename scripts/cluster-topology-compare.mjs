@@ -16,6 +16,7 @@ function parseArgs(argv) {
   let childBackend = null;
   let top = 5;
   let sampleMembers = 12;
+  let efSearch;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -37,6 +38,11 @@ function parseArgs(argv) {
     }
     if (token === '--candidate-k') {
       candidateK = Number(argv[index + 1]);
+      index += 1;
+      continue;
+    }
+    if (token === '--ef-search') {
+      efSearch = Number(argv[index + 1]);
       index += 1;
       continue;
     }
@@ -72,6 +78,7 @@ function parseArgs(argv) {
     k: Number.isFinite(k) ? k : undefined,
     threshold: Number.isFinite(threshold) ? threshold : undefined,
     candidateK: Number.isFinite(candidateK) ? candidateK : undefined,
+    efSearch: Number.isFinite(efSearch) ? efSearch : undefined,
     childBackend,
     top: Number.isFinite(top) ? Math.max(1, top) : 5,
     sampleMembers: Number.isFinite(sampleMembers) ? Math.max(1, sampleMembers) : 12,
@@ -88,6 +95,7 @@ async function runChild(args) {
       k: args.k,
       minScore: args.threshold,
       candidateK: args.candidateK,
+      efSearch: args.efSearch,
       includeClusters: true,
       onProgress: (message) => process.stdout.write(`${message}\n`),
     });
@@ -118,6 +126,9 @@ async function runBackend(backend, args) {
     }
     if (args.candidateK !== undefined) {
       childArgs.push('--candidate-k', String(args.candidateK));
+    }
+    if (args.efSearch !== undefined) {
+      childArgs.push('--ef-search', String(args.efSearch));
     }
 
     const child = spawn(process.execPath, childArgs, {
@@ -361,6 +372,7 @@ async function runParent(args) {
     '',
     `- Repo: ${args.fullName}`,
     `- Parameters: k=${args.k ?? 'default'} threshold=${args.threshold ?? 'default'} candidateK=${args.candidateK ?? 'default'}`,
+    `- Vectorlite efSearch: ${args.efSearch ?? 'default(10)'}`,
     `- Exact clusters: ${exactResult.clusters}`,
     `- Vectorlite clusters: ${vectorliteResult.clusters}`,
     '',

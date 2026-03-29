@@ -1180,6 +1180,7 @@ export class GHCrawlService {
     minScore?: number;
     k?: number;
     candidateK?: number;
+    efSearch?: number;
     includeClusters?: boolean;
     onProgress?: (message: string) => void;
   }): ClusterExperimentResult {
@@ -1189,6 +1190,7 @@ export class GHCrawlService {
     const minScore = params.minScore ?? 0.82;
     const k = params.k ?? 6;
     const candidateK = Math.max(k, params.candidateK ?? Math.max(k * 16, 64));
+    const efSearch = params.efSearch;
     const startedAt = Date.now();
     const memoryBefore = process.memoryUsage();
     let peakRssBytes = memoryBefore.rss;
@@ -1291,9 +1293,11 @@ export class GHCrawlService {
           recordMemory();
 
           const queryStartedAt = Date.now();
-          const query = tempDb.prepare(
-            `select rowid, distance from ${tableName} where knn_search(vec, knn_param(?, ${safeCandidateK + 1}))`,
-          );
+          const querySql =
+            efSearch !== undefined
+              ? `select rowid, distance from ${tableName} where knn_search(vec, knn_param(?, ${safeCandidateK + 1}, ${efSearch}))`
+              : `select rowid, distance from ${tableName} where knn_search(vec, knn_param(?, ${safeCandidateK + 1}))`;
+          const query = tempDb.prepare(querySql);
           let processed = 0;
           let lastProgressAt = Date.now();
           const queryLoadStartedAt = Date.now();
