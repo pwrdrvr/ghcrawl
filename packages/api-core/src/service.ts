@@ -2995,6 +2995,19 @@ export class GHCrawlService {
       .all(repoId, this.config.embedModel) as StoredEmbeddingRow[];
   }
 
+  private loadParsedStoredEmbeddings(repoId: number): ParsedStoredEmbeddingRow[] {
+    return this.loadStoredEmbeddings(repoId).map((row) => {
+      const embedding = JSON.parse(row.embedding_json) as number[];
+      const normalized = normalizeEmbedding(embedding);
+      return {
+        ...row,
+        embedding,
+        normalizedEmbedding: normalized.normalized,
+        embeddingNorm: normalized.norm,
+      };
+    });
+  }
+
   private loadStoredEmbeddingsForThreadNumber(repoId: number, threadNumber: number): StoredEmbeddingRow[] {
     return this.db
       .prepare(
