@@ -36,6 +36,7 @@
     "perf:cluster:large": "pnpm --filter @ghcrawl/api-core build && node ./scripts/cluster-perf-large-compare.mjs",
     "perf:cluster:real": "pnpm --filter @ghcrawl/api-core build && node ./scripts/cluster-perf-real-compare.mjs",
     "perf:cluster:population": "pnpm --filter @ghcrawl/api-core build && node ./scripts/cluster-population-compare.mjs",
+    "perf:cluster:topology": "pnpm --filter @ghcrawl/api-core build && node ./scripts/cluster-topology-compare.mjs",
     "pack:smoke": "node ./scripts/pack-smoke.mjs",
     "release:metadata": "node ./scripts/release-metadata.mjs",
     "release:apply-version": "node ./scripts/apply-release-version.mjs",

@@ -138,6 +138,11 @@ type ClusterExperimentClusterSizeStats = {
   histogram: ClusterExperimentSizeBucket[];
 };
 
+type ClusterExperimentCluster = {
+  representativeThreadId: number;
+  memberThreadIds: number[];
+};
+
 type ClusterExperimentResult = {
   backend: 'exact' | 'vectorlite';
   repository: RepositoryDto;
@@ -158,6 +163,7 @@ type ClusterExperimentResult = {
   candidateK: number;
   memory: ClusterExperimentMemoryStats;
   clusterSizes: ClusterExperimentClusterSizeStats;
+  clustersDetail: ClusterExperimentCluster[] | null;
 };
 type EmbeddingWorkset = {
   rows: Array<{
@@ -1174,6 +1180,7 @@ export class GHCrawlService {
     minScore?: number;
     k?: number;
     candidateK?: number;
+    includeClusters?: boolean;
     onProgress?: (message: string) => void;
   }): ClusterExperimentResult {
     const backend = params.backend ?? 'vectorlite';
@@ -1385,6 +1392,12 @@ export class GHCrawlService {
           peakHeapUsedBytes,
         },
         clusterSizes: this.summarizeClusterSizes(clusters),
+        clustersDetail: params.includeClusters
+          ? clusters.map((cluster) => ({
+              representativeThreadId: cluster.representativeThreadId,
+              memberThreadIds: [...cluster.members],
+            }))
+          : null,
       };
     } finally {
       tempDb?.close();
