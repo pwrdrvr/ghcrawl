@@ -34,6 +34,7 @@
     "project:sync": "node ./.agents/skills/project-manager/scripts/sync-work-items.mjs",
     "test:cluster-perf": "pnpm --filter @ghcrawl/api-core test:cluster-perf",
     "perf:cluster:large": "pnpm --filter @ghcrawl/api-core build && node ./scripts/cluster-perf-large-compare.mjs",
+    "perf:cluster:real": "pnpm --filter @ghcrawl/api-core build && node ./scripts/cluster-perf-real-compare.mjs",
     "pack:smoke": "node ./scripts/pack-smoke.mjs",
     "release:metadata": "node ./scripts/release-metadata.mjs",
     "release:apply-version": "node ./scripts/apply-release-version.mjs",
