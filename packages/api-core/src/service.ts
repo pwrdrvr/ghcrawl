@@ -126,6 +126,18 @@ type ClusterExperimentMemoryStats = {
   peakHeapUsedBytes: number;
 };
 
+type ClusterExperimentSizeBucket = {
+  size: number;
+  count: number;
+};
+
+type ClusterExperimentClusterSizeStats = {
+  soloClusters: number;
+  maxClusterSize: number;
+  topClusterSizes: number[];
+  histogram: ClusterExperimentSizeBucket[];
+};
+
 type ClusterExperimentResult = {
   backend: 'exact' | 'vectorlite';
   repository: RepositoryDto;
@@ -145,6 +157,7 @@ type ClusterExperimentResult = {
   clusterBuildMs: number;
   candidateK: number;
   memory: ClusterExperimentMemoryStats;
+  clusterSizes: ClusterExperimentClusterSizeStats;
 };
 type EmbeddingWorkset = {
   rows: Array<{
@@ -1371,6 +1384,7 @@ export class GHCrawlService {
           heapUsedAfterBytes: memoryAfter.heapUsed,
           peakHeapUsedBytes,
         },
+        clusterSizes: this.summarizeClusterSizes(clusters),
       };
     } finally {
       tempDb?.close();
@@ -3571,6 +3585,31 @@ export class GHCrawlService {
 
   private pruneOldClusterRuns(repoId: number, keepRunId: number): void {
     this.db.prepare('delete from cluster_runs where repo_id = ? and id <> ?').run(repoId, keepRunId);
+  }
+
+  private summarizeClusterSizes(
+    clusters: Array<{ representativeThreadId: number; members: number[] }>,
+  ): ClusterExperimentClusterSizeStats {
+    const histogramCounts = new Map<number, number>();
+    const topClusterSizes = clusters.map((cluster) => cluster.members.length).sort((left, right) => right - left);
+    let soloClusters = 0;
+
+    for (const cluster of clusters) {
+      const size = cluster.members.length;
+      histogramCounts.set(size, (histogramCounts.get(size) ?? 0) + 1);
+      if (size === 1) {
+        soloClusters += 1;
+      }
+    }
+
+    return {
+      soloClusters,
+      maxClusterSize: topClusterSizes[0] ?? 0,
+      topClusterSizes: topClusterSizes.slice(0, 50),
+      histogram: Array.from(histogramCounts.entries())
+        .map(([size, count]) => ({ size, count }))
+        .sort((left, right) => left.size - right.size),
+    };
   }
 
   private upsertSummary(threadId: number, contentHash: string, summaryKind: string, summaryText: string): void {
