@@ -368,15 +368,16 @@ async function measureBenchmark(baseline: PerfBaseline): Promise<PerfRunResult> 
     }
 
     while (sampleDurationsMs.length < baseline.benchmark.maxSamples) {
-      const sampleStartedAt = performance.now();
+      let sampleDurationMs = 0;
       for (let runIndex = 0; runIndex < runsPerSample; runIndex += 1) {
         const runDbPath = path.join(tempRoot, `run-${runCounter}.sqlite`);
         runCounter += 1;
         fs.copyFileSync(seedDbPath, runDbPath);
         const result = await runSingleCluster(runDbPath, baseline, backend);
         assertBenchmarkShape(result, baseline, backend);
+        sampleDurationMs += result.durationMs;
       }
-      sampleDurationsMs.push(performance.now() - sampleStartedAt);
+      sampleDurationsMs.push(sampleDurationMs);
 
       const elapsedMs = performance.now() - benchmarkStartedAt;
       if (sampleDurationsMs.length >= baseline.benchmark.minSamples && elapsedMs >= baseline.benchmark.maxTotalMs) {
