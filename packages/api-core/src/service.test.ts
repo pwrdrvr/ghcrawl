@@ -1550,7 +1550,7 @@ test('clusterRepository does not retain a parsed embedding cache in-process', as
       minScore: 0.5,
     });
 
-    assert.equal('parsedEmbeddingCache' in (service as Record<string, unknown>), false);
+    assert.equal(Object.hasOwn(service, 'parsedEmbeddingCache'), false);
   } finally {
     service.close();
   }
