@@ -66,10 +66,12 @@ type LoadedStoredConfig = {
   data: PersistedGitcrawlConfig;
 };
 
-type LoadConfigOptions = {
+export type LoadConfigOptions = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
+  configPathOverride?: string;
+  workspaceRootOverride?: string;
 };
 
 type LayeredValue<T> = {
@@ -99,6 +101,9 @@ function resolveHomeDirectory(env: NodeJS.ProcessEnv): string {
 }
 
 export function getConfigDir(options: LoadConfigOptions = {}): string {
+  if (options.configPathOverride) {
+    return path.dirname(path.resolve(options.cwd ?? process.cwd(), options.configPathOverride));
+  }
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   const pathModule = pathModuleForPlatform(platform);
@@ -112,6 +117,9 @@ export function getConfigDir(options: LoadConfigOptions = {}): string {
 }
 
 export function getConfigPath(options: LoadConfigOptions = {}): string {
+  if (options.configPathOverride) {
+    return path.resolve(options.cwd ?? process.cwd(), options.configPathOverride);
+  }
   const platform = options.platform ?? process.platform;
   const pathModule = pathModuleForPlatform(platform);
   return pathModule.join(getConfigDir(options), 'config.json');
@@ -261,8 +269,16 @@ export function loadConfig(options: LoadConfigOptions = {}): GitcrawlConfig {
   const cwd = options.cwd ?? process.cwd();
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
-  const workspaceRoot = findWorkspaceRoot(cwd);
-  const stored = readPersistedConfig({ cwd, env, platform });
+  const workspaceRoot = options.workspaceRootOverride
+    ? path.resolve(cwd, options.workspaceRootOverride)
+    : findWorkspaceRoot(cwd);
+  const stored = readPersistedConfig({
+    cwd,
+    env,
+    platform,
+    configPathOverride: options.configPathOverride,
+    workspaceRootOverride: options.workspaceRootOverride,
+  });
   const dotenvValues = readDotenvFile(workspaceRoot);
 
   const githubToken = pickDefined<string>(

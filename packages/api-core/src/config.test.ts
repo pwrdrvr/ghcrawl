@@ -119,6 +119,27 @@ test('loadConfig reuses an existing workspace database when no explicit db path 
   assert.equal(config.dbPath, path.join(workspace, 'data', 'ghcrawl.db'));
 });
 
+test('workspace root override changes dotenv and workspace database discovery', () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-cwd-'));
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-workspace-'));
+  fs.writeFileSync(path.join(workspace, '.env.local'), 'GHCRAWL_API_PORT=6222\n');
+  fs.mkdirSync(path.join(workspace, 'data'), { recursive: true });
+  fs.writeFileSync(path.join(workspace, 'data', 'ghcrawl.db'), '');
+
+  const config = loadConfig({
+    cwd,
+    workspaceRootOverride: workspace,
+    env: {
+      ...makeTestEnv(),
+      HOME: makeTempHome(),
+    },
+  });
+
+  assert.equal(config.workspaceRoot, workspace);
+  assert.equal(config.apiPort, 6222);
+  assert.equal(config.dbPath, path.join(workspace, 'data', 'ghcrawl.db'));
+});
+
 test('writePersistedConfig creates a readable config file', () => {
   const home = makeTempHome();
   const env = {
@@ -140,6 +161,34 @@ test('writePersistedConfig creates a readable config file', () => {
   const persisted = readPersistedConfig({ env });
   assert.equal(persisted.data.githubToken, 'ghp_testtoken1234567890');
   assert.equal(persisted.data.openaiApiKey, 'sk-proj-testkey1234567890');
+});
+
+test('config path override redirects persisted config reads and writes', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-workspace-'));
+  const overridePath = path.join(workspace, '.tmp-config', 'custom-config.json');
+  const env = {
+    ...makeTestEnv(),
+    HOME: makeTempHome(),
+  };
+
+  const { configPath } = writePersistedConfig(
+    {
+      githubToken: 'ghp_override1234567890',
+      openaiApiKey: 'sk-proj-override1234567890',
+    },
+    { env, cwd: workspace, configPathOverride: overridePath },
+  );
+
+  assert.equal(configPath, overridePath);
+  assert.equal(fs.existsSync(overridePath), true);
+
+  const persisted = readPersistedConfig({ env, cwd: workspace, configPathOverride: overridePath });
+  assert.equal(persisted.configPath, overridePath);
+  assert.equal(persisted.data.githubToken, 'ghp_override1234567890');
+
+  const loaded = loadConfig({ env, cwd: workspace, configPathOverride: overridePath });
+  assert.equal(loaded.configPath, overridePath);
+  assert.equal(loaded.configDir, path.dirname(overridePath));
 });
 
 test('loadConfig restores op metadata and repository tui preferences', () => {

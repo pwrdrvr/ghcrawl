@@ -79,6 +79,8 @@ export async function runInitWizard(
     cwd?: string;
     env?: NodeJS.ProcessEnv;
     reconfigure?: boolean;
+    configPathOverride?: string;
+    workspaceRootOverride?: string;
     prompter?: InitPrompter;
     isInteractive?: boolean;
   } = {},
@@ -87,8 +89,14 @@ export async function runInitWizard(
   const env = options.env ?? process.env;
   const reconfigure = options.reconfigure ?? false;
   const prompter = options.prompter ?? createClackInitPrompter();
-  const current = loadConfig({ cwd, env });
-  const stored = readPersistedConfig({ cwd, env });
+  const configOptions = {
+    cwd,
+    env,
+    configPathOverride: options.configPathOverride,
+    workspaceRootOverride: options.workspaceRootOverride,
+  };
+  const current = loadConfig(configOptions);
+  const stored = readPersistedConfig(configOptions);
 
   const hasStoredGithub = Boolean(stored.data.githubToken);
   const hasStoredOpenAi = Boolean(stored.data.openaiApiKey);
@@ -334,7 +342,7 @@ export async function runInitWizard(
     throw new Error('init cancelled');
   }
 
-  const result = writePersistedConfig(nextConfig, { cwd, env });
+  const result = writePersistedConfig(nextConfig, configOptions);
   await prompter.outro(`Saved ghcrawl config to ${result.configPath}`);
   return { configPath: result.configPath, changed };
 }

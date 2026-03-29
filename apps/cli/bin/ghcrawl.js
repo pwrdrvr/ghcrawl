@@ -10,11 +10,14 @@ const distEntrypoint = path.join(binDir, '..', 'dist', 'main.js');
 const sourceEntrypoint = path.join(binDir, '..', 'src', 'main.ts');
 
 if (!existsSync(sourceEntrypoint) && existsSync(distEntrypoint)) {
-  const { run } = await import(pathToFileURL(distEntrypoint).href);
-  run(process.argv.slice(2)).catch((error) => {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exit(1);
-  });
+  const entrypoint = await import(pathToFileURL(distEntrypoint).href);
+  const exitCode =
+    typeof entrypoint.runCli === 'function'
+      ? await entrypoint.runCli(process.argv.slice(2))
+      : (await entrypoint.run(process.argv.slice(2)), 0);
+  if (exitCode !== 0) {
+    process.exit(exitCode);
+  }
 } else {
   const require = createRequire(import.meta.url);
   const tsxLoader = require.resolve('tsx');
