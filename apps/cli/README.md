@@ -70,6 +70,22 @@ ghcrawl refresh owner/repo
 
 ![ghcrawl refresh demo](https://raw.githubusercontent.com/pwrdrvr/ghcrawl/main/docs/images/ghcrawl-refresh-demo.gif)
 
+### TUI Screenshots
+
+| User open issue/PR list modal | Refresh modal |
+| --- | --- |
+| ![User open issue and PR list modal](https://raw.githubusercontent.com/pwrdrvr/ghcrawl/main/docs/images/ghcrawl-tui-user-modal.png) | ![GitHub, embed, and cluster refresh modal](https://raw.githubusercontent.com/pwrdrvr/ghcrawl/main/docs/images/ghcrawl-tui-refresh-modal.png) |
+| Press `u` to open the current user's issue and PR list modal. | Press `g` to open the GitHub/embed/cluster refresh modal. |
+
+| Closed members in a cluster | Fully closed cluster |
+| --- | --- |
+| ![Closed cluster members grayed out](https://raw.githubusercontent.com/pwrdrvr/ghcrawl/main/docs/images/ghcrawl-tui-closed-members.png) | ![Completely closed cluster grayed out](https://raw.githubusercontent.com/pwrdrvr/ghcrawl/main/docs/images/ghcrawl-tui-closed-cluster.png) |
+| Closed members stay visible in gray so overlap is still easy to inspect. | A cluster with no open members is grayed out as a whole until you hide closed items. |
+
+![Stacked TUI layout](https://raw.githubusercontent.com/pwrdrvr/ghcrawl/main/docs/images/ghcrawl-tui-layout-stacked.png)
+
+Press `l` on wide screens to toggle the stacked layout with the cluster list on the left and members/detail stacked on the right.
+
 ## Controlling The Refresh Flow More Intentionally
 
 Most users should run `ghcrawl refresh owner/repo` and let it do the full pipeline in the right order.
@@ -151,16 +167,26 @@ These commands are intended more for scripts, bots, and agent integrations than 
 
 ```bash
 ghcrawl threads owner/repo --numbers 42,43,44
+ghcrawl threads owner/repo --numbers 42,43,44 --include-closed
 ghcrawl author owner/repo --login lqquan
-ghcrawl cluster owner/repo
+ghcrawl close-thread owner/repo --number 42
+ghcrawl close-cluster owner/repo --id 123
 ghcrawl clusters owner/repo --min-size 10 --limit 20
+ghcrawl clusters owner/repo --min-size 10 --limit 20 --include-closed
 ghcrawl cluster-detail owner/repo --id 123
+ghcrawl cluster-detail owner/repo --id 123 --include-closed
 ghcrawl search owner/repo --query "download stalls"
 ```
 
 Use `threads --numbers ...` when you want several specific issue or PR records in one CLI call instead of paying process startup overhead repeatedly.
 
 Use `author --login ...` when you want all currently open issue/PR records from one user plus the strongest stored same-author similarity match for each item.
+
+By default, JSON list commands filter out locally closed issues/PRs and completely closed clusters. Use `--include-closed` when you need to inspect those records too.
+
+Use `close-thread` when you know a local issue/PR should be treated as closed before the next GitHub sync catches up. If that was the last open item in its cluster, `ghcrawl` automatically marks the cluster closed too.
+
+Use `close-cluster` when you want to locally suppress a whole cluster from default JSON exploration without waiting for a rebuild.
 
 ## Cost To Operate
 
@@ -190,6 +216,7 @@ The skill is built around the stable JSON CLI surface and is intentionally conse
 - default mode assumes no valid API keys and stays read-only
 - API-backed operations only become available after `ghcrawl doctor --json` shows healthy auth
 - even then, `refresh`, `sync`, `embed`, and `cluster` should only run when the user explicitly asks for them
+- JSON list commands hide locally closed issues/PRs and closed clusters by default unless `--include-closed` is passed
 
 ```bash
 ghcrawl doctor --json
@@ -220,6 +247,8 @@ The agent and build contract for this repo lives in [SPEC.md](https://github.com
 - `sync --since` accepts ISO timestamps and relative durations like `15m`, `2h`, `7d`, and `1mo`
 - `sync --limit <count>` is the best smoke-test path on a busy repository
 - `tui` remembers sort order and min cluster size per repository in the persisted config file
+- the TUI shows locally closed threads and clusters in gray; press `x` to hide or show them
+- on wide screens, press `l` to toggle between three columns and a wider cluster list with members/detail stacked on the right
 - if you add a brand-new repo from the TUI with `p`, ghcrawl runs sync -> embed -> cluster and opens that repo with min cluster size `1+`
 
 ## Responsibility Attestation
