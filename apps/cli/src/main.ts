@@ -24,6 +24,7 @@ type CommandName =
   | 'purge-comments'
   | 'embed'
   | 'cluster'
+  | 'diff'
   | 'clusters'
   | 'cluster-detail'
   | 'search'
@@ -51,6 +52,7 @@ function usage(devMode = false): string {
     '  close-cluster <owner/repo> --id <cluster-id>',
     '  embed <owner/repo> [--number <thread>]',
     '  cluster <owner/repo> [--k <count>] [--threshold <score>] [--heap-snapshot-dir <dir>] [--heap-log-interval-ms <ms>]',
+    '  diff <owner/repo>',
     '  clusters <owner/repo> [--min-size <count>] [--limit <count>] [--sort recent|size] [--search <text>] [--include-closed]',
     '  cluster-detail <owner/repo> --id <cluster-id> [--member-limit <count>] [--body-chars <count>] [--include-closed]',
     '  search <owner/repo> --query <text> [--mode keyword|semantic|hybrid]',
@@ -494,6 +496,12 @@ export async function run(argv: string[], stdout: NodeJS.WritableStream = proces
         } finally {
           heapDiagnostics?.dispose();
         }
+      }
+      case 'diff': {
+        const { owner, repo } = parseRepoFlags(rest);
+        const result = getService().diffClusters({ owner, repo });
+        stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return;
       }
       case 'clusters': {
         const { owner, repo, values } = parseRepoFlags(rest);

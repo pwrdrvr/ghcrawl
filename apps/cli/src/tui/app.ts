@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import blessed from 'neo-blessed';
 
 import type {
+  ClusterDiffResponse,
   GHCrawlService,
   TuiClusterDetail,
   TuiClusterSortMode,
@@ -175,6 +176,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   let activeJob: BackgroundRefreshJob | null = null;
   let modalOpen = false;
   let exitRequested = false;
+  let diffOverlay: ClusterDiffResponse | null = null;
 
   const clearCaches = (): void => {
     clusterDetailCache.clear();
@@ -390,7 +392,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       widgets.members.select(memberIndex);
     }
 
-    widgets.detail.setContent(renderDetailPane(threadDetail, clusterDetail, focusPane));
+    widgets.detail.setContent(diffOverlay ? renderDiffPane(diffOverlay) : renderDetailPane(threadDetail, clusterDetail, focusPane));
     updatePaneStyles(widgets, focusPane);
     const activeJobs = [syncJobRunning ? 'sync' : null, embedJobRunning ? 'embed' : null, clusterJobRunning ? 'cluster' : null]
       .filter(Boolean)
@@ -401,7 +403,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       footerLines.unshift('');
     }
     footerLines.push(
-      `${status}  |  jobs:${activeJobs}  |  h/? help  # jump  g update  p repos  u author  / filter  s sort  f min  l layout  x closed`,
+      `${status}  |  jobs:${activeJobs}  |  h/? help  # jump  d diff  g update  p repos  u author  / filter  s sort  f min  l layout  x closed`,
     );
     footerLines.push(
       `Tab focus  arrows move-or-scroll  PgUp/PgDn page  r refresh  o open  q quit`,
@@ -1123,6 +1125,23 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     if (modalOpen) return;
     promptAuthorThreads();
   });
+  widgets.screen.key(['d'], () => {
+    if (modalOpen) return;
+    if (diffOverlay) {
+      diffOverlay = null;
+      render();
+      return;
+    }
+    if (!currentRepository.owner || !currentRepository.repo) return;
+    try {
+      diffOverlay = params.service.diffClusters({ owner: currentRepository.owner, repo: currentRepository.repo });
+      status = 'Showing cluster diff';
+    } catch {
+      diffOverlay = null;
+      status = 'No diff data (run cluster twice to generate transitions)';
+    }
+    render();
+  });
   widgets.screen.on('resize', () => render());
 
   widgets.screen.on('destroy', () => {
@@ -1213,6 +1232,55 @@ function updatePaneStyles(widgets: Widgets, focus: TuiFocusPane): void {
   widgets.clusters.style.border = { fg: focus === 'clusters' ? 'white' : '#5bc0eb' };
   widgets.members.style.border = { fg: focus === 'members' ? 'white' : '#9bc53d' };
   widgets.detail.style.border = { fg: focus === 'detail' ? 'white' : '#fde74c' };
+}
+
+export function renderDiffPane(diff: ClusterDiffResponse): string {
+  const s = diff.summary;
+  const total = s.continuing + s.growing + s.shrinking + s.splitting + s.merging + s.forming + s.dissolving;
+  const lines: string[] = [
+    '{bold}Cluster Diff{/bold}  (press d to close)',
+    `Run ${diff.fromRunId} -> ${diff.toRunId}  |  ${total} transitions`,
+    '',
+    '{bold}Summary{/bold}',
+    `  {green-fg}continuing{/green-fg}  ${s.continuing}`,
+    `  {green-fg}growing{/green-fg}     ${s.growing}`,
+    `  {yellow-fg}shrinking{/yellow-fg}   ${s.shrinking}`,
+    `  {yellow-fg}splitting{/yellow-fg}   ${s.splitting}`,
+    `  {cyan-fg}merging{/cyan-fg}     ${s.merging}`,
+    `  {blue-fg}forming{/blue-fg}     ${s.forming}`,
+    `  {red-fg}dissolving{/red-fg}  ${s.dissolving}`,
+    '',
+    '{bold}Transitions{/bold}',
+    '',
+  ];
+
+  const colorTag = (t: string): string => {
+    switch (t) {
+      case 'continuing': case 'growing': return 'green-fg';
+      case 'shrinking': case 'splitting': return 'yellow-fg';
+      case 'merging': return 'cyan-fg';
+      case 'forming': return 'blue-fg';
+      case 'dissolving': return 'red-fg';
+      default: return 'white-fg';
+    }
+  };
+
+  for (const t of diff.transitions) {
+    const from = t.fromClusterId !== null ? `#${t.fromClusterId}` : '(new)';
+    const to = t.toClusterId !== null ? `#${t.toClusterId}` : '(gone)';
+    const jaccard = t.jaccardScore !== null ? `J=${(t.jaccardScore * 100).toFixed(0)}%` : '';
+    const delta = t.membersAdded > 0 || t.membersRemoved > 0
+      ? ` +${t.membersAdded}/-${t.membersRemoved} (${t.membersRetained} kept)`
+      : ` (${t.membersRetained} members)`;
+    const tag = colorTag(t.transition);
+    lines.push(`  ${from} -> ${to}  {${tag}}${t.transition}{/${tag}}  ${jaccard}${delta}`);
+  }
+
+  if (diff.transitions.length === 0) {
+    lines.push('  No transitions recorded. Run `ghcrawl cluster` twice to generate diff data.');
+  }
+
+  return lines.join('\n');
 }
 
 export function renderDetailPane(

@@ -10,10 +10,12 @@ import {
   actionResponseSchema,
   authorThreadsResponseSchema,
   closeResponseSchema,
+  clusterDiffResponseSchema,
   clusterDetailResponseSchema,
   clusterResultSchema,
   clusterSummariesResponseSchema,
   clustersResponseSchema,
+  diffResultSchema,
   embedResultSchema,
   healthResponseSchema,
   neighborsResponseSchema,
@@ -26,11 +28,13 @@ import {
   type ActionResponse,
   type AuthorThreadsResponse,
   type CloseResponse,
+  type ClusterDiffResponse,
   type ClusterDetailResponse,
   type ClusterDto,
   type ClusterResultDto,
   type ClusterSummariesResponse,
   type ClustersResponse,
+  type DiffResultDto,
   type EmbedResultDto,
   type HealthResponse,
   type NeighborsResponse,
@@ -42,11 +46,13 @@ import {
   type SearchResponse,
   type SyncResultDto,
   type ThreadDto,
+  type TransitionType,
   type ThreadsResponse,
 } from '@ghcrawl/api-contract';
 
 import { buildClusters } from './cluster/build.js';
 import { buildSourceKindEdges } from './cluster/exact-edges.js';
+import { computeClusterTransitions, type ClusterSnapshot } from './cluster/lineage.js';
 import {
   ensureRuntimeDirs,
   isLikelyGitHubToken,
@@ -1108,7 +1114,24 @@ export class GHCrawlService {
         items.map((item) => ({ threadId: item.id, number: item.number, title: item.title })),
         edges,
       );
+      const previousRun = this.db
+        .prepare("select id from cluster_runs where repo_id = ? and status = 'completed' order by id desc limit 1")
+        .get(repository.id) as { id: number } | undefined;
       this.persistClusterRun(repository.id, runId, aggregatedEdges, clusters);
+
+      if (previousRun) {
+        const oldSnapshots = this.loadClusterSnapshotsForRun(previousRun.id);
+        const newSnapshots = this.loadClusterSnapshotsForRun(runId);
+        const transitions = computeClusterTransitions(oldSnapshots, newSnapshots);
+        const diffResult: DiffResultDto = diffResultSchema.parse({
+          fromRunId: previousRun.id,
+          toRunId: runId,
+          transitionCount: transitions.length,
+        });
+        this.persistClusterTransitions(repository.id, diffResult, transitions);
+        params.onProgress?.(`[cluster] computed ${transitions.length} transition(s)`);
+      }
+
       this.pruneOldClusterRuns(repository.id, runId);
 
       params.onProgress?.(`[cluster] persisted ${clusters.length} cluster(s) and pruned older cluster runs`);
@@ -1365,6 +1388,58 @@ export class GHCrawlService {
     return clustersResponseSchema.parse({
       repository,
       clusters: clusterValues.filter((cluster) => (params.includeClosed ? true : !cluster.isClosed)),
+    });
+  }
+
+  diffClusters(params: { owner: string; repo: string }): ClusterDiffResponse {
+    const repository = this.requireRepository(params.owner, params.repo);
+    const latestRun = this.db
+      .prepare("select id from cluster_runs where repo_id = ? and status = 'completed' order by id desc limit 1")
+      .get(repository.id) as { id: number } | undefined;
+    if (!latestRun) throw new Error('No completed cluster runs found');
+
+    const rows = this.db
+      .prepare('select * from cluster_transitions where repo_id = ? and to_run_id = ? order by transition, id')
+      .all(repository.id, latestRun.id) as Array<{
+      from_cluster_id: number | null;
+      to_cluster_id: number | null;
+      transition: string;
+      jaccard_score: number | null;
+      members_added: number;
+      members_removed: number;
+      members_retained: number;
+      from_run_id: number;
+    }>;
+
+    const fromRunId = rows.length > 0 ? rows[0].from_run_id : latestRun.id;
+    const transitions = rows.map((row) => ({
+      fromClusterId: row.from_cluster_id,
+      toClusterId: row.to_cluster_id,
+      transition: row.transition as TransitionType,
+      jaccardScore: row.jaccard_score,
+      membersAdded: row.members_added,
+      membersRemoved: row.members_removed,
+      membersRetained: row.members_retained,
+    }));
+
+    const summary = { continuing: 0, growing: 0, shrinking: 0, splitting: 0, merging: 0, forming: 0, dissolving: 0 };
+    for (const transition of transitions) {
+      summary[transition.transition as keyof typeof summary] += 1;
+    }
+
+    return clusterDiffResponseSchema.parse({
+      repository: {
+        id: repository.id,
+        owner: repository.owner,
+        name: repository.name,
+        fullName: repository.fullName,
+        githubRepoId: repository.githubRepoId ?? null,
+        updatedAt: repository.updatedAt,
+      },
+      fromRunId,
+      toRunId: latestRun.id,
+      transitions,
+      summary,
     });
   }
 
@@ -3249,7 +3324,83 @@ export class GHCrawlService {
     })();
   }
 
+  private loadClusterSnapshotsForRun(clusterRunId: number): ClusterSnapshot[] {
+    const rows = this.db
+      .prepare(
+        `select c.id as cluster_id, cm.thread_id
+         from clusters c
+         join cluster_members cm on cm.cluster_id = c.id
+         where c.cluster_run_id = ?
+         order by c.id asc, cm.thread_id asc`,
+      )
+      .all(clusterRunId) as Array<{ cluster_id: number; thread_id: number }>;
+
+    const byClusterId = new Map<number, Set<number>>();
+    for (const row of rows) {
+      const members = byClusterId.get(row.cluster_id) ?? new Set<number>();
+      members.add(row.thread_id);
+      byClusterId.set(row.cluster_id, members);
+    }
+
+    return Array.from(byClusterId.entries()).map(([clusterId, members]) => ({ clusterId, members }));
+  }
+
+  private persistClusterTransitions(
+    repoId: number,
+    diffResult: DiffResultDto,
+    transitions: Array<{
+      fromClusterId: number | null;
+      toClusterId: number | null;
+      transition: string;
+      jaccardScore: number | null;
+      membersAdded: number;
+      membersRemoved: number;
+      membersRetained: number;
+    }>,
+  ): void {
+    const insertTransition = this.db.prepare(
+      `insert into cluster_transitions (
+         repo_id,
+         from_run_id,
+         to_run_id,
+         from_cluster_id,
+         to_cluster_id,
+         transition,
+         jaccard_score,
+         members_added,
+         members_removed,
+         members_retained,
+         created_at
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+
+    this.db.transaction(() => {
+      this.db.prepare('delete from cluster_transitions where repo_id = ? and to_run_id = ?').run(repoId, diffResult.toRunId);
+      const createdAt = nowIso();
+      for (const transition of transitions) {
+        insertTransition.run(
+          repoId,
+          diffResult.fromRunId,
+          diffResult.toRunId,
+          transition.fromClusterId,
+          transition.toClusterId,
+          transition.transition,
+          transition.jaccardScore,
+          transition.membersAdded,
+          transition.membersRemoved,
+          transition.membersRetained,
+          createdAt,
+        );
+      }
+    })();
+  }
+
   private pruneOldClusterRuns(repoId: number, keepRunId: number): void {
+    // Keep transitions pointing TO the current run (they record what changed
+    // between the previous run and keepRunId). Only delete old-to-old transitions.
+    this.db
+      .prepare('delete from cluster_transitions where from_run_id in (select id from cluster_runs where repo_id = ? and id <> ?) and to_run_id <> ?')
+      .run(repoId, keepRunId, keepRunId);
     this.db.prepare('delete from cluster_runs where repo_id = ? and id <> ?').run(repoId, keepRunId);
   }
 

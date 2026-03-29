@@ -115,6 +115,12 @@ export function createApiServer(service: GHCrawlService): http.Server {
         return;
       }
 
+      if (req.method === 'GET' && url.pathname === '/diff') {
+        const params = parseRepoParams(url);
+        sendJson(res, 200, service.diffClusters(params));
+        return;
+      }
+
       if (req.method === 'GET' && url.pathname === '/cluster-summaries') {
         const params = parseRepoParams(url);
         const sortParam = url.searchParams.get('sort');

@@ -214,6 +214,22 @@ const migrationStatements = [
     created_at text not null,
     primary key (cluster_id, thread_id)
   )
+  `,
+  `
+  create table if not exists cluster_transitions (
+    id integer primary key,
+    repo_id integer not null references repositories(id) on delete cascade,
+    from_run_id integer not null references cluster_runs(id) on delete cascade,
+    to_run_id integer not null references cluster_runs(id) on delete cascade,
+    from_cluster_id integer,
+    to_cluster_id integer,
+    transition text not null,
+    jaccard_score real,
+    members_added integer not null default 0,
+    members_removed integer not null default 0,
+    members_retained integer not null default 0,
+    created_at text not null
+  )
   `
 ];
 
@@ -254,4 +270,5 @@ export function migrate(db: SqliteDatabase): void {
   db.exec('create index if not exists idx_cluster_runs_repo_status_id on cluster_runs(repo_id, status, id)');
   db.exec('create index if not exists idx_clusters_repo_run_id on clusters(repo_id, cluster_run_id, id)');
   db.exec('create index if not exists idx_cluster_members_thread_cluster on cluster_members(thread_id, cluster_id)');
+  db.exec('create index if not exists idx_cluster_transitions_repo_run on cluster_transitions(repo_id, to_run_id)');
 }
