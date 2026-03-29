@@ -123,18 +123,34 @@ type ParsedStoredEmbeddingRow = Omit<StoredEmbeddingRow, 'embedding_json'> & {
   embeddingNorm: number;
 };
 
+type ClusterExperimentMemoryStats = {
+  rssBeforeBytes: number;
+  rssAfterBytes: number;
+  peakRssBytes: number;
+  heapUsedBeforeBytes: number;
+  heapUsedAfterBytes: number;
+  peakHeapUsedBytes: number;
+};
+
 type ClusterExperimentResult = {
-  backend: 'vectorlite';
+  backend: 'exact' | 'vectorlite';
   repository: RepositoryDto;
-  tempDbPath: string;
+  tempDbPath: string | null;
   threads: number;
   sourceKinds: number;
   edges: number;
   clusters: number;
+  timingBasis: 'cluster-only';
   durationMs: number;
+  totalDurationMs: number;
+  loadMs: number;
+  setupMs: number;
+  edgeBuildMs: number;
   indexBuildMs: number;
   queryMs: number;
+  clusterBuildMs: number;
   candidateK: number;
+  memory: ClusterExperimentMemoryStats;
 };
 type EmbeddingWorkset = {
   rows: Array<{
@@ -1147,132 +1163,183 @@ export class GHCrawlService {
   clusterExperiment(params: {
     owner: string;
     repo: string;
-    backend?: 'vectorlite';
+    backend?: 'exact' | 'vectorlite';
     minScore?: number;
     k?: number;
     candidateK?: number;
     onProgress?: (message: string) => void;
   }): ClusterExperimentResult {
     const backend = params.backend ?? 'vectorlite';
-    if (backend !== 'vectorlite') {
-      throw new Error(`Unsupported experimental cluster backend: ${backend}`);
-    }
-
     const repository = this.requireRepository(params.owner, params.repo);
     const { items, sourceKinds } = this.loadClusterableThreadMeta(repository.id);
     const minScore = params.minScore ?? 0.82;
     const k = params.k ?? 6;
     const candidateK = Math.max(k, params.candidateK ?? Math.max(k * 16, 64));
+    const startedAt = Date.now();
+    const memoryBefore = process.memoryUsage();
+    let peakRssBytes = memoryBefore.rss;
+    let peakHeapUsedBytes = memoryBefore.heapUsed;
+    const recordMemory = (): void => {
+      const usage = process.memoryUsage();
+      peakRssBytes = Math.max(peakRssBytes, usage.rss);
+      peakHeapUsedBytes = Math.max(peakHeapUsedBytes, usage.heapUsed);
+    };
+    recordMemory();
 
     params.onProgress?.(
       `[cluster-experiment] loaded ${items.length} embedded thread(s) across ${sourceKinds.length} source kind(s) for ${repository.fullName} backend=${backend} k=${k} candidateK=${candidateK} minScore=${minScore}`,
     );
 
-    const rows = this.loadParsedStoredEmbeddings(repository.id);
-    const bySource = new Map<EmbeddingSourceKind, ParsedStoredEmbeddingRow[]>();
-    for (const row of rows) {
-      const list = bySource.get(row.source_kind) ?? [];
-      list.push(row);
-      bySource.set(row.source_kind, list);
-    }
-
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-vectorlite-'));
-    const tempDbPath = path.join(tempDir, 'cluster-experiment.db');
-    const tempDb = openDb(tempDbPath);
+    const aggregated = new Map<string, { leftThreadId: number; rightThreadId: number; score: number; sourceKinds: Set<EmbeddingSourceKind> }>();
+    let loadMs = 0;
+    let setupMs = 0;
+    let edgeBuildMs = 0;
     let indexBuildMs = 0;
     let queryMs = 0;
+    let clusterBuildMs = 0;
+    let tempDbPath: string | null = null;
+    let tempDb: SqliteDatabase | null = null;
+    let tempDir: string | null = null;
 
     try {
-      tempDb.pragma('journal_mode = MEMORY');
-      tempDb.pragma('synchronous = OFF');
-      tempDb.pragma('temp_store = MEMORY');
-      const vectorlite = requireFromHere('vectorlite') as { vectorlitePath: () => string };
-      (tempDb as SqliteDatabase & { loadExtension: (extensionPath: string) => void }).loadExtension(vectorlite.vectorlitePath());
+      if (backend === 'exact') {
+        const totalItems = sourceKinds.reduce((sum, sourceKind) => sum + this.countEmbeddingsForSourceKind(repository.id, sourceKind), 0);
+        let processedItems = 0;
 
-      const experimentStartedAt = Date.now();
-      const aggregated = new Map<string, { leftThreadId: number; rightThreadId: number; score: number; sourceKinds: Set<EmbeddingSourceKind> }>();
+        for (const sourceKind of sourceKinds) {
+          const loadStartedAt = Date.now();
+          const normalizedRows = this.loadNormalizedEmbeddingsForSourceKind(repository.id, sourceKind);
+          loadMs += Date.now() - loadStartedAt;
+          recordMemory();
 
-      for (const sourceKind of sourceKinds) {
-        const sourceRows = bySource.get(sourceKind) ?? [];
-        if (sourceRows.length === 0) {
-          continue;
-        }
-
-        const tableName = `vector_${sourceKind}`;
-        const dimension = sourceRows[0]?.normalizedEmbedding.length ?? 0;
-        const safeCandidateK = Math.min(candidateK, Math.max(1, sourceRows.length - 1));
-
-        params.onProgress?.(
-          `[cluster-experiment] building ${sourceKind} HNSW index with ${sourceRows.length} vector(s)`,
-        );
-        const indexStartedAt = Date.now();
-        tempDb.exec(
-          `create virtual table ${tableName} using vectorlite(vec float32[${dimension}], hnsw(max_elements=${sourceRows.length}));`,
-        );
-        const insert = tempDb.prepare(`insert into ${tableName}(rowid, vec) values (?, ?)`);
-        tempDb.transaction(() => {
-          for (const row of sourceRows) {
-            insert.run(row.id, this.normalizedEmbeddingBuffer(row.normalizedEmbedding));
-          }
-        })();
-        indexBuildMs += Date.now() - indexStartedAt;
-
-        const rowsById = new Map(sourceRows.map((row) => [row.id, row]));
-        const queryStartedAt = Date.now();
-        const query = tempDb.prepare(
-          `select rowid from ${tableName} where knn_search(vec, knn_param(?, ${safeCandidateK + 1}))`,
-        );
-        let processed = 0;
-        let lastProgressAt = Date.now();
-        for (const row of sourceRows) {
-          const candidates = query.all(this.normalizedEmbeddingBuffer(row.normalizedEmbedding)) as Array<{ rowid: number }>;
-          const ranked = rankNearestNeighborsByScore(candidates, {
+          const edgesStartedAt = Date.now();
+          const edges = buildSourceKindEdges(normalizedRows, {
             limit: k,
             minScore,
-            score: (candidate) => {
-              if (candidate.rowid === row.id) {
-                return -1;
-              }
-              const candidateRow = rowsById.get(candidate.rowid);
-              if (!candidateRow) {
-                return -1;
-              }
-              return dotProduct(row.normalizedEmbedding, candidateRow.normalizedEmbedding);
+            progressIntervalMs: CLUSTER_PROGRESS_INTERVAL_MS,
+            onProgress: (progress) => {
+              recordMemory();
+              if (!params.onProgress) return;
+              params.onProgress(
+                `[cluster-experiment] exact ${processedItems + progress.processedItems}/${totalItems} source embeddings processed current_edges~=${aggregated.size + progress.currentEdgeEstimate}`,
+              );
             },
           });
-          let addedThisRow = 0;
-          for (const candidate of ranked) {
-            const candidateRow = rowsById.get(candidate.item.rowid);
-            if (!candidateRow) continue;
-            const score = candidate.score;
-            const key = this.edgeKey(row.id, candidateRow.id);
-            const existing = aggregated.get(key);
-            if (existing) {
-              existing.score = Math.max(existing.score, score);
-              existing.sourceKinds.add(sourceKind);
-              continue;
-            }
-            aggregated.set(key, {
-              leftThreadId: Math.min(row.id, candidateRow.id),
-              rightThreadId: Math.max(row.id, candidateRow.id),
-              score,
-              sourceKinds: new Set([sourceKind]),
-            });
-            addedThisRow += 1;
-          }
-          processed += 1;
-          const now = Date.now();
-          if (params.onProgress && now - lastProgressAt >= CLUSTER_PROGRESS_INTERVAL_MS) {
-            params.onProgress(
-              `[cluster-experiment] querying ${sourceKind} index ${processed}/${sourceRows.length} current_edges=${aggregated.size} added_this_step=${addedThisRow}`,
-            );
-            lastProgressAt = now;
-          }
+          edgeBuildMs += Date.now() - edgesStartedAt;
+          processedItems += normalizedRows.length;
+          this.mergeSourceKindEdges(aggregated, edges, sourceKind);
+          recordMemory();
         }
-        queryMs += Date.now() - queryStartedAt;
-        tempDb.exec(`drop table ${tableName}`);
+      } else {
+        const loadStartedAt = Date.now();
+        const rows = this.loadParsedStoredEmbeddings(repository.id);
+        const bySource = new Map<EmbeddingSourceKind, ParsedStoredEmbeddingRow[]>();
+        for (const row of rows) {
+          const list = bySource.get(row.source_kind) ?? [];
+          list.push(row);
+          bySource.set(row.source_kind, list);
+        }
+        loadMs += Date.now() - loadStartedAt;
+        recordMemory();
+
+        const setupStartedAt = Date.now();
+        tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-vectorlite-'));
+        tempDbPath = path.join(tempDir, 'cluster-experiment.db');
+        tempDb = openDb(tempDbPath);
+        tempDb.pragma('journal_mode = MEMORY');
+        tempDb.pragma('synchronous = OFF');
+        tempDb.pragma('temp_store = MEMORY');
+        const vectorlite = requireFromHere('vectorlite') as { vectorlitePath: () => string };
+        (tempDb as SqliteDatabase & { loadExtension: (extensionPath: string) => void }).loadExtension(vectorlite.vectorlitePath());
+        setupMs += Date.now() - setupStartedAt;
+        recordMemory();
+
+        for (const sourceKind of sourceKinds) {
+          const sourceRows = bySource.get(sourceKind) ?? [];
+          if (sourceRows.length === 0) {
+            continue;
+          }
+
+          const tableName = `vector_${sourceKind}`;
+          const dimension = sourceRows[0]?.normalizedEmbedding.length ?? 0;
+          const safeCandidateK = Math.min(candidateK, Math.max(1, sourceRows.length - 1));
+
+          params.onProgress?.(
+            `[cluster-experiment] building ${sourceKind} HNSW index with ${sourceRows.length} vector(s)`,
+          );
+          const indexStartedAt = Date.now();
+          tempDb.exec(
+            `create virtual table ${tableName} using vectorlite(vec float32[${dimension}], hnsw(max_elements=${sourceRows.length}));`,
+          );
+          const insert = tempDb.prepare(`insert into ${tableName}(rowid, vec) values (?, ?)`);
+          tempDb.transaction(() => {
+            for (const row of sourceRows) {
+              insert.run(row.id, this.normalizedEmbeddingBuffer(row.normalizedEmbedding));
+            }
+          })();
+          indexBuildMs += Date.now() - indexStartedAt;
+          recordMemory();
+
+          const rowsById = new Map(sourceRows.map((row) => [row.id, row]));
+          const queryStartedAt = Date.now();
+          const query = tempDb.prepare(
+            `select rowid from ${tableName} where knn_search(vec, knn_param(?, ${safeCandidateK + 1}))`,
+          );
+          let processed = 0;
+          let lastProgressAt = Date.now();
+          for (const row of sourceRows) {
+            const candidates = query.all(this.normalizedEmbeddingBuffer(row.normalizedEmbedding)) as Array<{ rowid: number }>;
+            const ranked = rankNearestNeighborsByScore(candidates, {
+              limit: k,
+              minScore,
+              score: (candidate) => {
+                if (candidate.rowid === row.id) {
+                  return -1;
+                }
+                const candidateRow = rowsById.get(candidate.rowid);
+                if (!candidateRow) {
+                  return -1;
+                }
+                return dotProduct(row.normalizedEmbedding, candidateRow.normalizedEmbedding);
+              },
+            });
+            let addedThisRow = 0;
+            for (const candidate of ranked) {
+              const candidateRow = rowsById.get(candidate.item.rowid);
+              if (!candidateRow) continue;
+              const score = candidate.score;
+              const key = this.edgeKey(row.id, candidateRow.id);
+              const existing = aggregated.get(key);
+              if (existing) {
+                existing.score = Math.max(existing.score, score);
+                existing.sourceKinds.add(sourceKind);
+                continue;
+              }
+              aggregated.set(key, {
+                leftThreadId: Math.min(row.id, candidateRow.id),
+                rightThreadId: Math.max(row.id, candidateRow.id),
+                score,
+                sourceKinds: new Set([sourceKind]),
+              });
+              addedThisRow += 1;
+            }
+            processed += 1;
+            const now = Date.now();
+            if (params.onProgress && now - lastProgressAt >= CLUSTER_PROGRESS_INTERVAL_MS) {
+              recordMemory();
+              params.onProgress(
+                `[cluster-experiment] querying ${sourceKind} index ${processed}/${sourceRows.length} current_edges=${aggregated.size} added_this_step=${addedThisRow}`,
+              );
+              lastProgressAt = now;
+            }
+          }
+          queryMs += Date.now() - queryStartedAt;
+          tempDb.exec(`drop table ${tableName}`);
+          recordMemory();
+        }
       }
 
+      const clusterStartedAt = Date.now();
       const clusters = buildClusters(
         items.map((item) => ({ threadId: item.id, number: item.number, title: item.title })),
         Array.from(aggregated.values()).map((entry) => ({
@@ -1281,6 +1348,14 @@ export class GHCrawlService {
           score: entry.score,
         })),
       );
+      clusterBuildMs += Date.now() - clusterStartedAt;
+      recordMemory();
+      const memoryAfter = process.memoryUsage();
+      const durationMs =
+        backend === 'vectorlite'
+          ? indexBuildMs + queryMs + clusterBuildMs
+          : edgeBuildMs + clusterBuildMs;
+      const totalDurationMs = Date.now() - startedAt;
 
       return {
         backend,
@@ -1290,14 +1365,30 @@ export class GHCrawlService {
         sourceKinds: sourceKinds.length,
         edges: aggregated.size,
         clusters: clusters.length,
-        durationMs: Date.now() - experimentStartedAt,
+        timingBasis: 'cluster-only',
+        durationMs,
+        totalDurationMs,
+        loadMs,
+        setupMs,
+        edgeBuildMs,
         indexBuildMs,
         queryMs,
+        clusterBuildMs,
         candidateK,
+        memory: {
+          rssBeforeBytes: memoryBefore.rss,
+          rssAfterBytes: memoryAfter.rss,
+          peakRssBytes,
+          heapUsedBeforeBytes: memoryBefore.heapUsed,
+          heapUsedAfterBytes: memoryAfter.heapUsed,
+          peakHeapUsedBytes,
+        },
       };
     } finally {
-      tempDb.close();
-      fs.rmSync(tempDir, { recursive: true, force: true });
+      tempDb?.close();
+      if (tempDir) {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
     }
   }
 

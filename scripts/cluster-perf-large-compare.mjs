@@ -23,6 +23,12 @@ function formatPercent(value) {
   return `${sign}${value.toFixed(1)}%`;
 }
 
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) return 'n/a';
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
 function runPerf({ backend, outputPath }) {
   const env = {
     ...process.env,
@@ -73,8 +79,20 @@ function main() {
       '## Large Cluster Perf Comparison',
       '',
       `- Fixture config: ${path.relative(repoRoot, perfConfigPath)}`,
-      `- Exact median (full-run): ${formatDurationMs(exactMedianMs)}`,
-      `- Vectorlite median (post-index, run 3/3): ${formatDurationMs(vectorliteMedianMs)}`,
+      `- Exact median (cluster-only): ${formatDurationMs(exactMedianMs)}`,
+      `- Exact median (total run): ${formatDurationMs(exact.result.totalMedianMs)}`,
+      `- Exact edge-build median: ${formatDurationMs(exact.result.edgeBuildMedianMs)}`,
+      `- Exact cluster-assembly median: ${formatDurationMs(exact.result.clusterBuildMedianMs)}`,
+      `- Exact median peak RSS: ${formatBytes(exact.result.medianPeakRssBytes)}`,
+      `- Exact median peak heap used: ${formatBytes(exact.result.medianPeakHeapUsedBytes)}`,
+      `- Vectorlite median (cluster-only, run 3/3): ${formatDurationMs(vectorliteMedianMs)}`,
+      `- Vectorlite median (total run, run 3/3): ${formatDurationMs(vectorlite.result.totalMedianMs)}`,
+      `- Vectorlite setup median: ${formatDurationMs(vectorlite.result.setupMedianMs)}`,
+      `- Vectorlite index-build median: ${formatDurationMs(vectorlite.result.indexBuildMedianMs)}`,
+      `- Vectorlite query median: ${formatDurationMs(vectorlite.result.queryMedianMs)}`,
+      `- Vectorlite cluster-assembly median: ${formatDurationMs(vectorlite.result.clusterBuildMedianMs)}`,
+      `- Vectorlite median peak RSS: ${formatBytes(vectorlite.result.medianPeakRssBytes)}`,
+      `- Vectorlite median peak heap used: ${formatBytes(vectorlite.result.medianPeakHeapUsedBytes)}`,
       `- Vectorlite delta vs exact: ${formatDurationMs(deltaMs)} (${formatPercent(deltaPercent)})`,
       `- Speedup: ${speedup.toFixed(2)}x`,
       '',

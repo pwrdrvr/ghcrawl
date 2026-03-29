@@ -939,7 +939,7 @@ export async function run(
       }
       case 'cluster-experiment': {
         const { owner, repo, values } = parseRepoFlags(rest);
-        const backend = values.backend === 'vectorlite' ? values.backend : undefined;
+        const backend = values.backend === 'exact' || values.backend === 'vectorlite' ? values.backend : undefined;
         const result = getService().clusterExperiment({
           owner,
           repo,

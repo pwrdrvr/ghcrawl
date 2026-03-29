@@ -39,9 +39,27 @@ type PerfBaseline = {
 
 type PerfRunResult = {
   backend: 'exact' | 'vectorlite';
-  timingBasis: 'full-run' | 'post-index';
+  timingBasis: 'cluster-only';
   sampleDurationsMs: number[];
+  totalSampleDurationsMs: number[];
+  loadSampleDurationsMs: number[];
+  setupSampleDurationsMs: number[];
+  edgeBuildSampleDurationsMs: number[];
+  indexBuildSampleDurationsMs: number[];
+  querySampleDurationsMs: number[];
+  clusterBuildSampleDurationsMs: number[];
+  peakRssBytesSamples: number[];
+  peakHeapUsedBytesSamples: number[];
   medianMs: number;
+  totalMedianMs: number;
+  loadMedianMs: number;
+  setupMedianMs: number;
+  edgeBuildMedianMs: number;
+  indexBuildMedianMs: number;
+  queryMedianMs: number;
+  clusterBuildMedianMs: number;
+  medianPeakRssBytes: number;
+  medianPeakHeapUsedBytes: number;
   baselineMedianMs: number;
   deltaMs: number;
   deltaPercent: number;
@@ -109,6 +127,14 @@ function formatDurationMs(durationMs: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds - minutes * 60;
   return `${minutes}m ${seconds.toFixed(1)}s`;
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes)) return 'n/a';
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KiB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 function formatPercent(value: number): string {
@@ -312,30 +338,43 @@ async function runSingleCluster(
   dbPath: string,
   baseline: PerfBaseline,
   backend: 'exact' | 'vectorlite',
-): Promise<{ durationMs: number; clusters: number; edges: number }> {
+): Promise<{
+  durationMs: number;
+  totalDurationMs: number;
+  loadMs: number;
+  setupMs: number;
+  edgeBuildMs: number;
+  indexBuildMs: number;
+  queryMs: number;
+  clusterBuildMs: number;
+  peakRssBytes: number;
+  peakHeapUsedBytes: number;
+  clusters: number;
+  edges: number;
+}> {
   const service = createService(dbPath);
   try {
-    const startedAt = performance.now();
-    if (backend === 'vectorlite') {
-      const result = service.clusterExperiment({
-        owner: 'openclaw',
-        repo: 'openclaw',
-        backend: 'vectorlite',
-        k: baseline.fixture.k,
-        minScore: baseline.fixture.minScore,
-      });
-      const durationMs = Math.max(0, result.durationMs - result.indexBuildMs);
-      return { durationMs, clusters: result.clusters, edges: result.edges };
-    }
-
-    const result = await service.clusterRepository({
+    const result = service.clusterExperiment({
       owner: 'openclaw',
       repo: 'openclaw',
+      backend,
       k: baseline.fixture.k,
       minScore: baseline.fixture.minScore,
     });
-    const durationMs = performance.now() - startedAt;
-    return { durationMs, clusters: result.clusters, edges: result.edges };
+    return {
+      durationMs: result.durationMs,
+      totalDurationMs: result.totalDurationMs,
+      loadMs: result.loadMs,
+      setupMs: result.setupMs,
+      edgeBuildMs: result.edgeBuildMs,
+      indexBuildMs: result.indexBuildMs,
+      queryMs: result.queryMs,
+      clusterBuildMs: result.clusterBuildMs,
+      peakRssBytes: result.memory.peakRssBytes,
+      peakHeapUsedBytes: result.memory.peakHeapUsedBytes,
+      clusters: result.clusters,
+      edges: result.edges,
+    };
   } finally {
     service.close();
   }
@@ -357,6 +396,15 @@ async function measureBenchmark(baseline: PerfBaseline): Promise<PerfRunResult> 
     const warmupRuns = baseline.benchmark.warmupRuns;
     const runsPerSample = baseline.benchmark.runsPerSample;
     const sampleDurationsMs: number[] = [];
+    const totalSampleDurationsMs: number[] = [];
+    const loadSampleDurationsMs: number[] = [];
+    const setupSampleDurationsMs: number[] = [];
+    const edgeBuildSampleDurationsMs: number[] = [];
+    const indexBuildSampleDurationsMs: number[] = [];
+    const querySampleDurationsMs: number[] = [];
+    const clusterBuildSampleDurationsMs: number[] = [];
+    const peakRssBytesSamples: number[] = [];
+    const peakHeapUsedBytesSamples: number[] = [];
     const benchmarkStartedAt = performance.now();
     let runCounter = 0;
 
@@ -369,6 +417,15 @@ async function measureBenchmark(baseline: PerfBaseline): Promise<PerfRunResult> 
 
     while (sampleDurationsMs.length < baseline.benchmark.maxSamples) {
       let sampleDurationMs = 0;
+      let totalSampleDurationMs = 0;
+      let loadSampleDurationMs = 0;
+      let setupSampleDurationMs = 0;
+      let edgeBuildSampleDurationMs = 0;
+      let indexBuildSampleDurationMs = 0;
+      let querySampleDurationMs = 0;
+      let clusterBuildSampleDurationMs = 0;
+      let samplePeakRssBytes = 0;
+      let samplePeakHeapUsedBytes = 0;
       for (let runIndex = 0; runIndex < runsPerSample; runIndex += 1) {
         const runDbPath = path.join(tempRoot, `run-${runCounter}.sqlite`);
         runCounter += 1;
@@ -376,8 +433,26 @@ async function measureBenchmark(baseline: PerfBaseline): Promise<PerfRunResult> 
         const result = await runSingleCluster(runDbPath, baseline, backend);
         assertBenchmarkShape(result, baseline, backend);
         sampleDurationMs += result.durationMs;
+        totalSampleDurationMs += result.totalDurationMs;
+        loadSampleDurationMs += result.loadMs;
+        setupSampleDurationMs += result.setupMs;
+        edgeBuildSampleDurationMs += result.edgeBuildMs;
+        indexBuildSampleDurationMs += result.indexBuildMs;
+        querySampleDurationMs += result.queryMs;
+        clusterBuildSampleDurationMs += result.clusterBuildMs;
+        samplePeakRssBytes = Math.max(samplePeakRssBytes, result.peakRssBytes);
+        samplePeakHeapUsedBytes = Math.max(samplePeakHeapUsedBytes, result.peakHeapUsedBytes);
       }
       sampleDurationsMs.push(sampleDurationMs);
+      totalSampleDurationsMs.push(totalSampleDurationMs);
+      loadSampleDurationsMs.push(loadSampleDurationMs);
+      setupSampleDurationsMs.push(setupSampleDurationMs);
+      edgeBuildSampleDurationsMs.push(edgeBuildSampleDurationMs);
+      indexBuildSampleDurationsMs.push(indexBuildSampleDurationMs);
+      querySampleDurationsMs.push(querySampleDurationMs);
+      clusterBuildSampleDurationsMs.push(clusterBuildSampleDurationMs);
+      peakRssBytesSamples.push(samplePeakRssBytes);
+      peakHeapUsedBytesSamples.push(samplePeakHeapUsedBytes);
 
       const elapsedMs = performance.now() - benchmarkStartedAt;
       if (sampleDurationsMs.length >= baseline.benchmark.minSamples && elapsedMs >= baseline.benchmark.maxTotalMs) {
@@ -386,6 +461,15 @@ async function measureBenchmark(baseline: PerfBaseline): Promise<PerfRunResult> 
     }
 
     const medianMs = median(sampleDurationsMs);
+    const totalMedianMs = median(totalSampleDurationsMs);
+    const loadMedianMs = median(loadSampleDurationsMs);
+    const setupMedianMs = median(setupSampleDurationsMs);
+    const edgeBuildMedianMs = median(edgeBuildSampleDurationsMs);
+    const indexBuildMedianMs = median(indexBuildSampleDurationsMs);
+    const queryMedianMs = median(querySampleDurationsMs);
+    const clusterBuildMedianMs = median(clusterBuildSampleDurationsMs);
+    const medianPeakRssBytes = median(peakRssBytesSamples);
+    const medianPeakHeapUsedBytes = median(peakHeapUsedBytesSamples);
     const baselineMedianMs = baseline.baseline.fixtureMedianMs > 0 ? baseline.baseline.fixtureMedianMs : medianMs;
     const deltaMs = medianMs - baselineMedianMs;
     const deltaPercent = baselineMedianMs > 0 ? (deltaMs / baselineMedianMs) * 100 : 0;
@@ -396,9 +480,27 @@ async function measureBenchmark(baseline: PerfBaseline): Promise<PerfRunResult> 
 
     return {
       backend,
-      timingBasis: backend === 'vectorlite' ? 'post-index' : 'full-run',
+      timingBasis: 'cluster-only',
       sampleDurationsMs,
+      totalSampleDurationsMs,
+      loadSampleDurationsMs,
+      setupSampleDurationsMs,
+      edgeBuildSampleDurationsMs,
+      indexBuildSampleDurationsMs,
+      querySampleDurationsMs,
+      clusterBuildSampleDurationsMs,
+      peakRssBytesSamples,
+      peakHeapUsedBytesSamples,
       medianMs,
+      totalMedianMs,
+      loadMedianMs,
+      setupMedianMs,
+      edgeBuildMedianMs,
+      indexBuildMedianMs,
+      queryMedianMs,
+      clusterBuildMedianMs,
+      medianPeakRssBytes,
+      medianPeakHeapUsedBytes,
       baselineMedianMs,
       deltaMs,
       deltaPercent,
@@ -435,7 +537,16 @@ function buildSummary(result: PerfRunResult): string {
     `- Backend: ${result.backend}`,
     `- Timing basis: ${result.timingBasis}`,
     `- Status: ${status}`,
-    `- ${timingLabel}: ${formatDurationMs(result.medianMs)} (${result.samples} samples, ${result.runsPerSample} cluster rebuilds/sample)`,
+    `- Fixture median (cluster-only): ${formatDurationMs(result.medianMs)} (${result.samples} samples, ${result.runsPerSample} cluster rebuilds/sample)`,
+    `- Fixture median (total run): ${formatDurationMs(result.totalMedianMs)}`,
+    `- Fixture median load stage: ${formatDurationMs(result.loadMedianMs)}`,
+    `- Fixture median setup stage: ${formatDurationMs(result.setupMedianMs)}`,
+    `- Fixture median exact edge-build stage: ${formatDurationMs(result.edgeBuildMedianMs)}`,
+    `- Fixture median vector index-build stage: ${formatDurationMs(result.indexBuildMedianMs)}`,
+    `- Fixture median vector query stage: ${formatDurationMs(result.queryMedianMs)}`,
+    `- Fixture median cluster-assembly stage: ${formatDurationMs(result.clusterBuildMedianMs)}`,
+    `- Median peak RSS: ${formatBytes(result.medianPeakRssBytes)}`,
+    `- Median peak heap used: ${formatBytes(result.medianPeakHeapUsedBytes)}`,
     `- Fixture baseline: ${formatDurationMs(result.baselineMedianMs)}`,
     `- Fixture delta: ${formatDurationMs(result.deltaMs)} (${formatPercent(result.deltaPercent)})`,
     `- Projected openclaw/openclaw duration: ${formatDurationMs(result.projectedOpenclawMs)}`,
