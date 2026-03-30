@@ -1,0 +1,92 @@
+spec_name: summary-prompt
+description: >
+  Optimize the system prompt for summarizing GitHub issues/PRs.
+  Goal: extract signal, strip template boilerplate, remove testing notes.
+  Judge: LLM rates summary quality for deduplication clustering.
+
+test_threads:
+  issues:
+    - { thread_id: 15126, number: 49990, cluster_id: 245465, cluster_size: 10, body_length: 7604 }
+    - { thread_id: 8920, number: 30244, cluster_id: 245465, cluster_size: 10, body_length: 3390 }
+    - { thread_id: 19616, number: 51018, cluster_id: 245465, cluster_size: 10, body_length: 3358 }
+    - { thread_id: 16324, number: 47670, cluster_id: 245465, cluster_size: 10, body_length: 3025 }
+    - { thread_id: 10106, number: 28788, cluster_id: 245465, cluster_size: 10, body_length: 2772 }
+    - { thread_id: 14855, number: 44448, cluster_id: 245467, cluster_size: 10, body_length: 2554 }
+    - { thread_id: 18179, number: 44584, cluster_id: 245467, cluster_size: 10, body_length: 2413 }
+    - { thread_id: 2538, number: 40880, cluster_id: 245464, cluster_size: 10, body_length: 2392 }
+    - { thread_id: 9401, number: 27409, cluster_id: 245465, cluster_size: 10, body_length: 2275 }
+    - { thread_id: 9156, number: 30221, cluster_id: 245465, cluster_size: 10, body_length: 2249 }
+    - { thread_id: 18848, number: 44582, cluster_id: 245467, cluster_size: 10, body_length: 2143 }
+    - { thread_id: 14856, number: 44447, cluster_id: 245467, cluster_size: 10, body_length: 2126 }
+    - { thread_id: 14863, number: 44449, cluster_id: 245467, cluster_size: 10, body_length: 2038 }
+    - { thread_id: 18847, number: 44586, cluster_id: 245467, cluster_size: 10, body_length: 2000 }
+    - { thread_id: 5022, number: 37344, cluster_id: 245465, cluster_size: 10, body_length: 1891 }
+    - { thread_id: 14862, number: 44450, cluster_id: 245467, cluster_size: 10, body_length: 1850 }
+    - { thread_id: 14859, number: 44453, cluster_id: 245467, cluster_size: 10, body_length: 1780 }
+    - { thread_id: 14142, number: 42702, cluster_id: 245465, cluster_size: 10, body_length: 1776 }
+    - { thread_id: 14861, number: 44451, cluster_id: 245467, cluster_size: 10, body_length: 1703 }
+    - { thread_id: 21902, number: 55855, cluster_id: 245466, cluster_size: 10, body_length: 1679 }
+
+  pull_requests:
+    - { thread_id: 22366, number: 55328, cluster_id: 245463, cluster_size: 10, body_length: 10165 }
+    - { thread_id: 17692, number: 45354, cluster_id: 245463, cluster_size: 10, body_length: 7728 }
+    - { thread_id: 20932, number: 52512, cluster_id: 245462, cluster_size: 11, body_length: 6111 }
+    - { thread_id: 13791, number: 42906, cluster_id: 245463, cluster_size: 10, body_length: 5610 }
+    - { thread_id: 4208, number: 4402, cluster_id: 245463, cluster_size: 10, body_length: 5532 }
+    - { thread_id: 9553, number: 20072, cluster_id: 245468, cluster_size: 9, body_length: 5490 }
+    - { thread_id: 8969, number: 21898, cluster_id: 245464, cluster_size: 10, body_length: 5434 }
+    - { thread_id: 17568, number: 47391, cluster_id: 245463, cluster_size: 10, body_length: 5429 }
+    - { thread_id: 4129, number: 38337, cluster_id: 245464, cluster_size: 10, body_length: 5407 }
+    - { thread_id: 21735, number: 55953, cluster_id: 245464, cluster_size: 10, body_length: 5162 }
+    - { thread_id: 2463, number: 40950, cluster_id: 245464, cluster_size: 10, body_length: 4839 }
+    - { thread_id: 5418, number: 30024, cluster_id: 245464, cluster_size: 10, body_length: 4622 }
+    - { thread_id: 5796, number: 24117, cluster_id: 245468, cluster_size: 9, body_length: 4539 }
+    - { thread_id: 766, number: 11611, cluster_id: 245463, cluster_size: 10, body_length: 4483 }
+    - { thread_id: 17924, number: 46425, cluster_id: 245464, cluster_size: 10, body_length: 4429 }
+    - { thread_id: 5712, number: 37050, cluster_id: 245464, cluster_size: 10, body_length: 4387 }
+    - { thread_id: 21769, number: 55280, cluster_id: 245463, cluster_size: 10, body_length: 3817 }
+    - { thread_id: 8098, number: 25543, cluster_id: 245463, cluster_size: 10, body_length: 3514 }
+    - { thread_id: 539, number: 29154, cluster_id: 245463, cluster_size: 10, body_length: 2620 }
+    - { thread_id: 5565, number: 28178, cluster_id: 245463, cluster_size: 10, body_length: 1698 }
+
+thread_ids_flat:
+  - 15126
+  - 8920
+  - 19616
+  - 16324
+  - 10106
+  - 14855
+  - 18179
+  - 2538
+  - 9401
+  - 9156
+  - 18848
+  - 14856
+  - 14863
+  - 18847
+  - 5022
+  - 14862
+  - 14859
+  - 14142
+  - 14861
+  - 21902
+  - 22366
+  - 17692
+  - 20932
+  - 13791
+  - 4208
+  - 9553
+  - 8969
+  - 17568
+  - 4129
+  - 21735
+  - 2463
+  - 5418
+  - 5796
+  - 766
+  - 17924
+  - 5712
+  - 21769
+  - 8098
+  - 539
+  - 5565

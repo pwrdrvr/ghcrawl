@@ -115,6 +115,15 @@ function main(argv = process.argv.slice(2)) {
     return;
   }
 
+  if (mode === 'run') {
+    const args = rest[0] === '--' ? rest.slice(1) : rest;
+    if (args.length === 0) {
+      throw new Error('Missing command. Example: node scripts/op-run.mjs run -- node scripts/my-script.mjs');
+    }
+    runWithEnv(args[0], args.slice(1));
+    return;
+  }
+
   throw new Error(`Unknown mode: ${mode}`);
 }
 

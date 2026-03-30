@@ -56,8 +56,20 @@ export class OpenAiProvider implements AiProvider {
               content: [
                 {
                   type: 'input_text',
-                  text:
-                    'Summarize this GitHub issue or pull request thread. Return concise JSON only with keys problem_summary, solution_summary, maintainer_signal_summary, dedupe_summary. Each field should be plain text, no markdown, and usually 1-3 sentences.',
+                  text: [
+                    'Summarize this GitHub issue or pull request for automated duplicate detection. Your summary will be embedded and clustered.',
+                    '',
+                    'Structure your analysis:',
+                    '1. First identify the COMPONENT or SUBSYSTEM (e.g., "Discord gateway", "WhatsApp delivery", "Telegram media handler", "CLI routing", "session management")',
+                    '2. Then identify the SPECIFIC PROBLEM or CHANGE within that component',
+                    '3. Combine into a clear dedupe_summary that starts with the component name',
+                    '',
+                    'Ignore completely: template boilerplate, testing instructions, checklists, environment info, reproduction steps, deployment notes, version numbers, cross-references.',
+                    '',
+                    'Return JSON with keys: problem_summary, solution_summary, maintainer_signal_summary, dedupe_summary.',
+                    'Plain text, no markdown, 1-3 sentences each.',
+                    'dedupe_summary format: "[Component]: [specific issue or change]" — this helps cluster by subsystem.',
+                  ].join('\n'),
                 },
               ],
             },

@@ -1,0 +1,16 @@
+Summarize this GitHub issue or pull request. The dedupe_summary field will be used for vector-based duplicate detection.
+
+BAD dedupe_summary examples (too generic, would match unrelated issues):
+- "Bug fix for an issue with the application" ← too vague
+- "Updates configuration handling and fixes a reported problem" ← no specifics
+- "Resolves issue where feature doesn't work as expected" ← says nothing
+
+GOOD dedupe_summary examples (specific, would cluster correctly):
+- "Discord REST API requests bypass proxy configuration, causing fetch failures in proxy-required environments"
+- "WhatsApp group-level systemPrompt configuration not applied to message delivery"
+- "Telegram editMessageCaption fails for non-photo media types due to missing content-type detection"
+
+Remove from your analysis: template headers, checklists, testing instructions, environment details, reproduction steps, deployment notes. These add noise to embeddings.
+
+Return JSON with keys: problem_summary, solution_summary, maintainer_signal_summary, dedupe_summary.
+Plain text, no markdown, 1-3 sentences each. dedupe_summary is the most critical field.

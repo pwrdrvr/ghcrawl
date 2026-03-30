@@ -1,0 +1,65 @@
+summary_prompt_optimization:
+  completed: 2026-03-30T18:40:59.650Z
+  winner: v5-component-focused
+  runner_up: v2-signal-focused
+  baseline_score: 2.65
+  winner_score: 4.97
+  improvement: 87.5%
+  total_experiments: 11
+  test_threads: 40
+  results:
+    - id: v2-signal-focused
+      avg_score: 4.97
+      boilerplate_pct: 0
+      cluster_correct_pct: 100
+      input_tokens: 47983
+    - id: v5-component-focused
+      avg_score: 4.97
+      boilerplate_pct: 0
+      cluster_correct_pct: 100
+      input_tokens: 45423
+    - id: v1-strip-boilerplate
+      avg_score: 4.95
+      boilerplate_pct: 0
+      cluster_correct_pct: 100
+      input_tokens: 46623
+    - id: v3-examples
+      avg_score: 4.95
+      boilerplate_pct: 0
+      cluster_correct_pct: 100
+      input_tokens: 49863
+    - id: v7-two-pass
+      avg_score: 4.93
+      boilerplate_pct: 3
+      cluster_correct_pct: 100
+      input_tokens: 48503
+    - id: v6-negative-examples
+      avg_score: 4.78
+      boilerplate_pct: 3
+      cluster_correct_pct: 100
+      input_tokens: 47183
+    - id: v9-issue-vs-pr
+      avg_score: 4.75
+      boilerplate_pct: 3
+      cluster_correct_pct: 100
+      input_tokens: 46676
+    - id: v8-embedding-aware
+      avg_score: 4.58
+      boilerplate_pct: 5
+      cluster_correct_pct: 100
+      input_tokens: 47543
+    - id: v4-terse
+      avg_score: 4.47
+      boilerplate_pct: 3
+      cluster_correct_pct: 100
+      input_tokens: 41983
+    - id: v10-minimal-rules
+      avg_score: 4.1
+      boilerplate_pct: 25
+      cluster_correct_pct: 95
+      input_tokens: 40703
+    - id: v0-baseline
+      avg_score: 2.65
+      boilerplate_pct: 28
+      cluster_correct_pct: 43
+      input_tokens: 40423

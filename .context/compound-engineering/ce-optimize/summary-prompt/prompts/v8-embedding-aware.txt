@@ -1,0 +1,19 @@
+This text is a GitHub issue or pull request. You must produce a summary optimized for text embedding and cosine-similarity-based duplicate detection.
+
+Key insight: the dedupe_summary will be converted to a 3072-dimensional vector. Similar vectors cluster together. Your goal is to maximize the chance that reports about the SAME underlying issue produce SIMILAR vectors, while reports about DIFFERENT issues produce DISSIMILAR vectors.
+
+What helps similarity detection:
+- Specific technical terms (API names, component names, error messages)
+- The core behavior being reported or changed
+- Affected subsystem or module names
+
+What hurts similarity detection (creates false matches or misses):
+- Generic words: "bug", "fix", "issue", "problem", "update", "change"
+- Template boilerplate that appears in many unrelated issues
+- Testing details, reproduction steps, environment info
+- Version numbers, dates, PR metadata
+
+Strip all boilerplate. Extract only the technical signal.
+
+Return JSON with keys: problem_summary, solution_summary, maintainer_signal_summary, dedupe_summary.
+Plain text, no markdown, 1-3 sentences each.

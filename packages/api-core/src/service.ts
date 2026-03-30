@@ -48,7 +48,7 @@ import {
   type ThreadsResponse,
 } from '@ghcrawl/api-contract';
 
-import { buildClusters } from './cluster/build.js';
+import { buildClusters, buildRefinedClusters, buildSizeBoundedClusters } from './cluster/build.js';
 import { buildSourceKindEdges } from './cluster/exact-edges.js';
 import {
   ensureRuntimeDirs,
@@ -996,24 +996,76 @@ export class GHCrawlService {
       let inputTokens = 0;
       let outputTokens = 0;
       let totalTokens = 0;
-      for (const [index, row] of pending.entries()) {
-        params.onProgress?.(`[summarize] ${index + 1}/${pending.length} thread #${row.number}`);
-        const result = await ai.summarizeThread({
-          model: this.config.summaryModel,
-          text: row.summaryInput,
-        });
-        const summary = result.summary;
+      let cachedInputTokens = 0;
+      const startTime = Date.now();
 
-        this.upsertSummary(row.id, row.summaryContentHash, 'problem_summary', summary.problemSummary);
-        this.upsertSummary(row.id, row.summaryContentHash, 'solution_summary', summary.solutionSummary);
-        this.upsertSummary(row.id, row.summaryContentHash, 'maintainer_signal_summary', summary.maintainerSignalSummary);
-        this.upsertSummary(row.id, row.summaryContentHash, 'dedupe_summary', summary.dedupeSummary);
-        if (result.usage) {
-          inputTokens += result.usage.inputTokens;
-          outputTokens += result.usage.outputTokens;
-          totalTokens += result.usage.totalTokens;
+      // gpt-5.4-mini pricing per million tokens
+      const INPUT_COST_PER_M = 0.75;
+      const CACHED_INPUT_COST_PER_M = 0.075;
+      const OUTPUT_COST_PER_M = 4.50;
+
+      // Stage 1: concurrent API calls
+      const fetcher = new IterableMapper(
+        pending,
+        async (row) => {
+          const result = await ai.summarizeThread({
+            model: this.config.summaryModel,
+            text: row.summaryInput,
+          });
+          return { row, result };
+        },
+        { concurrency: 5 },
+      );
+
+      // Stage 2: sequential DB writes — consumes from fetcher without blocking API completions
+      const writer = new IterableMapper(
+        fetcher,
+        async ({ row, result }) => {
+          const summary = result.summary;
+          this.upsertSummary(row.id, row.summaryContentHash, 'problem_summary', summary.problemSummary);
+          this.upsertSummary(row.id, row.summaryContentHash, 'solution_summary', summary.solutionSummary);
+          this.upsertSummary(row.id, row.summaryContentHash, 'maintainer_signal_summary', summary.maintainerSignalSummary);
+          this.upsertSummary(row.id, row.summaryContentHash, 'dedupe_summary', summary.dedupeSummary);
+          return { row, usage: result.usage };
+        },
+        { concurrency: 1 },
+      );
+
+      let index = 0;
+      for await (const { row, usage } of writer) {
+        index += 1;
+        if (usage) {
+          inputTokens += usage.inputTokens;
+          outputTokens += usage.outputTokens;
+          totalTokens += usage.totalTokens;
+          cachedInputTokens += usage.cachedInputTokens;
+        }
+
+        // Compute cost and ETA every 10 items or on the last item
+        if (index % 10 === 0 || index === pending.length) {
+          const uncachedInput = inputTokens - cachedInputTokens;
+          const costSoFar =
+            (uncachedInput / 1_000_000) * INPUT_COST_PER_M +
+            (cachedInputTokens / 1_000_000) * CACHED_INPUT_COST_PER_M +
+            (outputTokens / 1_000_000) * OUTPUT_COST_PER_M;
+          const remaining = pending.length - index;
+          const avgIn = inputTokens / index;
+          const avgOut = outputTokens / index;
+          const avgCachedIn = cachedInputTokens / index;
+          const estTotalCost =
+            costSoFar +
+            ((remaining * (avgIn - avgCachedIn)) / 1_000_000) * INPUT_COST_PER_M +
+            ((remaining * avgCachedIn) / 1_000_000) * CACHED_INPUT_COST_PER_M +
+            ((remaining * avgOut) / 1_000_000) * OUTPUT_COST_PER_M;
+
+          const elapsedSec = (Date.now() - startTime) / 1000;
+          const secPerItem = elapsedSec / index;
+          const etaSec = remaining * secPerItem;
+          const etaMin = Math.round(etaSec / 60);
+          const etaStr = etaMin >= 60 ? `${Math.floor(etaMin / 60)}h${etaMin % 60}m` : `${etaMin}m`;
+
           params.onProgress?.(
-            `[summarize] tokens thread #${row.number} in=${result.usage.inputTokens} out=${result.usage.outputTokens} total=${result.usage.totalTokens} cached_in=${result.usage.cachedInputTokens} reasoning=${result.usage.reasoningTokens}`,
+            `[summarize] ${index}/${pending.length} thread #${row.number} | cost=$${costSoFar.toFixed(2)} est_total=$${estTotalCost.toFixed(2)} | avg_in=${Math.round(avgIn)} avg_out=${Math.round(avgOut)} | ETA ${etaStr}`,
           );
         }
         summarized += 1;
@@ -1181,6 +1233,9 @@ export class GHCrawlService {
     k?: number;
     candidateK?: number;
     efSearch?: number;
+    maxClusterSize?: number;
+    refineStep?: number;
+    clusterMode?: 'basic' | 'refine' | 'bounded';
     includeClusters?: boolean;
     onProgress?: (message: string) => void;
   }): ClusterExperimentResult {
@@ -1352,14 +1407,23 @@ export class GHCrawlService {
       }
 
       const clusterStartedAt = Date.now();
-      const clusters = buildClusters(
-        items.map((item) => ({ threadId: item.id, number: item.number, title: item.title })),
-        Array.from(aggregated.values()).map((entry) => ({
-          leftThreadId: entry.leftThreadId,
-          rightThreadId: entry.rightThreadId,
-          score: entry.score,
-        })),
-      );
+      const clusterNodes = items.map((item) => ({ threadId: item.id, number: item.number, title: item.title }));
+      const clusterEdges = Array.from(aggregated.values()).map((entry) => ({
+        leftThreadId: entry.leftThreadId,
+        rightThreadId: entry.rightThreadId,
+        score: entry.score,
+      }));
+      const clusterMode = params.clusterMode ?? (params.maxClusterSize !== undefined ? 'refine' : 'basic');
+      const clusters = clusterMode === 'bounded'
+        ? buildSizeBoundedClusters(clusterNodes, clusterEdges, {
+            maxClusterSize: params.maxClusterSize ?? 200,
+          })
+        : clusterMode === 'refine'
+          ? buildRefinedClusters(clusterNodes, clusterEdges, {
+              maxClusterSize: params.maxClusterSize ?? 200,
+              refineStep: params.refineStep ?? 0.02,
+            })
+          : buildClusters(clusterNodes, clusterEdges);
       clusterBuildMs += Date.now() - clusterStartedAt;
       recordMemory();
       const memoryAfter = process.memoryUsage();

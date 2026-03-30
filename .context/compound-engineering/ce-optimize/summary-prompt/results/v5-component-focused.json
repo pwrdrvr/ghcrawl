@@ -1,0 +1,940 @@
+{
+  "experiment_id": "v5-component-focused",
+  "model": "gpt-5-mini",
+  "judge_model": "gpt-5-mini",
+  "system_prompt": "Summarize this GitHub issue or pull request for automated duplicate detection. Your summary will be embedded and clustered.\n\nStructure your analysis:\n1. First identify the COMPONENT or SUBSYSTEM (e.g., \"Discord gateway\", \"WhatsApp delivery\", \"Telegram media handler\", \"CLI routing\", \"session management\")\n2. Then identify the SPECIFIC PROBLEM or CHANGE within that component\n3. Combine into a clear dedupe_summary that starts with the component name\n\nIgnore completely: template boilerplate, testing instructions, checklists, environment info, reproduction steps, deployment notes, version numbers, cross-references.\n\nReturn JSON with keys: problem_summary, solution_summary, maintainer_signal_summary, dedupe_summary.\nPlain text, no markdown, 1-3 sentences each.\ndedupe_summary format: \"[Component]: [specific issue or change]\" — this helps cluster by subsystem.",
+  "timestamp": "2026-03-30T17:20:46.303Z",
+  "aggregate": {
+    "avg_score": 4.97,
+    "avg_signal_density": 4.97,
+    "boilerplate_count": 0,
+    "boilerplate_pct": 0,
+    "would_cluster_correctly_pct": 100,
+    "total_scored": 40,
+    "total_errors": 0,
+    "total_input_tokens": 45423,
+    "total_output_tokens": 24588
+  },
+  "results": [
+    {
+      "thread_id": 15126,
+      "number": 49990,
+      "kind": "issue",
+      "title": "Title channels.discord.proxy does not proxy REST API requests — guild resolve fails, guild channels broken behind HTTP proxy",
+      "summary": {
+        "problem_summary": "Discord channel proxying (channels.discord.proxy) only applies to the WebSocket Gateway; REST API calls (command deploy, fetch bot identity) and guild resolution are not routed through the configured HTTP proxy, causing fetch failures, unresolved guild channels, and no guild message handling when the host requires an HTTP proxy.",
+        "solution_summary": "Apply the configured proxy to the undici dispatcher used for all Discord REST calls and the guild-resolve code path (not just the Gateway WS). Consider a global proxy config that sets a ProxyAgent for undici, and add retries/error handling for guild resolution.",
+        "maintainer_signal_summary": "Startup logs show WS connects via proxy but REST calls time out with \"fetch failed\"; setting a global undici ProxyAgent fixes REST but not guild resolve; CLI guild resolve succeeds when bootstrapped with ProxyAgent; issue is a regression impacting users behind HTTP proxies and reproducible on local macOS with a proxy tool.",
+        "dedupe_summary": "Discord channel (channels.discord.proxy): REST API and guild resolution are not proxied—only the WebSocket is—breaking guild channels behind an HTTP proxy."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise and specific: it states the exact subsystem (channels.discord.proxy), the technical failure (REST API/guild resolution not proxied while WebSocket is), and the user impact, so it will cluster correctly with similar proxy-related Discord channel issues."
+      },
+      "usage": {
+        "input_tokens": 2271,
+        "output_tokens": 563
+      }
+    },
+    {
+      "thread_id": 8920,
+      "number": 30244,
+      "kind": "issue",
+      "title": "[Bug]:channels.discord.proxy doesn’t apply to outbound REST sends / Carbon RequestClient fetch has no proxy support",
+      "summary": {
+        "problem_summary": "Component: Discord channels/RequestClient. Outbound REST API calls for sending messages bypass the configured channels.discord.proxy, causing fetch to fail in proxied/restricted networks (user reports TypeError: fetch failed while WebSocket gateway receiving works). The Carbon RequestClient’s fetch implementation appears to have no proxy support, leading to message-send failures in regions that require a proxy.",
+        "solution_summary": "Ensure REST/send requests honor channels.discord.proxy by adding proxy support to the RequestClient/fetch layer (support HTTP/SOCKS/TUN as applicable) and route attachment downloads/uploads through the configured proxy. Update RequestClient to accept and apply proxy configuration or use a proxy-capable HTTP client so REST operations use the same proxy as the gateway.",
+        "maintainer_signal_summary": "User repro in a China/proxy-required environment with logs noting rest proxy enabled but REST not using proxy; gateway (WebSocket) works while REST fails, blocking message sends. Labeled bug and high impact for users in restricted networks—prevents normal bot replies and media operations.",
+        "dedupe_summary": "Discord channels (REST/RequestClient): channels.discord.proxy not applied to outbound REST sends; RequestClient.fetch lacks proxy support"
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, specific description that the channels.discord.proxy config isn't used for REST requests because RequestClient.fetch has no proxy support, which will match similar bug reports."
+      },
+      "usage": {
+        "input_tokens": 953,
+        "output_tokens": 675
+      }
+    },
+    {
+      "thread_id": 19616,
+      "number": 51018,
+      "kind": "issue",
+      "title": "Discord can log in behind proxy, but native command deploy / bot identity fetch fail with 'fetch failed'",
+      "summary": {
+        "problem_summary": "Discord provider (OpenClaw) behind an HTTP proxy partially starts: gateway/WebSocket login succeeds and application ID fetches, but some REST startup calls consistently fail with “fetch failed” (notably native command deployment and bot identity fetch), making the provider appear half-working.",
+        "solution_summary": "Ensure all Discord REST request paths use the same proxy-aware fetch/dispatcher as the gateway/login path (e.g., centralize HTTP client or attach proxy agent to global fetch), add tests for proxy coverage across startup code paths, and fix any code paths bypassing configured proxy.",
+        "maintainer_signal_summary": "Logs show rest proxy and gateway proxy enabled, applicationId fetch succeeds, but deploy-rest and fetch-bot-identity fail repeatedly with \"fetch failed\"; issue reproducible by user and likely high-impact because provider appears logged in but REST features are broken. User can provide environment details or test patches.",
+        "dedupe_summary": "Discord provider: REST startup calls (native commands deployment and bot identity fetch) fail with 'fetch failed' when HTTP proxy is configured, while gateway/login succeeds."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, focused summary that captures the core failure (Discord REST startup calls for command deployment and bot identity fetch failing with a proxy while gateway/login works), so it will match similar reports."
+      },
+      "usage": {
+        "input_tokens": 1099,
+        "output_tokens": 523
+      }
+    },
+    {
+      "thread_id": 16324,
+      "number": 47670,
+      "kind": "issue",
+      "title": "[Bug]: Discord proxy config recognized but REST API fails with fetch failed",
+      "summary": {
+        "problem_summary": "Discord channel proxy is logged as enabled but the REST API and gateway connections fail with \"fetch failed\" when OpenClaw runs under WSL2 using an HTTP proxy. The proxy setting (~/.openclaw/openclaw.json channels.discord.proxy) appears recognized in logs but is not applied to the underlying Discord.js/fetch client or WebSocket, leaving gatewayConnected=false.",
+        "solution_summary": "Ensure the configured HTTP proxy is actually passed to Discord.js/undici/fetch and the WebSocket client (e.g., instantiate and attach an HTTP/HTTPS/WS proxy agent or set the appropriate undici/global agent), so REST calls and gateway connections use the proxy under WSL2. Add tests and logging to verify fetch/gateway use the proxy and handle proxy-specific edge cases in WSL2.",
+        "maintainer_signal_summary": "Reporter marks severity as high: Discord channel completely non-functional for users behind an HTTP proxy (100% reproducible in WSL2). Logs show proxy enabled messages but repeated fetch failures; workaround is using a different channel or TUN-mode transparent proxy; config and curl verification included.",
+        "dedupe_summary": "Discord channel: proxy logged as enabled but REST/gateway requests fail with \"fetch failed\" because the Discord client is not applying the configured HTTP proxy (WSL2)"
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise and specific: it states that although the Discord proxy is logged as enabled, the client isn't applying the configured HTTP proxy (WSL2) causing REST/gateway 'fetch failed' errors, which is ideal for deduplication."
+      },
+      "usage": {
+        "input_tokens": 936,
+        "output_tokens": 728
+      }
+    },
+    {
+      "thread_id": 10106,
+      "number": 28788,
+      "kind": "issue",
+      "title": "Discord REST API ignores proxy configuration",
+      "summary": {
+        "problem_summary": "Discord channel REST API calls ignore configured proxy (channels.discord.proxy and HTTP_PROXY/HTTPS_PROXY env vars) and fail with \"TypeError: fetch failed\" when sending messages, while the WebSocket connection and other channels (e.g., Telegram) work through the proxy and curl via proxy succeeds.",
+        "solution_summary": "Route Discord REST API requests through the same proxy-aware fetch/SSRF guard path used for web tools (web_search/web_fetch) so the gateway honors channels.discord.proxy and standard HTTP_PROXY/HTTPS_PROXY settings for outbound REST calls.",
+        "maintainer_signal_summary": "Logs show Discord final reply failed with fetch error; changelog notes a recent proxy-aware fix for web tools but explicitly excludes Discord REST API; user provided reproducible steps and curl proof that proxy itself works, and offered a suggested fix and a limited workaround (webhooks).",
+        "dedupe_summary": "Discord REST API: REST calls ignore configured proxy (channels.discord.proxy and env vars) causing fetch failures when sending messages; WebSocket and other channels use proxy correctly."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, specific summary that captures the core bug — Discord REST calls ignore configured proxy (both config and env vars) causing fetch failures while WebSocket still uses the proxy — with no boilerplate or irrelevant details."
+      },
+      "usage": {
+        "input_tokens": 959,
+        "output_tokens": 497
+      }
+    },
+    {
+      "thread_id": 14855,
+      "number": 44448,
+      "kind": "issue",
+      "title": "[Bug] v2026.3.11: CLI 'openclaw agent --channel discord --to' routes to agent:*:main instead of live channel session",
+      "summary": {
+        "problem_summary": "CLI session resolver for the agent command incorrectly routes Discord deliveries to the generic agent:*:main session instead of the live channel/thread session because it does not lookup sessions by real delivery context (channel + to + accountId), fails to normalize Discord targets, and the command path did not propagate necessary context.",
+        "solution_summary": "Applied manual patches to compiled dist files to add delivery-target-based session resolution, normalize Discord targets (e.g., prefix channel IDs), add lookup by delivery context in the agent resolver, fix use of buildAgentMainSessionKey, and pass channel and replyAccount/accountId through the command path; validated CLI now routes to correct channel sessions.",
+        "maintainer_signal_summary": "High-risk manual edits were made directly in dist/ compiled files and will be lost on updates; maintainers should port fixes into source, add tests for delivery-context session resolution, and include a post-update validation step to prevent regressions.",
+        "dedupe_summary": "CLI session resolver: 'openclaw agent --channel discord --to' routes to agent:*:main instead of live channel/thread session due to missing delivery-context lookup and Discord target normalization"
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, technical summary that states the exact CLI command misrouting and the specific root causes (missing delivery-context lookup and Discord target normalization), so it will reliably match duplicates."
+      },
+      "usage": {
+        "input_tokens": 886,
+        "output_tokens": 644
+      }
+    },
+    {
+      "thread_id": 18179,
+      "number": 44584,
+      "kind": "issue",
+      "title": "[Bug]: Discord threads - volatile metadata re-injection + CLI routing to wrong session",
+      "summary": {
+        "problem_summary": "Two regressions in Discord session handling: (1) volatile metadata (message_id, reply_to_id, timestamp, Thread starter, Chat history since last reply) was being re-injected on every turn, causing progressive context bloat and degraded thread performance; (2) CLI agent commands routed to the wrong session (defaulting to agent:*:main) instead of the live thread-bound session.",
+        "solution_summary": "Patched runtime bundles to stop reinjecting volatile Discord thread metadata; updated CLI/gateway code to resolve sessions by actual delivery context (normalizing Discord targets and using channel + to + accountId), passed delivery context into the session resolver, and fixed a regression by switching back to buildAgentMainSessionKey where appropriate.",
+        "maintainer_signal_summary": "Modified compiled/runtime bundle files in openclaw/dist (pi-embedded, gateway-cli, compact, register.agent); manual patches were applied to compiled bundles and will be lost on update—maintainers should reapply or provide a persistent fix; verification shows threads no longer carry repeated context and CLI routes to the correct session.",
+        "dedupe_summary": "Discord gateway/thread session management: prevent reinjection of volatile Discord thread metadata each turn and fix CLI routing to resolve sessions by actual delivery target (channel + to + accountId)."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, specific summary that captures the two core issues—repeated injection of volatile Discord thread metadata and incorrect CLI session resolution by delivery context—without boilerplate, so it will cluster correctly."
+      },
+      "usage": {
+        "input_tokens": 805,
+        "output_tokens": 680
+      }
+    },
+    {
+      "thread_id": 2538,
+      "number": 40880,
+      "kind": "issue",
+      "title": "[Bug]: tools/sandbox: MEDIA_MAX_BYTES (5 MB) is hardcoded and not user-configurable",
+      "summary": {
+        "problem_summary": "Component: tools/sandbox (sandbox media staging). The MEDIA_MAX_BYTES constant is hardcoded to 5 MB in built files (dist/store-*.js), causing files larger than 5 MB to be rejected or silently fail when copied into sandboxed agents.",
+        "solution_summary": "Expose the media staging cap as a user-configurable setting (e.g., tools.media.maxBytes in openclaw.json) and have the sandbox loader read that config instead of using the hardcoded 5 MB constant; ensure build artifacts reflect the configurable value.",
+        "maintainer_signal_summary": "Reporter marks this a regression (worked before), present since v2026.3.7 and still in v2026.3.8, with a manual sed patch workaround applied after npm install -g; labels: bug, regression; no explicit severity provided.",
+        "dedupe_summary": "tools/sandbox: MEDIA_MAX_BYTES is hardcoded to 5 MB in dist/store-*.js and should be made configurable via openclaw.json (tools.media.maxBytes)"
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, specific summary that identifies the hardcoded 5 MB limit in dist/store-*.js and the exact desired config key (tools.media.maxBytes), which is ideal for deduplication."
+      },
+      "usage": {
+        "input_tokens": 852,
+        "output_tokens": 546
+      }
+    },
+    {
+      "thread_id": 9401,
+      "number": 27409,
+      "kind": "issue",
+      "title": "[Bug]: Discord REST API requests fail with \"fetch failed\" despite proxy configuration being enabled",
+      "summary": {
+        "problem_summary": "Discord REST API requests fail with TypeError 'fetch failed' when the gateway tries to deploy commands or send messages, even though proxy is configured in openclaw.json and logs show 'rest proxy enabled'. The WebSocket gateway connection works and Telegram with same proxy works; direct curl calls through the proxy succeed.",
+        "solution_summary": "Ensure the Discord REST client uses the configured proxy for HTTP(S) requests (e.g., attach a proxy agent to Node's fetch/undici or honor HTTP(S)_PROXY), so REST calls route through the proxy like curl and stop producing 'fetch failed'.",
+        "maintainer_signal_summary": "Issue includes gateway logs showing 'rest proxy enabled' and repeated 'fetch failed' errors; bot receives messages but cannot send; curl with same proxy succeeds; environment: macOS, Node.js 25.6.1, OpenClaw build noted; labeled as a bug.",
+        "dedupe_summary": "Discord REST API: REST requests fail with 'fetch failed' despite proxy being configured and shown enabled, while gateway WebSocket and curl+proxy work correctly."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, specific core problem statement: REST API calls error with 'fetch failed' despite proxy configured and enabled, while gateway and curl+proxy succeed, which is exactly the signal needed to cluster similar reports."
+      },
+      "usage": {
+        "input_tokens": 797,
+        "output_tokens": 740
+      }
+    },
+    {
+      "thread_id": 9156,
+      "number": 30221,
+      "kind": "issue",
+      "title": "Discord REST API (@buape/carbon) ignores channels.discord.proxy config",
+      "summary": {
+        "problem_summary": "Discord REST API requests made via @buape/carbon's RequestClient (and other fetch-based code paths like memorySearch and attachment downloads) ignore the channels.discord.proxy setting in openclaw.json because RequestClient calls globalThis.fetch without a proxy-aware dispatcher; Node.js 22 native fetch also doesn't honor HTTP_PROXY/HTTPS_PROXY without --use-env-proxy.",
+        "solution_summary": "Change @buape/carbon's REST client to accept and use an explicit dispatcher or proxy option, and have OpenClaw pass channels.discord.proxy into the client so REST calls use the same proxy as the WebSocket gateway; alternatively document usage of an undici EnvHttpProxyAgent preload as a temporary workaround (avoid NODE_OPTIONS=--use-env-proxy).",
+        "maintainer_signal_summary": "This is a cross-cutting proxy handling bug affecting multiple fetch-based code paths (REST requests, embeddings, attachment downloads) due to Node 22 fetch behavior; a library-level change in @buape/carbon plus a configuration pass-through from OpenClaw is the preferred fix; workaround exists via setGlobalDispatcher with undici.",
+        "dedupe_summary": "Discord REST client (@buape/carbon RequestClient): ignores channels.discord.proxy and calls globalThis.fetch without a proxy-aware dispatcher"
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise and specific: names the component (@buape/carbon RequestClient), the config key (channels.discord.proxy), and the observed behavior (uses globalThis.fetch without a proxy-aware dispatcher), so it cleanly captures the core issue for deduplication."
+      },
+      "usage": {
+        "input_tokens": 806,
+        "output_tokens": 516
+      }
+    },
+    {
+      "thread_id": 18848,
+      "number": 44582,
+      "kind": "issue",
+      "title": "[Bug]: Performance degradation - context growth + lane blocking under load",
+      "summary": {
+        "problem_summary": "OpenClaw suffers performance degradation under sustained load with long-running conversations: unbounded context token growth (writer ~42k tokens, reasoning ~90k), Discord lane blocking causing serialization under load, and typing indicators that can remain stuck until TTL.",
+        "solution_summary": "Applied configuration limits and timeouts: reduced max concurrent sessions/agents/subagents and children, set agents.defaults.contextTokens to 80000, increased channels.discord.eventQueue.listenerTimeout to 300000, restarted the gateway, and added an anti-regression patching script to cover reply/compact/pi/gateway-cli/register variants.",
+        "maintainer_signal_summary": "Gateway restarted and running; no new 'lane wait exceeded' or 'typing TTL reached' errors observed post-restart; existing dist patches intact; restart mitigates but does not fully eliminate issues under sustained load; recommendation to expose adaptive or tunable limits via openclaw config.",
+        "dedupe_summary": "session management: unbounded context token growth and lane blocking under load — enforced context token limits, reduced concurrency settings, and increased Discord event queue listener timeout."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, technical summary that captures the core issue (unbounded context token growth and lane blocking under load) and the specific mitigations (context limits, reduced concurrency, increased Discord event queue timeout) with no boilerplate, so it will cluster correctly."
+      },
+      "usage": {
+        "input_tokens": 740,
+        "output_tokens": 739
+      }
+    },
+    {
+      "thread_id": 14856,
+      "number": 44447,
+      "kind": "issue",
+      "title": "[Bug] v2026.3.11: Discord thread context re-injected every turn (context pollution + cache bust)",
+      "summary": {
+        "problem_summary": "Discord threads re-inject volatile metadata (message_id, reply_to_id, timestamp, Thread starter, Chat history since last reply) on every conversation turn, contaminating context, increasing token usage, and breaking prompt caching because the runtime lacks a guard to limit injection to the first turn.",
+        "solution_summary": "A manual patch was applied to compiled dist files: in dist/pi-embedded-D6PpOsxP.js metadata injection for Discord threads was prevented, and in dist/compact-1mmJ_KWL.js an isNewSession guard was added and resolveAgentMainSessionKey was replaced with buildAgentMainSessionKey(...). Validation shows sessions and prompt caching work again, and thread context no longer repeats.",
+        "maintainer_signal_summary": "High regression risk — fixes were made directly in compiled artifacts (dist/), so changes will be lost on update; maintainers should apply the fix in source, add tests/guards for first-turn-only injection, and run post-update revalidation. Affected compiled files: dist/pi-embedded-D6PpOsxP.js and dist/compact-1mmJ_KWL.js.",
+        "dedupe_summary": "Discord threads: runtime re-injects volatile thread metadata every turn (message_id, reply_to_id, timestamp, Thread starter, Chat history), causing context pollution and prompt cache bust."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, specific summary of the core bug (per-turn re-injection of volatile Discord thread metadata and its impact) with concrete fields listed, no boilerplate or noise, so it will cluster correctly with similar reports."
+      },
+      "usage": {
+        "input_tokens": 752,
+        "output_tokens": 686
+      }
+    },
+    {
+      "thread_id": 14863,
+      "number": 44449,
+      "kind": "issue",
+      "title": "[Bug] v2026.3.11: Discord thread metadata re-injected every turn (context pollution)",
+      "summary": {
+        "problem_summary": "Component: Discord threads. The runtime in the compiled dist treats Discord threads as needing volatile metadata injected every turn (message_id, reply_to_id, timestamp, Thread starter, Chat history), causing context pollution, repeated history, degraded performance, and prompt-cache busting with increased token costs.",
+        "solution_summary": "A local manual patch edited dist/pi-embedded-D6PpOsxP.js to stop injecting those volatile fields on every turn and only inject them on the first turn; validation shows repeated context stops, prompt caching is effective, and billed tokens drop significantly.",
+        "maintainer_signal_summary": "High regression risk: the fix was applied to a compiled dist file and will be overwritten by updates; maintainers should apply an official source-level fix and/or add a post-update revalidation script. Related issues: #41355, #34228, #37047.",
+        "dedupe_summary": "Discord threads: volatile thread metadata re-injected on every turn causing context pollution, token bloat and cache busting; temporary compiled-file patch made to inject metadata only on first turn."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise and specific: states the core bug (Discord thread metadata re-injected each turn), its impacts (context pollution, token bloat, cache busting), and notes the targeted fix without template noise, so it will cluster with similar reports."
+      },
+      "usage": {
+        "input_tokens": 760,
+        "output_tokens": 517
+      }
+    },
+    {
+      "thread_id": 18847,
+      "number": 44586,
+      "kind": "issue",
+      "title": "[Bug]: Discord threads root fix - runtime patches for context growth + session routing",
+      "summary": {
+        "problem_summary": "Discord threads runtime had two regressions: per-turn reinjection of metadata (message_id, reply_to_id, timestamp, Thread starter, InboundHistory) causing progressive context growth and performance/latency degradation, and the session resolver falling back to agent:*:main instead of resolving live thread-bound sessions leading to incorrect CLI routing.",
+        "solution_summary": "Manual patches applied to compiled runtime bundles (modified dist/*.js files) to stop metadata reinjection and enforce resolver lookup by delivery context (channel+to+accountId); backups created and an idempotent re-application script added, gateway restarted and validated.",
+        "maintainer_signal_summary": "Fixes are manual edits to compiled dist bundles and will be lost on updates—maintainers must keep and run the provided re-apply script and backups; verification checklist passed and recommended non-regression tests (long-thread, 15–30min monitoring, smoke tests) should be added.",
+        "dedupe_summary": "[Discord threads]: Runtime patches to prevent per-turn metadata reinjection causing context growth and to fix session resolver so CLI routes to thread-bound sessions"
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, specific summary that captures the two core runtime fixes (prevent per-turn metadata reinjection causing context growth and correct CLI session resolver to use thread-bound sessions) with no boilerplate or noise."
+      },
+      "usage": {
+        "input_tokens": 736,
+        "output_tokens": 842
+      }
+    },
+    {
+      "thread_id": 5022,
+      "number": 37344,
+      "kind": "issue",
+      "title": "[Bug]:  Discord messages not being sent - \"fetch failed\" despite proxy configuration",
+      "summary": {
+        "problem_summary": "Discord message sending (REST) failing to deliver replies: OpenClaw receives messages and generates responses, but final reply fails with \"TypeError: fetch failed\" despite Discord proxy being configured and reported as enabled.",
+        "solution_summary": "Ensure the Discord REST client uses the configured proxy for outgoing reply fetch calls (apply proxy agent to fetch requests), add clearer logging around which proxy/agent is applied to REST requests, and implement retries or better error handling for fetch failures; add tests for proxy use in reply sending.",
+        "maintainer_signal_summary": "Regression: previously worked, now fails on OpenClaw 2026.3.2 with Node.js 22 on Linux systemd; proxy (http://127.0.0.1:7890) verified working via curl; logs show discord rest/gateway proxy enabled and login succeeded but replies consistently fail with \"final reply failed: TypeError: fetch failed\" in both DMs and group chats—high impact for Discord functionality.",
+        "dedupe_summary": "Discord message sending: outgoing replies fail with 'TypeError: fetch failed' despite discord proxy configured/enabled (incoming messages received and responses generated)"
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, specific summary that captures the core bug (outgoing Discord replies failing with 'fetch failed' despite proxy being configured while incoming messages and responses are generated), with no boilerplate or noise."
+      },
+      "usage": {
+        "input_tokens": 676,
+        "output_tokens": 683
+      }
+    },
+    {
+      "thread_id": 14862,
+      "number": 44450,
+      "kind": "issue",
+      "title": "[Bug] v2026.3.11: CLI agent --channel discord --to routes to agent:*:main instead of live session",
+      "summary": {
+        "problem_summary": "Component: CLI session resolver. The CLI command `openclaw agent --channel discord --to ...` routes messages to `agent:*:main` instead of the live Discord channel/thread because the compiled resolver does not look up sessions by delivery context and does not normalize Discord targets.",
+        "solution_summary": "A manual patch was applied to the compiled file `dist/gateway-cli-BjsM6fWb.js` to normalize Discord targets (e.g., prefix `channel:`), perform session lookup by delivery context (channel+to+accountId) before falling back, and ensure CLI messages route to the correct live session; validations confirm correct routing.",
+        "maintainer_signal_summary": "High-risk manual fix applied to a compiled `dist/` artifact that will be lost on upgrade; needs a source-level fix and tests to prevent regression. Related issues: #36401 and #41562.",
+        "dedupe_summary": "CLI routing/session resolver: CLI --channel discord --to resolves to agent:*:main instead of the live Discord session because the resolver lacks delivery-context lookup and target normalization; patched compiled dist file as a stopgap."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise and specific: states that the CLI's Discord routing resolves to agent:*:main due to missing delivery-context lookup and target normalization and notes a patched dist file, which is exactly the core issue for deduplication."
+      },
+      "usage": {
+        "input_tokens": 741,
+        "output_tokens": 854
+      }
+    },
+    {
+      "thread_id": 14859,
+      "number": 44453,
+      "kind": "issue",
+      "title": "[Bug] v2026.3.11: Regression in compact - resolveAgentMainSessionKey ReferenceError",
+      "summary": {
+        "problem_summary": "Component: session resolver/compact bundle. A regression in the compiled file dist/compact-1mmJ_KWL.js calls a nonexistent resolveAgentMainSessionKey, causing ReferenceError at runtime, breaking the `agent` command and potentially crashing the gateway.",
+        "solution_summary": "Manual patch applied to dist/compact-1mmJ_KWL.js replacing resolveAgentMainSessionKey(...) with buildAgentMainSessionKey(...), which removes the ReferenceError and restores agent/sessions behavior; note this is a high-risk change to compiled files and will be lost on update.",
+        "maintainer_signal_summary": "This is a regression introduced by the prior session-resolver fix and must be fixed in source (not only in dist) to prevent recurrence; current fix is a temporary manual edit of compiled output and should be integrated into upstream code/release.",
+        "dedupe_summary": "session resolver (compact): ReferenceError from using nonexistent resolveAgentMainSessionKey instead of buildAgentMainSessionKey in dist/compact-1mmJ_KWL.js"
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, specific summary of the root cause (wrong function name in compiled compact bundle causing ReferenceError) that will match similar issues and contains no boilerplate."
+      },
+      "usage": {
+        "input_tokens": 712,
+        "output_tokens": 641
+      }
+    },
+    {
+      "thread_id": 14142,
+      "number": 42702,
+      "kind": "issue",
+      "title": "[Bug]:  Discord plugin fails with \"fetch failed\" when using proxy",
+      "summary": {
+        "problem_summary": "Discord channel plugin regression: when channels.discord.proxy is configured the proxy is only used for WebSocket connections, not for REST API calls or health checks. As a result the health check reports \"fetch failed\" and openclaw message send to Discord times out or fails in proxy-required environments despite curl via the same proxy working.",
+        "solution_summary": "Apply the channels.discord.proxy setting to the HTTP client used for Discord REST API calls and health checks (not just WebSocket), ensuring all Discord HTTP requests are routed through the configured proxy; update tests and health-check behavior to validate proxy usage.",
+        "maintainer_signal_summary": "Reporter marks this a regression and provides reproduction steps showing direct curl with the proxy succeeds while OpenClaw fails; includes version and environment details and labels bug/regression, indicating it breaks message delivery in proxy environments.",
+        "dedupe_summary": "Discord plugin: channels.discord.proxy is only applied to WebSocket connections, not REST API calls or health checks, causing fetch failures and message-send timeouts via proxy."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, specific summary that identifies the plugin, exact config key, and the core bug (proxy applied only to WebSocket, not REST/health), which will cluster correctly with similar reports."
+      },
+      "usage": {
+        "input_tokens": 668,
+        "output_tokens": 566
+      }
+    },
+    {
+      "thread_id": 14861,
+      "number": 44451,
+      "kind": "issue",
+      "title": "[Bug] v2026.3.11: Session resolver in compact lacks delivery-context lookup",
+      "summary": {
+        "problem_summary": "Session resolver for the agent command in the compact build (dist/compact-1mmJ_KWL.js) omits delivery-context lookup (channel+to+accountId), so sessions fall back to agent:*:main and agent responses are not associated with the live channel/thread session.",
+        "solution_summary": "A manual patch to dist/compact-1mmJ_KWL.js adds lookup by delivery context (channel + to + accountId) in the agent session resolver and only falls back to main when no specific session is found; validation shows sessions and routing are correct after the change.",
+        "maintainer_signal_summary": "High-regression risk: change was made directly in compiled dist file and will be lost on reinstall/update; requires a source-level fix and release. Patch validated locally but maintainers should implement the fix in source and publish a new build.",
+        "dedupe_summary": "session resolver (agent command, compact build): missing delivery-context lookup (channel+to+accountId) causing fallback to agent:*:main; manual dist patch added to perform delivery-context lookup."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise and specific: identifies the affected component (agent command in compact build), the root cause (missing delivery-context lookup channel+to+accountId) and the symptom (fallback to agent:*:main), with only a minor note about a manual patch."
+      },
+      "usage": {
+        "input_tokens": 682,
+        "output_tokens": 683
+      }
+    },
+    {
+      "thread_id": 21902,
+      "number": 55855,
+      "kind": "issue",
+      "title": "[Feature Request] Add i18n support for OpenClaw Control UI (Chinese localization)",
+      "summary": {
+        "problem_summary": "The OpenClaw Control UI has most interface text hardcoded in English, creating usability barriers for non-English users (notably Chinese speakers) across settings, agent/skill management, channel configuration, and status messages.",
+        "solution_summary": "Proposed extraction of hardcoded strings into an i18n layer (e.g., JSON locale files), add a zh-CN locale with translations, add a language selector or auto-detect, and build infrastructure to easily add more languages; notes that docs already have zh-CN translations and that control-ui bundles contain hardcoded strings.",
+        "maintainer_signal_summary": "This is a feature request with medium-high priority for UX accessibility; the author asks whether this is on the roadmap, offers contribution interest, and highlights specific files/bundles containing hardcoded strings.",
+        "dedupe_summary": "Control UI localization: Add i18n support and zh-CN translations by extracting hardcoded English strings into locale files, adding a language selector/auto-detect, and creating infrastructure for additional languages."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise and focused summary that clearly captures the core change — add i18n/locales and zh-CN plus UI language selection — with no boilerplate or irrelevant details."
+      },
+      "usage": {
+        "input_tokens": 603,
+        "output_tokens": 487
+      }
+    },
+    {
+      "thread_id": 22366,
+      "number": 55328,
+      "kind": "pull_request",
+      "title": "feat(whatsapp): add systemPrompt support for accounts and groups ",
+      "summary": {
+        "problem_summary": "Component: WhatsApp channel/group prompt handling. Problem: WhatsApp group chats lacked support for channel-configured systemPrompt at account and group levels, preventing per-account and per-group prompt customization and wildcard defaults.",
+        "solution_summary": "Added systemPrompt support to WhatsApp config types/schema and implemented resolution logic: channel root or account-level systemPrompt (account overrides root), then resolve group prompt by specific group entry or '*' wildcard within the active groups map; account-level groups fully replace root groups. The final injected prompt is account prompt plus resolved group prompt (joined with a blank line). Tests and docs were added.",
+        "maintainer_signal_summary": "Scope limited to the WhatsApp channel only; no changes to other channels, WhatsApp hot-reload behavior, or group allowlist/mention-gating semantics. Includes tests and documentation and closes the related issue. Account-groups replace root groups (same semantics as Telegram).",
+        "dedupe_summary": "WhatsApp: add systemPrompt support at account and group levels with wildcard fallback and account-groups replacing root-groups"
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, specific summary capturing the core change—adding per-account and per-group WhatsApp systemPrompt support with wildcard fallback—without extraneous template or testing details."
+      },
+      "usage": {
+        "input_tokens": 2379,
+        "output_tokens": 708
+      }
+    },
+    {
+      "thread_id": 17692,
+      "number": 45354,
+      "kind": "pull_request",
+      "title": "Fix WhatsApp group append processing and account-scoped gatin",
+      "summary": {
+        "problem_summary": "WhatsApp group messages delivered via messages.upsert(type=\"append\") were being dropped before agent processing, and WhatsApp group policy resolution could ignore account-scoped configuration causing allowlist gating to fail.",
+        "solution_summary": "Scope append processing to WhatsApp group messages only and propagate accountId when resolving WhatsApp group policy so account-scoped groupAllowFrom/allowFrom and groups fallback are considered, restoring correct inbound routing and gating.",
+        "maintainer_signal_summary": "DM append history remains skipped; no config/schema/dist changes; targeted local tests and live repro were used to verify behavior; files touched include web inbound and group-activation monitors and risks are documented for group backlog processing and account-scoped policy differences.",
+        "dedupe_summary": "WhatsApp group handling: enable append processing for group messages and use account-scoped accountId when resolving group allowlist/policy"
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise and specific: clearly states enabling append processing for WhatsApp group messages and switching to account-scoped accountId for group allowlist/policy resolution without extraneous boilerplate."
+      },
+      "usage": {
+        "input_tokens": 1931,
+        "output_tokens": 463
+      }
+    },
+    {
+      "thread_id": 20932,
+      "number": 52512,
+      "kind": "pull_request",
+      "title": "fix(gateway): resolve Canvas 401 behind Tailscale Serve",
+      "summary": {
+        "problem_summary": "Gateway (Canvas/Tailscale Serve): Canvas/A2UI returned 401 when proxied through Tailscale Serve because resolveClientIp returned undefined for trusted-proxy requests missing forwarding headers and isLocalDirectRequest did not fall back to the socket address when allowRealIpFallback was enabled.",
+        "solution_summary": "resolveClientIp now falls back to req.socket.remoteAddress when no forwarding headers exist; isLocalDirectRequest also checks the socket address when allowRealIpFallback is set; isLocalishHost now requires an allowTailscale flag to accept .ts.net hosts; auth.allowTailscale is threaded through callers and docs updated with required config.",
+        "maintainer_signal_summary": "Includes unit tests added/updated (src/gateway/auth.test.ts, net.test.ts) with passing results, docs changes, and an end-to-end verification matrix; closes #28472 and depends on #50636; no new config keys introduced and default behavior preserved for tailscale.mode = \"serve\", with noted risks and mitigations.",
+        "dedupe_summary": "Gateway: Fix Canvas 401 behind Tailscale Serve by falling back to socket address for trusted-proxy requests and gating .ts.net host acceptance behind allowTailscale."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, technical summary that captures the core bug (401 behind Tailscale Serve) and the two code changes (socket fallback for trusted-proxy requests and gating .ts.net acceptance via allowTailscale) without boilerplate."
+      },
+      "usage": {
+        "input_tokens": 1770,
+        "output_tokens": 503
+      }
+    },
+    {
+      "thread_id": 13791,
+      "number": 42906,
+      "kind": "pull_request",
+      "title": "fix(security): block non-self messages in WhatsApp self-chat mode",
+      "summary": {
+        "problem_summary": "Component: WhatsApp inbound access control computed an isSelfChat heuristic but never used it as a guard, so non-self messages (groups, stranger DMs, broadcasts) could pass through when groupPolicy defaulted to \"open\", violating self-chat isolation.",
+        "solution_summary": "Added an early-return guard in checkInboundAccessControl that rejects all non-self messages when account.selfChatMode === true, placed before group/DM policy evaluation; the isSelfChat heuristic is still returned for UI/logging but not used to block messages, and auto-detected self-chat remains unaffected.",
+        "maintainer_signal_summary": "All relevant tests pass (9 tests); author verified guard placement via code-path analysis and checked edge cases; decision to require explicit selfChatMode (not the heuristic) is intentional to avoid blocking teammates; quick revert instructions and affected file (src/web/inbound/access-control.ts) provided.",
+        "dedupe_summary": "WhatsApp inbound access control: add early-return guard to block non-self messages when explicit selfChatMode=true"
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, specific summary of the code change: an early-return guard added to WhatsApp inbound access control to block non-self messages when explicit selfChatMode=true, with no boilerplate or extraneous detail."
+      },
+      "usage": {
+        "input_tokens": 1485,
+        "output_tokens": 672
+      }
+    },
+    {
+      "thread_id": 4208,
+      "number": 4402,
+      "kind": "pull_request",
+      "title": "fix: store group messages from non-allowlisted senders as pending context",
+      "summary": {
+        "problem_summary": "Component: WhatsApp group inbound handling. Problem: With groupPolicy: \"allowlist\", group messages from senders not in groupAllowFrom are dropped at the access-control layer and never stored as context, so agents lack conversation context from non-allowlisted members.",
+        "solution_summary": "Adds an opt-in boolean config groupContextFromAll (top-level and per-account) that, when true, marks non-allowlisted group messages as storeForContext/contextOnly instead of dropping them; these messages are saved to pending group history, do not trigger replies, and skip read receipts. Changes update access-control, inbound monitor, message types, auto-reply logic, and config schema.",
+        "maintainer_signal_summary": "Backwards-compatible default false; per-account config overrides top-level. Local testing with two bots verified context retention. Reviewer notes caution about potential allowlist normalization edge cases and interaction with group gating/state updates.",
+        "dedupe_summary": "WhatsApp group handling: add groupContextFromAll option to store non-allowlisted group messages as pending context instead of dropping them"
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, specific summary that captures the core change—adding a groupContextFromAll option to retain non-allowlisted WhatsApp group messages as pending context rather than dropping them—without extraneous boilerplate."
+      },
+      "usage": {
+        "input_tokens": 1502,
+        "output_tokens": 489
+      }
+    },
+    {
+      "thread_id": 9553,
+      "number": 20072,
+      "kind": "pull_request",
+      "title": "feat(sessions_spawn): add sessionKey param to reuse sub-agent sessions",
+      "summary": {
+        "problem_summary": "Component: session management / sub-agent spawn. Current sessions_spawn always created a new random-UUID session for each sub-agent spawn, preventing reuse of conversation history and enabling session-key bypass edge cases.",
+        "solution_summary": "Added an optional sessionKey parameter to sessions_spawn that maps short keys to namespaced sessions (agent:{agentId}:subagent:{key}), accepts fully-qualified keys with agentId validation, and falls back to crypto.randomUUID() when omitted; tests added for deterministic key, UUID fallback, fully-qualified passthrough, and cross-agent mismatch; allowlist bypass fixed.",
+        "maintainer_signal_summary": "Reviewer flagged three actionable issues: a broken test import (openclaw-tools.js vs clawdbot-tools.js) causing test compilation failure, a case-sensitivity bug in fully-qualified key validation (embedded agentId not normalized causing false mismatches), and inconsistent error handling (throw vs jsonResult) for cross-agent mismatch checks—these should be fixed before merge.",
+        "dedupe_summary": "session management: add sessionKey param to sessions_spawn to enable deterministic sub-agent sessions (namespaced short keys, validated fully-qualified keys, UUID fallback); tests added but includes a failing import and validation/error-handling bugs."
+      },
+      "judge": {
+        "score": 4,
+        "has_boilerplate": false,
+        "signal_density": 4,
+        "would_cluster_correctly": true,
+        "reasoning": "Summary concisely captures the core change (sessionKey for deterministic sub-agent sessions, namespacing/validation, UUID fallback) but includes a testing/failing-import note that is implementation/test noise."
+      },
+      "usage": {
+        "input_tokens": 1555,
+        "output_tokens": 636
+      }
+    },
+    {
+      "thread_id": 8969,
+      "number": 21898,
+      "kind": "pull_request",
+      "title": "fix(telegram): auto-detect captionable messages for editMessageCaption",
+      "summary": {
+        "problem_summary": "Telegram message editing: calling message(action=edit) on messages containing media (photo, video, audio, document, animation) invoked editMessageText and Telegram returned 400 'there is no text in the message to edit', causing edits to captionable messages to fail and leave UI inconsistent.",
+        "solution_summary": "editMessageTelegram (src/telegram/send.ts) now catches the specific 400 error (NO_TEXT_IN_MESSAGE_RE) and retries with editMessageCaption for captionable media; buttons-only updates call editMessageReplyMarkup directly; HTML parse fallback and MESSAGE_NOT_MODIFIED handling preserved; six unit tests added.",
+        "maintainer_signal_summary": "Bug fix limited to Telegram adapter (src/telegram/send.ts); backward compatible with no API surface changes; adds calls to editMessageCaption and editMessageReplyMarkup and a regex to detect the Telegram error—monitor regex stability; 6 tests added; revert by restoring the modified file.",
+        "dedupe_summary": "Telegram message editing: auto-detect captionable media edits and retry with editMessageCaption (buttons-only use editMessageReplyMarkup) to avoid 400 'no text' errors."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, focused summary specifying the exact Telegram API methods (editMessageCaption, editMessageReplyMarkup) and the 400 'no text' error, so it accurately captures the core issue for clustering."
+      },
+      "usage": {
+        "input_tokens": 1436,
+        "output_tokens": 710
+      }
+    },
+    {
+      "thread_id": 17568,
+      "number": 47391,
+      "kind": "pull_request",
+      "title": "fix(whatsapp): restore config-driven block streaming for WhatsApp delivery",
+      "summary": {
+        "problem_summary": "WhatsApp delivery: PR #24962 hardcoded disableBlockStreaming: true to block reasoning leaks, which unintentionally disabled block streaming entirely so messages were batched and sent only when the agent finished, ignoring per-account or global blockStreaming settings.",
+        "solution_summary": "The deliver callback was narrowed to only suppress tool payloads (reasoning is already filtered upstream) and disableBlockStreaming is now read from per-account channels.whatsapp.blockStreaming, falling back to agents.defaults.blockStreamingDefault, restoring progressive block streaming at configured boundaries.",
+        "maintainer_signal_summary": "Live testing and contract tests pass; change is backward compatible and can be reverted by setting channels.whatsapp.blockStreaming:false or removing the default; reviewers should watch for any regression of the upstream shouldSuppressReasoningPayload filter.",
+        "dedupe_summary": "WhatsApp delivery: restore config-driven block streaming by respecting channels.whatsapp.blockStreaming and agents.defaults.blockStreamingDefault and limiting deliver suppression to tool payloads."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise and specific: it captures the exact behavioral change (restore config-driven block streaming for WhatsApp), names the relevant config keys, and notes the narrowed deliver suppression to tool payloads, with no boilerplate noise."
+      },
+      "usage": {
+        "input_tokens": 1428,
+        "output_tokens": 458
+      }
+    },
+    {
+      "thread_id": 4129,
+      "number": 38337,
+      "kind": "pull_request",
+      "title": "fix(telegram): fix gateway hang on video messages and increase media download limit",
+      "summary": {
+        "problem_summary": "Telegram gateway integration: sending videos larger than the old 5MB default caused fetch/download to throw on content-length checks and left the undici Agent hanging in closeDispatcher() when the response body was unconsumed, making the gateway unresponsive and dropping messages with media.",
+        "solution_summary": "Raised default channels.telegram.mediaMaxMb from 5 to 20, fixed closeDispatcher() to avoid Agent.close() deadlock (timeout + destroy fallback), made media download errors non-fatal so captions/text are still forwarded, and added timeouts/retries to getFile and download operations; updated UI metadata stripping for inbound media paths.",
+        "maintainer_signal_summary": "E2E verified with a 7.5MB video (saved to ~/.openclaw/media/inbound and forwarded), tests updated (strip-inbound-meta.test.ts passes), change is backward-compatible and configurable, no SSRF policy change or new deps; touched src/infra/net/ssrf.ts and src/telegram/bot.ts; revertable by lowering channels.telegram.mediaMaxMb or reverting commits; noted risk of 3s closeDispatcher timeout but mitigated by destroy().",
+        "dedupe_summary": "Telegram integration: fix gateway hang on video messages by increasing mediaMaxMb to 20, preventing Agent.close() deadlock, making media download errors non-fatal, and adding timeouts/retries"
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, focused summary that captures the core bug and fixes (increase media limit, fix Agent.close deadlock, non-fatal media errors, timeouts/retries) without extraneous template or testing details."
+      },
+      "usage": {
+        "input_tokens": 1524,
+        "output_tokens": 739
+      }
+    },
+    {
+      "thread_id": 21735,
+      "number": 55953,
+      "kind": "pull_request",
+      "title": "fix(telegram): use type-aware media placeholder for document attachments (#7116)",
+      "summary": {
+        "problem_summary": "Telegram inbound body fallback used a hardcoded <media:image> when media (e.g., documents) had no caption, causing documents and other non-photo media to be misidentified to the agent and leading to incorrect agent responses.",
+        "solution_summary": "Changed resolveTelegramInboundBody to use the already-computed type-aware placeholder (e.g., <media:document>, <media:video>) instead of hardcoded <media:image>, and added unit tests verifying placeholder text and getFile behavior for document messages; media download and extraction paths unchanged.",
+        "maintainer_signal_summary": "This is a small bugfix in the Telegram integration with unit tests added in extensions/telegram tests, closes #7116, backward compatible with minimal risk (noted downstream pattern-match caveat), and verified by test suite runs; labeled channel: telegram, size: S.",
+        "dedupe_summary": "Telegram inbound body: replace hardcoded <media:image> fallback with type-aware media placeholder so document and other non-photo attachments are correctly labeled (e.g., <media:document>), plus unit tests to lock behavior."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, specific summary of the core fix—switching the Telegram inbound body placeholder from a hardcoded <media:image> to a type-aware placeholder (so documents/videos are labeled correctly) and adding tests—no extraneous boilerplate."
+      },
+      "usage": {
+        "input_tokens": 1351,
+        "output_tokens": 516
+      }
+    },
+    {
+      "thread_id": 2463,
+      "number": 40950,
+      "kind": "pull_request",
+      "title": "media: make MEDIA_MAX_BYTES configurable via media.maxBytes",
+      "summary": {
+        "problem_summary": "Media store/gateway enforces a hardcoded 5 MB limit (MEDIA_MAX_BYTES) in src/media/store.ts, causing files larger than 5 MB to fail staging into sandboxed agents and preventing users from overriding the limit.",
+        "solution_summary": "Introduce a new config field media.maxBytes (optional, up to 500 MB), replace the hardcoded constant with getMediaMaxBytes()/setMediaMaxBytes(), read config at gateway boot, and update error messages to reflect the configured limit while preserving the 5 MB default.",
+        "maintainer_signal_summary": "All relevant tests pass (56 tests across four files); three bot review threads were resolved (unconditional setting of limit, improved byte formatting, schema validation); change is backward-compatible (default preserved, deprecated export kept) and schema caps max at 500 MB to mitigate disk-fill risk.",
+        "dedupe_summary": "Media store: make MEDIA_MAX_BYTES configurable via media.maxBytes, replacing hardcoded 5MB with a configurable limit (default 5MB, max 500MB) and updating error messages."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, technical summary that captures the core change—making the media size limit configurable (keeps 5MB default, introduces up to 500MB) and updates related errors—without template noise."
+      },
+      "usage": {
+        "input_tokens": 1472,
+        "output_tokens": 473
+      }
+    },
+    {
+      "thread_id": 5418,
+      "number": 30024,
+      "kind": "pull_request",
+      "title": "fix: pass file metadata to agent when Telegram media download fails",
+      "summary": {
+        "problem_summary": "Telegram integration: when media/file downloads fail (exceeding mediaMaxMb or Telegram API errors), the handler returned early and the entire message was silently dropped—agents received no ack or visibility into the lost file or caption.",
+        "solution_summary": "On download failure, extract file metadata (name, size, type) from the Telegram message object and inject a metadata stub into msg.text instead of returning; allow the message to continue through the normal pipeline so the agent sees the file and reason it couldn't be downloaded.",
+        "maintainer_signal_summary": "Bug fix touching the Telegram integration only; backward compatible with no config changes. Verified via code inspection of early-return paths; risk noted that mutating msg.text may affect downstream consumers but is limited to prior-error cases. Can be reverted by rolling back the single commit to src/telegram/bot-handlers.ts; related issues linked.",
+        "dedupe_summary": "Telegram integration: on Telegram media download failure, inject file metadata into msg.text and continue processing instead of dropping the message"
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise and specific: it states the integration, the failure mode (media download), and the exact behavior change (inject metadata into msg.text and continue processing) without extraneous boilerplate."
+      },
+      "usage": {
+        "input_tokens": 1314,
+        "output_tokens": 522
+      }
+    },
+    {
+      "thread_id": 5796,
+      "number": 24117,
+      "kind": "pull_request",
+      "title": "feat(cli): add --session-key targeting for openclaw agent",
+      "summary": {
+        "problem_summary": "openclaw agent CLI lacks a --session-key option, causing CLI-triggered deliveries in multi-channel setups to resolve to the agent main session instead of the intended channel session because sessionId is UUID-based and --to may be unavailable for callbacks.",
+        "solution_summary": "Adds a first-class --session-key CLI flag, extends AgentCliOpts to include sessionKey, forwards it into resolveSessionKeyForRequest and gateway call parameters, preserves resolution precedence (--session-key, --session-id, --to, --agent), and updates help/validation text with accompanying tests.",
+        "maintainer_signal_summary": "Change is opt-in and backward compatible, includes unit tests for CLI parsing and gateway forwarding, judged low risk with a 5/5 confidence score, and requires no core resolver changes; documentation/help updated accordingly.",
+        "dedupe_summary": "[CLI agent command]: Add --session-key flag to target stable session keys for openclaw agent; forwarded through session resolution and prioritized over session-id/to/agent."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, focused summary that captures the core change (adding a --session-key flag to openclaw agent and its precedence in session resolution) with relevant technical terms and no template noise."
+      },
+      "usage": {
+        "input_tokens": 1286,
+        "output_tokens": 740
+      }
+    },
+    {
+      "thread_id": 766,
+      "number": 11611,
+      "kind": "pull_request",
+      "title": "feat: separate group-level allowlist from sender-level command authorization",
+      "summary": {
+        "problem_summary": "Component: WhatsApp inbound group access control. The current groupPolicy: \"allowlist\" combined with groupAllowFrom gates all group interactions by sender phone number, preventing allowlisting by group JID, allowing open chat within approved groups, and separating slash-command authorization from general chat access.",
+        "solution_summary": "When groupPolicy is \"allowlist\" and a channels.whatsapp.groups mapping exists, access control uses the groups mapping to gate group-level access by JID (blocking unapproved groups) while allowing any participant in approved groups to chat; groupAllowFrom still controls slash-command authorization. If no groups mapping is present, the legacy sender-based groupAllowFrom behavior is preserved.",
+        "maintainer_signal_summary": "Change is localized to src/web/inbound/access-control.ts with added resolveChannelGroupPolicy usage, config JSDoc update, and four new Vitest cases. Tests cover approved/blocked groups and legacy fallback; flagged dependency on PR #3326; reviewer noted one outdated inline comment but rates change as safe to merge with confidence ~4/5.",
+        "dedupe_summary": "WhatsApp group access control: Use channels.whatsapp.groups JID allowlist for group-level gating when groupPolicy is \"allowlist\", while keeping groupAllowFrom for command authorization and preserving legacy sender-based behavior when no groups mapping exists."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, technical summary that captures the core change: switching to a group JID allowlist for group-level gating while retaining sender-based command authorization and legacy behavior when no groups mapping exists."
+      },
+      "usage": {
+        "input_tokens": 1336,
+        "output_tokens": 613
+      }
+    },
+    {
+      "thread_id": 17924,
+      "number": 46425,
+      "kind": "pull_request",
+      "title": "fix(telegram): propagate mediaMaxMb limit to outbound media reply delivery",
+      "summary": {
+        "problem_summary": "Telegram outbound reply delivery ignored the configured mediaMaxMb limit: loadWebMedia was called without maxBytes and defaulted to 100 MB, so operators setting a lower mediaMaxMb saw no effect for replies (direct send already honored the setting).",
+        "solution_summary": "Threaded mediaMaxBytes through the Telegram outbound delivery chain (bot.ts → bot-message.ts → bot-message-dispatch.ts → delivery.replies.ts) and the native-commands path (bot-native-commands.ts), added unit tests to verify maxBytes is passed or omitted appropriately, and left direct-send and internals unchanged.",
+        "maintainer_signal_summary": "Bug fix, backward compatible (mediaMaxBytes optional), two unit tests added and related test suites passing (108 tests across 4 suites); build and checks pass but no live end-to-end Telegram verification was performed; change can be reverted by reverting the commit.",
+        "dedupe_summary": "Telegram outbound delivery: propagate mediaMaxMb/mediaMaxBytes to outbound media reply delivery so loadWebMedia enforces configured limit (threaded through bot.ts → bot-message.ts → bot-message-dispatch.ts → delivery.replies.ts and native-commands path)."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, technical summary that states the core bugfix (propagating mediaMaxMb/Bytes so loadWebMedia honors the configured limit) and lists the affected files, with no template noise, so it will cluster correctly."
+      },
+      "usage": {
+        "input_tokens": 1337,
+        "output_tokens": 620
+      }
+    },
+    {
+      "thread_id": 5712,
+      "number": 37050,
+      "kind": "pull_request",
+      "title": "fix(telegram): add HTML parse fallback for media captions",
+      "summary": {
+        "problem_summary": "Telegram media sends (photo, document, video, animation, audio, voice, video note) would fail with a 400 \"can't parse entities\" error when captions contained problematic HTML entities because they lacked the HTML parse fallback that text messages use.",
+        "solution_summary": "Wrapped the media send callback in withTelegramHtmlParseFallback to catch HTML parse errors and retry the send without parse_mode using the raw caption; applies to all media types and preserves existing caption splitting and other paths.",
+        "maintainer_signal_summary": "Added a unit test that simulates a parse error then success, verifying first call uses parse_mode: \"HTML\" and the retry omits parse_mode; all tests pass (52 total). Change is limited to src/telegram/send.ts and can be reverted by restoring the previous sendMedia implementation.",
+        "dedupe_summary": "Telegram media handler: Add HTML parse fallback for media captions to retry sends as plain text on HTML entity parse errors, preventing 400 failures."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise, specific summary that states the affected component (Telegram media captions), the change (HTML parse fallback to retry as plain text), and the impact (prevents 400 failures), so it will cluster with similar issues."
+      },
+      "usage": {
+        "input_tokens": 1211,
+        "output_tokens": 484
+      }
+    },
+    {
+      "thread_id": 21769,
+      "number": 55280,
+      "kind": "pull_request",
+      "title": "fix(whatsapp): make block streaming configurable and fix delivery race in block-reply pipeline",
+      "summary": {
+        "problem_summary": "WhatsApp channel had block-streaming effectively disabled by a hardcoded disableBlockStreaming setting and an activation bug; additionally there was a delivery race where block replies were enqueued optimistically (sendBlockReply) so the pipeline marked content as sent before confirmed delivery, causing intermediate blocks and sometimes the final reply to be lost.",
+        "solution_summary": "Resolve blockStreaming from account config, fix the config activation logic, add sendBlockReplyAsync that waits for confirmed delivery, update onBlockReply to await it, add sensible block streaming coalescing defaults, and update/add tests to cover streaming-on and streaming-off paths.",
+        "maintainer_signal_summary": "Existing tests were updated and new tests added; manual verification confirms streaming works when enabled and remains off by default; introduces a new dispatcher API (sendBlockReplyAsync) and a new config key channels.whatsapp.blockStreaming, and fixes the root-cause race rather than reverting behavior.",
+        "dedupe_summary": "WhatsApp channel: make block streaming configurable and fix delivery race in block-reply pipeline"
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise and specific: identifies the WhatsApp channel change (make block streaming configurable) and the root fix (delivery race in block-reply pipeline), which is ideal for deduplication."
+      },
+      "usage": {
+        "input_tokens": 1124,
+        "output_tokens": 865
+      }
+    },
+    {
+      "thread_id": 8098,
+      "number": 25543,
+      "kind": "pull_request",
+      "title": "fix(signal): add group-level allowlist support via groups config",
+      "summary": {
+        "problem_summary": "Signal channel lacks group-level allowlist config to explicitly allow specific Signal groups by ID, causing reliance on sender-level groupAllowFrom checks and preventing explicitly allowed groups from running control commands.",
+        "solution_summary": "Added a channels.signal.groups.<groupId> config with a SignalGroupConfig type and Zod schema, wired resolveChannelGroupPolicy into the Signal event handler and command authorizers so listed groups bypass sender-level checks and can run control commands, and updated docs with examples.",
+        "maintainer_signal_summary": "PR fixes #25540 and supersedes #4337; Greptile review incorporated (groupExplicitlyAllowed now included in commandGate authorizers), TypeScript compiles cleanly, manual testing done, and changes are low-risk and consistent with other channels.",
+        "dedupe_summary": "Signal channel: add group-level allowlist support via channels.signal.groups.<groupId> config that bypasses sender-level groupAllowFrom and enables command authorization for listed groups."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise and specific: it names the new config path, the behavioral change (bypasses sender-level groupAllowFrom), and the impact on command authorization, so it will accurately cluster with similar Signal group-allowlist changes."
+      },
+      "usage": {
+        "input_tokens": 1066,
+        "output_tokens": 484
+      }
+    },
+    {
+      "thread_id": 539,
+      "number": 29154,
+      "kind": "pull_request",
+      "title": "fix(signal): add group-level allowlist support via groups config",
+      "summary": {
+        "problem_summary": "Component: Signal channel. Signal lacked group-level allowlisting via channels.signal.groups.<groupId>, so when groupPolicy was set to \"allowlist\" and groupAllowFrom contained group IDs, group messages were silently dropped because isSenderAllowed compared sender phone/UUID to group IDs (sender-level filter mismatch).",
+        "solution_summary": "Added a groups config to SignalAccountSchemaBase (same shape as other channels), invoked resolveChannelGroupPolicy in Signal's group access check before falling back to sender-level groupAllowFrom, and added four tests; all relevant test suites pass.",
+        "maintainer_signal_summary": "Small change scoped to the Signal channel; adds schema support and an access-check call, includes 4 new tests, fully tested and fixes issue #25540. Label: channel: signal, size: S.",
+        "dedupe_summary": "Signal: Missing group-level allowlist support via channels.signal.groups.<groupId> causing group messages to be dropped when groupPolicy is allowlist; added groups config and resolveChannelGroupPolicy call to fix."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise and specific: identifies Signal's missing group-level allowlist, the failure mode (group messages dropped under allowlist), and the fix (add groups config and resolveChannelGroupPolicy), with no boilerplate or noise."
+      },
+      "usage": {
+        "input_tokens": 866,
+        "output_tokens": 460
+      }
+    },
+    {
+      "thread_id": 5565,
+      "number": 28178,
+      "kind": "pull_request",
+      "title": "feat(whatsapp): support config-driven block streaming",
+      "summary": {
+        "problem_summary": "WhatsApp channel hardcodes disableBlockStreaming=true in process-message, causing intermediate agent text blocks to be accumulated and sent as one final batch instead of delivered incrementally; queuedFinal was also used exclusively to mark delivery, so intermediate blocks weren't counted as replies.",
+        "solution_summary": "Add resolveWhatsAppBlockStreamingEnabled() and use the channels.whatsapp.blockStreaming config to control block streaming; update process-message logic so intermediate blocks count as valid replies when enabled; register blockStreaming capability and default coalescing constant in dock and update tests to cover enabled/default/disabled behavior.",
+        "maintainer_signal_summary": "Backwards-compatible default (blockStreaming off) preserved; tests updated and passing; small scoped change that aligns WhatsApp behavior with Telegram/Line and fixes anyReplyDelivered evaluation; labels indicate whatsapp-web, web-ui, agents, and size S.",
+        "dedupe_summary": "WhatsApp block streaming: make block streaming config-driven (respect channels.whatsapp.blockStreaming), stop hardcoding disableBlockStreaming, and deliver intermediate blocks as separate messages when enabled."
+      },
+      "judge": {
+        "score": 5,
+        "has_boilerplate": false,
+        "signal_density": 5,
+        "would_cluster_correctly": true,
+        "reasoning": "Concise and specific: it captures switching WhatsApp from a hardcoded disableBlockStreaming to respecting channels.whatsapp.blockStreaming and delivering intermediate blocks, which is the core change for clustering."
+      },
+      "usage": {
+        "input_tokens": 616,
+        "output_tokens": 623
+      }
+    }
+  ]
+}
