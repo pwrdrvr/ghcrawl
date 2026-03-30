@@ -53,6 +53,11 @@ type PerfRunResult = {
   maxRegressionPercent: number;
 };
 
+type SuggestedBaseline = {
+  fixtureMedianMs: number;
+  projectedOpenclawMs: number;
+};
+
 const BASELINE_PATH = fileURLToPath(new URL('./perf-baseline.json', import.meta.url));
 
 function loadBaseline(): PerfBaseline {
@@ -89,6 +94,26 @@ function median(values: number[]): number {
     return (sorted[middle - 1] + sorted[middle]) / 2;
   }
   return sorted[middle] ?? 0;
+}
+
+function roundFixtureMedianMs(value: number): number {
+  return Number(value.toFixed(1));
+}
+
+function roundProjectedOpenclawMs(value: number): number {
+  return Math.round(value);
+}
+
+function buildSuggestedBaseline(result: PerfRunResult): SuggestedBaseline | null {
+  const shouldSuggest = result.deltaPercent < 0 || result.baselineMedianMs === result.medianMs;
+  if (!shouldSuggest) {
+    return null;
+  }
+
+  return {
+    fixtureMedianMs: roundFixtureMedianMs(result.medianMs),
+    projectedOpenclawMs: roundProjectedOpenclawMs(result.projectedOpenclawMs),
+  };
 }
 
 function createGitHubStub(): GHCrawlService['github'] {
@@ -348,10 +373,14 @@ async function measureBenchmark(baseline: PerfBaseline): Promise<PerfRunResult> 
 function buildSummary(result: PerfRunResult): string {
   const status = result.deltaPercent > result.maxRegressionPercent ? 'FAIL' : 'PASS';
   const sampleList = result.sampleDurationsMs.map((value) => formatDurationMs(value)).join(', ');
+  const suggestedBaseline = buildSuggestedBaseline(result);
   const bootstrapLine =
     result.baselineMedianMs === result.medianMs
       ? '- Bootstrap mode: using the current fixture median as the provisional baseline'
       : null;
+  const suggestedBaselineLine = suggestedBaseline
+    ? `- Suggested baseline update: ${JSON.stringify(suggestedBaseline)}`
+    : null;
   return [
     '## Cluster Performance',
     '',
@@ -365,6 +394,7 @@ function buildSummary(result: PerfRunResult): string {
     `- Regression threshold: ${formatPercent(result.maxRegressionPercent)}`,
     `- Fixture shape: ${result.threadCount} threads x ${result.sourceKinds.length} source kinds`,
     `- Sample durations: ${sampleList}`,
+    suggestedBaselineLine,
     bootstrapLine,
     '',
   ]
@@ -386,6 +416,7 @@ function writeOutput(result: PerfRunResult, summary: string, bootstrap: boolean)
         status: result.deltaPercent > result.maxRegressionPercent ? 'FAIL' : 'PASS',
         bootstrap,
         summary,
+        suggestedBaseline: buildSuggestedBaseline(result),
         result,
       },
       null,
@@ -402,8 +433,9 @@ async function main(): Promise<void> {
   const shouldFail = !bootstrap && result.deltaPercent > result.maxRegressionPercent;
 
   process.stdout.write(`${summary}\n`);
-  if (bootstrap) {
-    process.stdout.write(`Suggested fixtureMedianMs: ${result.medianMs.toFixed(1)}\n`);
+  const suggestedBaseline = buildSuggestedBaseline(result);
+  if (bootstrap && suggestedBaseline) {
+    process.stdout.write(`Suggested baseline update: ${JSON.stringify(suggestedBaseline)}\n`);
   }
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
   if (summaryPath) {

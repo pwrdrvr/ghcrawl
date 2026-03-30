@@ -21,8 +21,8 @@
     "maxTotalMs": 10000
   },
   "baseline": {
-    "fixtureMedianMs": 535.1,
-    "projectedOpenclawMs": 600000
+    "fixtureMedianMs": 450.6,
+    "projectedOpenclawMs": 505300
   },
   "thresholds": {
     "maxRegressionPercent": 50

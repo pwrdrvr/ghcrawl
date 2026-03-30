@@ -87,11 +87,14 @@ Common commands:
 
 - `pnpm typecheck`
 - `pnpm test`
+- `pnpm test:cluster-perf`
 - targeted CLI smoke tests via:
   - `pnpm --filter ghcrawl cli doctor`
   - `pnpm --filter ghcrawl cli sync openclaw/openclaw --limit 1`
 
 If a change affects OpenAI-backed paths, avoid unnecessary live spend unless the user wants a real run.
+
+If a change intentionally improves cluster performance and the CI Cluster Perf job reports a better steady-state result, update [packages/api-core/src/cluster/perf-baseline.json](./packages/api-core/src/cluster/perf-baseline.json) in the same change or immediate follow-up using the reported `fixtureMedianMs` and `projectedOpenclawMs`.
 
 When you create or update a PR, follow through on GitHub Actions with `gh`:
 
