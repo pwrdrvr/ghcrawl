@@ -1,0 +1,123 @@
+name: embedding-clustering
+description: >
+  Optimize clustering quality by exploring which embedding source kinds to use
+  (title, body, dedupe_summary), how to aggregate scores across source kinds
+  (max, mean, weighted, require-N-sources), and parameter tuning (k, minScore,
+  maxClusterSize). Uses LLM-as-judge to evaluate cluster coherence and
+  singleton false-negative rate.
+
+metric:
+  primary:
+    type: judge
+    name: cluster_coherence
+    direction: maximize
+
+  degenerate_gates:
+    - name: solo_pct
+      check: "<= 95"
+      description: "Reject if >=95% of clusters are singletons (everything is solo)"
+    - name: max_cluster_size
+      check: "<= 500"
+      description: "Reject mega-clusters that merged unrelated items"
+    - name: multi_member_pct
+      check: ">= 5"
+      description: "At least 5% of threads must be in multi-member clusters"
+
+  diagnostics:
+    - name: edge_count
+    - name: cluster_count
+    - name: solo_clusters
+    - name: multi_member_clusters
+    - name: threads_in_multi
+    - name: total_threads
+    - name: avg_multi_size
+    - name: duration_ms
+
+  judge:
+    model: sonnet
+    sample_size: 30
+    stratification:
+      - bucket: top_by_size
+        count: 10
+      - bucket: mid_range
+        count: 10
+      - bucket: small_clusters
+        count: 10
+    singleton_sample: 15
+    singleton_rubric: |
+      This thread is currently a SINGLETON — it was not grouped with any other thread.
+      Given the thread's title and dedupe_summary, evaluate whether this is correct.
+
+      Rate 1-5:
+      - 5: Clearly unique, no plausible duplicates exist in a repo of 18k issues/PRs
+      - 4: Probably unique, though a loose connection to other topics is possible
+      - 3: Uncertain — could go either way, might have related threads
+      - 2: Likely should be grouped — the topic is common enough to have duplicates
+      - 1: Obvious false negative — this clearly belongs with other threads
+
+      Return JSON: { score, reasoning }
+    rubric: |
+      You are evaluating a cluster of GitHub issues/PRs that were grouped together
+      by embedding similarity. Each item shows its number, kind (issue/PR), title,
+      and dedupe_summary.
+
+      Rate this cluster 1-5 for COHERENCE:
+      - 5: All items clearly about the same specific issue, feature, or component
+      - 4: Strong theme with minor outliers (1 loosely related item)
+      - 3: Related topic area but covers 2-3 distinct sub-topics that could be split
+      - 2: Weak connection — items share superficial similarity only (e.g., same component name but different issues)
+      - 1: Unrelated items grouped together, no meaningful connection
+
+      Also report:
+      - distinct_topics: integer — how many distinct sub-topics are in this cluster
+      - outlier_count: integer — items that don't belong
+      - dominant_theme: string — 1 sentence describing the main topic
+
+      Return JSON: { score, distinct_topics, outlier_count, dominant_theme, reasoning }
+    scoring:
+      primary: mean_score
+      secondary:
+        - mean_distinct_topics
+        - outlier_rate
+        - singleton_score
+    sample_seed: 42
+    batch_size: 5
+    minimum_improvement: 0.3
+    max_total_cost_usd: 20
+
+measurement:
+  command: >
+    node scripts/cluster-optimize-measure.mjs openclaw/openclaw
+    --backend vectorlite --cluster-mode bounded --max-cluster-size 200
+  timeout_seconds: 300
+  stability:
+    mode: stable
+
+scope:
+  mutable:
+    - packages/api-core/src/service.ts
+    - packages/api-core/src/cluster/
+    - packages/api-core/src/openai/provider.ts
+    - scripts/cluster-optimize-measure.mjs
+  immutable:
+    - packages/api-core/src/db/
+
+execution:
+  mode: serial
+  backend: worktree
+  max_concurrent: 1
+
+parallel:
+  shared_files:
+    - "~/.config/ghcrawl/ghcrawl.db"
+
+constraints:
+  - "clusterExperiment is read-only on the main DB — it creates a temp vectorlite DB"
+  - "Do not modify the embedding pipeline or database schema"
+  - "All experiments must use the same DB (shared_files)"
+  - "The measurement harness must accept source-kinds and aggregation as CLI args"
+
+stopping:
+  max_iterations: 30
+  max_hours: 6
+  plateau_iterations: 8

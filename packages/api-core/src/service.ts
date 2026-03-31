@@ -1237,11 +1237,17 @@ export class GHCrawlService {
     refineStep?: number;
     clusterMode?: 'basic' | 'refine' | 'bounded';
     includeClusters?: boolean;
+    sourceKinds?: EmbeddingSourceKind[];
+    aggregation?: 'max' | 'mean' | 'weighted' | 'min-of-2' | 'boost';
+    aggregationWeights?: Partial<Record<EmbeddingSourceKind, number>>;
     onProgress?: (message: string) => void;
   }): ClusterExperimentResult {
     const backend = params.backend ?? 'vectorlite';
     const repository = this.requireRepository(params.owner, params.repo);
-    const { items, sourceKinds } = this.loadClusterableThreadMeta(repository.id);
+    const loaded = this.loadClusterableThreadMeta(repository.id);
+    const sourceKinds = params.sourceKinds ?? loaded.sourceKinds;
+    const items = loaded.items;
+    const aggregation = params.aggregation ?? 'max';
     const minScore = params.minScore ?? 0.82;
     const k = params.k ?? 6;
     const candidateK = Math.max(k, params.candidateK ?? Math.max(k * 16, 64));
@@ -1258,10 +1264,10 @@ export class GHCrawlService {
     recordMemory();
 
     params.onProgress?.(
-      `[cluster-experiment] loaded ${items.length} embedded thread(s) across ${sourceKinds.length} source kind(s) for ${repository.fullName} backend=${backend} k=${k} candidateK=${candidateK} minScore=${minScore}`,
+      `[cluster-experiment] loaded ${items.length} embedded thread(s) across ${sourceKinds.length} source kind(s) for ${repository.fullName} backend=${backend} k=${k} candidateK=${candidateK} minScore=${minScore} aggregation=${aggregation}`,
     );
 
-    const aggregated = new Map<string, { leftThreadId: number; rightThreadId: number; score: number; sourceKinds: Set<EmbeddingSourceKind> }>();
+    const perSourceScores = new Map<string, { leftThreadId: number; rightThreadId: number; scores: Map<EmbeddingSourceKind, number> }>();
     let loadMs = 0;
     let setupMs = 0;
     let edgeBuildMs = 0;
@@ -1292,13 +1298,13 @@ export class GHCrawlService {
               recordMemory();
               if (!params.onProgress) return;
               params.onProgress(
-                `[cluster-experiment] exact ${processedItems + progress.processedItems}/${totalItems} source embeddings processed current_edges~=${aggregated.size + progress.currentEdgeEstimate}`,
+                `[cluster-experiment] exact ${processedItems + progress.processedItems}/${totalItems} source embeddings processed current_edges~=${perSourceScores.size + progress.currentEdgeEstimate}`,
               );
             },
           });
           edgeBuildMs += Date.now() - edgesStartedAt;
           processedItems += normalizedRows.length;
-          this.mergeSourceKindEdges(aggregated, edges, sourceKind);
+          this.collectSourceKindScores(perSourceScores, edges, sourceKind);
           recordMemory();
         }
       } else {
@@ -1375,17 +1381,17 @@ export class GHCrawlService {
             for (const candidate of ranked) {
               const score = candidate.score;
               const key = this.edgeKey(row.id, candidate.item.rowid);
-              const existing = aggregated.get(key);
+              const existing = perSourceScores.get(key);
               if (existing) {
-                existing.score = Math.max(existing.score, score);
-                existing.sourceKinds.add(sourceKind);
+                existing.scores.set(sourceKind, Math.max(existing.scores.get(sourceKind) ?? -1, score));
                 continue;
               }
-              aggregated.set(key, {
+              const scores = new Map<EmbeddingSourceKind, number>();
+              scores.set(sourceKind, score);
+              perSourceScores.set(key, {
                 leftThreadId: Math.min(row.id, candidate.item.rowid),
                 rightThreadId: Math.max(row.id, candidate.item.rowid),
-                score,
-                sourceKinds: new Set([sourceKind]),
+                scores,
               });
               addedThisRow += 1;
             }
@@ -1394,7 +1400,7 @@ export class GHCrawlService {
             if (params.onProgress && now - lastProgressAt >= CLUSTER_PROGRESS_INTERVAL_MS) {
               recordMemory();
               params.onProgress(
-                `[cluster-experiment] querying ${sourceKind} index ${processed}/${sourceRowCount} current_edges=${aggregated.size} added_this_step=${addedThisRow}`,
+                `[cluster-experiment] querying ${sourceKind} index ${processed}/${sourceRowCount} current_edges=${perSourceScores.size} added_this_step=${addedThisRow}`,
               );
               lastProgressAt = now;
             }
@@ -1406,13 +1412,18 @@ export class GHCrawlService {
         }
       }
 
+      // Finalize edge scores using the configured aggregation method
+      const defaultWeights: Record<EmbeddingSourceKind, number> = { dedupe_summary: 0.5, title: 0.3, body: 0.2 };
+      const weights = { ...defaultWeights, ...(params.aggregationWeights ?? {}) };
+      const aggregated = this.finalizeEdgeScores(perSourceScores, aggregation, weights, minScore);
+
+      params.onProgress?.(
+        `[cluster-experiment] finalized ${aggregated.length} edges from ${perSourceScores.size} candidate pairs using ${aggregation} aggregation`,
+      );
+
       const clusterStartedAt = Date.now();
       const clusterNodes = items.map((item) => ({ threadId: item.id, number: item.number, title: item.title }));
-      const clusterEdges = Array.from(aggregated.values()).map((entry) => ({
-        leftThreadId: entry.leftThreadId,
-        rightThreadId: entry.rightThreadId,
-        score: entry.score,
-      }));
+      const clusterEdges = aggregated;
       const clusterMode = params.clusterMode ?? (params.maxClusterSize !== undefined ? 'refine' : 'basic');
       const clusters = clusterMode === 'bounded'
         ? buildSizeBoundedClusters(clusterNodes, clusterEdges, {
@@ -1439,7 +1450,7 @@ export class GHCrawlService {
         tempDbPath,
         threads: items.length,
         sourceKinds: sourceKinds.length,
-        edges: aggregated.size,
+        edges: aggregated.length,
         clusters: clusters.length,
         timingBasis: 'cluster-only',
         durationMs,
@@ -3584,6 +3595,90 @@ export class GHCrawlService {
         sourceKinds: new Set([sourceKind]),
       });
     }
+  }
+
+  private collectSourceKindScores(
+    perSourceScores: Map<string, { leftThreadId: number; rightThreadId: number; scores: Map<EmbeddingSourceKind, number> }>,
+    edges: Array<{ leftThreadId: number; rightThreadId: number; score: number }>,
+    sourceKind: EmbeddingSourceKind,
+  ): void {
+    for (const edge of edges) {
+      const key = this.edgeKey(edge.leftThreadId, edge.rightThreadId);
+      const existing = perSourceScores.get(key);
+      if (existing) {
+        existing.scores.set(sourceKind, Math.max(existing.scores.get(sourceKind) ?? -1, edge.score));
+        continue;
+      }
+      const scores = new Map<EmbeddingSourceKind, number>();
+      scores.set(sourceKind, edge.score);
+      perSourceScores.set(key, {
+        leftThreadId: edge.leftThreadId,
+        rightThreadId: edge.rightThreadId,
+        scores,
+      });
+    }
+  }
+
+  private finalizeEdgeScores(
+    perSourceScores: Map<string, { leftThreadId: number; rightThreadId: number; scores: Map<EmbeddingSourceKind, number> }>,
+    aggregation: 'max' | 'mean' | 'weighted' | 'min-of-2' | 'boost',
+    weights: Record<EmbeddingSourceKind, number>,
+    minScore: number,
+  ): Array<{ leftThreadId: number; rightThreadId: number; score: number }> {
+    const result: Array<{ leftThreadId: number; rightThreadId: number; score: number }> = [];
+
+    for (const entry of perSourceScores.values()) {
+      const scoreValues = Array.from(entry.scores.values());
+      let finalScore: number;
+
+      switch (aggregation) {
+        case 'max':
+          finalScore = Math.max(...scoreValues);
+          break;
+
+        case 'mean':
+          finalScore = scoreValues.reduce((a, b) => a + b, 0) / scoreValues.length;
+          break;
+
+        case 'weighted': {
+          let weightedSum = 0;
+          let weightSum = 0;
+          for (const [kind, score] of entry.scores) {
+            const w = weights[kind] ?? 0.1;
+            weightedSum += score * w;
+            weightSum += w;
+          }
+          finalScore = weightSum > 0 ? weightedSum / weightSum : 0;
+          break;
+        }
+
+        case 'min-of-2':
+          // Require at least 2 source kinds to agree (both above minScore)
+          if (scoreValues.length < 2) {
+            continue; // Skip edges with only 1 source kind
+          }
+          finalScore = Math.max(...scoreValues);
+          break;
+
+        case 'boost': {
+          // Best score + bonus per additional agreeing source
+          const best = Math.max(...scoreValues);
+          const bonusSources = scoreValues.length - 1;
+          finalScore = Math.min(1.0, best + bonusSources * 0.05);
+          break;
+        }
+      }
+
+      if (finalScore >= minScore) {
+        result.push({
+          leftThreadId: entry.leftThreadId,
+          rightThreadId: entry.rightThreadId,
+          score: finalScore,
+        });
+      }
+    }
+
+    return result;
   }
 
   private countEmbeddingsForSourceKind(repoId: number, sourceKind: EmbeddingSourceKind): number {

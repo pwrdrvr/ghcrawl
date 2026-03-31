@@ -28,6 +28,9 @@ function parseArgs(argv) {
   let maxClusterSize;
   let refineStep;
   let clusterMode;
+  let sourceKinds;
+  let aggregation;
+  let aggregationWeights;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -40,6 +43,9 @@ function parseArgs(argv) {
     if (token === '--max-cluster-size') { maxClusterSize = Number(argv[++index]); continue; }
     if (token === '--refine-step') { refineStep = Number(argv[++index]); continue; }
     if (token === '--cluster-mode') { clusterMode = argv[++index]; continue; }
+    if (token === '--source-kinds') { sourceKinds = argv[++index].split(','); continue; }
+    if (token === '--aggregation') { aggregation = argv[++index]; continue; }
+    if (token === '--weights') { aggregationWeights = JSON.parse(argv[++index]); continue; }
     if (!token.startsWith('--')) repo = token;
   }
 
@@ -58,6 +64,9 @@ function parseArgs(argv) {
     maxClusterSize: Number.isFinite(maxClusterSize) ? maxClusterSize : undefined,
     refineStep: Number.isFinite(refineStep) ? refineStep : undefined,
     clusterMode: clusterMode || undefined,
+    sourceKinds: sourceKinds || undefined,
+    aggregation: aggregation || undefined,
+    aggregationWeights: aggregationWeights || undefined,
   };
 }
 
@@ -76,6 +85,9 @@ try {
     maxClusterSize: args.maxClusterSize,
     refineStep: args.refineStep,
     clusterMode: args.clusterMode,
+    sourceKinds: args.sourceKinds,
+    aggregation: args.aggregation,
+    aggregationWeights: args.aggregationWeights,
     onProgress: (message) => process.stderr.write(`${message}\n`),
   });
 
@@ -123,6 +135,9 @@ try {
       max_cluster_size: args.maxClusterSize ?? null,
       refine_step: args.refineStep ?? null,
       cluster_mode: args.clusterMode ?? null,
+      source_kinds: args.sourceKinds ?? null,
+      aggregation: args.aggregation ?? 'max',
+      aggregation_weights: args.aggregationWeights ?? null,
     },
 
     // Size distribution (top 20)
