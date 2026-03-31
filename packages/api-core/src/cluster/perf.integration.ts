@@ -354,6 +354,31 @@ async function runSingleCluster(
 }> {
   const service = createService(dbPath);
   try {
+    // clusterExperiment may not exist on older branches (e.g. base worktree in CI)
+    if (typeof service.clusterExperiment !== 'function') {
+      const startedAt = performance.now();
+      const result = await service.clusterRepository({
+        owner: 'openclaw',
+        repo: 'openclaw',
+        k: baseline.fixture.k,
+        minScore: baseline.fixture.minScore,
+      });
+      const durationMs = performance.now() - startedAt;
+      return {
+        durationMs,
+        totalDurationMs: durationMs,
+        loadMs: 0,
+        setupMs: 0,
+        edgeBuildMs: durationMs,
+        indexBuildMs: 0,
+        queryMs: 0,
+        clusterBuildMs: 0,
+        peakRssBytes: 0,
+        peakHeapUsedBytes: 0,
+        clusters: result.clusters,
+        edges: result.edges,
+      };
+    }
     const result = service.clusterExperiment({
       owner: 'openclaw',
       repo: 'openclaw',
@@ -523,7 +548,7 @@ function buildSummary(result: PerfRunResult): string {
   const status = result.deltaPercent > result.maxRegressionPercent ? 'FAIL' : 'PASS';
   const sampleList = result.sampleDurationsMs.map((value) => formatDurationMs(value)).join(', ');
   const suggestedBaseline = buildSuggestedBaseline(result);
-  const timingLabel = result.timingBasis === 'post-index' ? 'Fixture median (post-index)' : 'Fixture median';
+  const timingLabel = 'Fixture median';
   const bootstrapLine =
     result.baselineMedianMs === result.medianMs
       ? '- Bootstrap mode: using the current fixture median as the provisional baseline'
