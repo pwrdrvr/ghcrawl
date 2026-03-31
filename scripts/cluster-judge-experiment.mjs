@@ -68,6 +68,7 @@ function parseArgs(argv) {
   let k;
   let candidateK;
   let efSearch;
+  let backend = 'vectorlite';
   let maxClusterSize = 200;
   let clusterMode = 'bounded';
   let clusterSampleSize = 30;
@@ -86,6 +87,7 @@ function parseArgs(argv) {
     if (token === '--k') { k = Number(argv[++index]); continue; }
     if (token === '--candidate-k') { candidateK = Number(argv[++index]); continue; }
     if (token === '--ef-search') { efSearch = Number(argv[++index]); continue; }
+    if (token === '--backend') { backend = argv[++index]; continue; }
     if (token === '--max-cluster-size') { maxClusterSize = Number(argv[++index]); continue; }
     if (token === '--cluster-mode') { clusterMode = argv[++index]; continue; }
     if (token === '--cluster-sample-size') { clusterSampleSize = Number(argv[++index]); continue; }
@@ -98,6 +100,7 @@ function parseArgs(argv) {
   return {
     owner, repo: name,
     experimentId, outputDir,
+    backend,
     sourceKinds, aggregation, aggregationWeights,
     threshold, k, candidateK, efSearch,
     maxClusterSize, clusterMode,
@@ -151,13 +154,29 @@ function deterministicSample(pool, count, seed) {
 }
 
 async function judgeCluster(client, model, cluster, threadDetails) {
-  const items = cluster.memberThreadIds.map(id => {
+  // For large clusters, show a sample of items to avoid exceeding context limits
+  let displayIds = cluster.memberThreadIds;
+  let truncationNote = '';
+  if (displayIds.length > 25) {
+    // Show first 10, last 5, and 10 evenly spaced from the middle
+    const first = displayIds.slice(0, 10);
+    const last = displayIds.slice(-5);
+    const middle = [];
+    const step = Math.floor((displayIds.length - 15) / 10);
+    for (let i = 10; i < displayIds.length - 5 && middle.length < 10; i += Math.max(1, step)) {
+      middle.push(displayIds[i]);
+    }
+    displayIds = [...first, ...middle, ...last];
+    truncationNote = `\n(Showing ${displayIds.length} of ${cluster.memberThreadIds.length} items — sampled for brevity)`;
+  }
+
+  const items = displayIds.map(id => {
     const t = threadDetails.get(id);
     if (!t) return `  - Thread ID ${id}: (details not found)`;
     return `  - #${t.number} (${t.kind}): "${t.title}" — ${t.dedupeSummary || '(no summary)'}`;
   }).join('\n');
 
-  const input = `Cluster with ${cluster.memberThreadIds.length} items:\n${items}`;
+  const input = `Cluster with ${cluster.memberThreadIds.length} items:${truncationNote}\n${items}`;
 
   const response = await client.responses.create({
     model,
@@ -179,7 +198,7 @@ async function judgeCluster(client, model, cluster, threadDetails) {
         additionalProperties: false,
       }},
     },
-    max_output_tokens: 500,
+    max_output_tokens: 800,
   });
 
   try {
@@ -209,7 +228,7 @@ async function judgeSingleton(client, model, threadDetail) {
         additionalProperties: false,
       }},
     },
-    max_output_tokens: 300,
+    max_output_tokens: 500,
   });
 
   try {
@@ -234,7 +253,7 @@ try {
   const result = service.clusterExperiment({
     owner: args.owner,
     repo: args.repo,
-    backend: 'vectorlite',
+    backend: args.backend,
     minScore: args.threshold,
     k: args.k,
     candidateK: args.candidateK,

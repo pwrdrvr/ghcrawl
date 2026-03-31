@@ -13,3 +13,4 @@ packages/*/src/**/*.d.ts.map
 **/__pycache__/
 **/*.pyc
 **/.DS_Store
+.context/
