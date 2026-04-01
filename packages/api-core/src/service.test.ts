@@ -1374,7 +1374,7 @@ test('clusterRepository emits timed progress updates while identifying similarit
     });
 
     assert.ok(result.edges > 0);
-    assert.ok(messages.some((message) => /identifying similarity edges/.test(message)));
+    assert.ok(messages.some((message) => /\[cluster\] (building|querying) /.test(message)));
   } finally {
     Date.now = originalDateNow;
     service.close();

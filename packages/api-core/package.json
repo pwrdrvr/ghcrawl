@@ -53,6 +53,7 @@
     "better-sqlite3": "^12.8.0",
     "dotenv": "^17.2.2",
     "openai": "^6.32.0",
+    "vectorlite": "^0.2.0",
     "zod": "^4.3.6"
   }
 }
