@@ -938,7 +938,7 @@ export async function run(
         }
       }
       case 'cluster-experiment': {
-        const { owner, repo, values } = parseRepoFlags(rest);
+        const { owner, repo, values } = parseRepoFlags('cluster-experiment', rest);
         const backend = values.backend === 'exact' || values.backend === 'vectorlite' ? values.backend : undefined;
         const result = getService().clusterExperiment({
           owner,
@@ -947,7 +947,7 @@ export async function run(
           k: typeof values.k === 'string' ? Number(values.k) : undefined,
           minScore: typeof values.threshold === 'string' ? Number(values.threshold) : undefined,
           candidateK: typeof values['candidate-k'] === 'string' ? Number(values['candidate-k']) : undefined,
-          onProgress: writeProgress,
+          onProgress: (message: string) => writeProgress(message, stderr),
         });
         stdout.write(`${JSON.stringify(result, null, 2)}\n`);
         return;
