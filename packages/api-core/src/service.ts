@@ -47,6 +47,7 @@ import {
 
 import { buildClusters } from './cluster/build.js';
 import { buildSourceKindEdges } from './cluster/exact-edges.js';
+import { mergeClusterSnapshots, type ClusterSnapshot } from './cluster/snapshot.js';
 import {
   ensureRuntimeDirs,
   isLikelyGitHubToken,
@@ -1109,6 +1110,8 @@ export class GHCrawlService {
         edges,
       );
       this.persistClusterRun(repository.id, runId, aggregatedEdges, clusters);
+      this.persistClusterSnapshots(repository.id, runId);
+      this.flipClusterState(repository.id, runId);
       this.pruneOldClusterRuns(repository.id, runId);
 
       params.onProgress?.(`[cluster] persisted ${clusters.length} cluster(s) and pruned older cluster runs`);
@@ -1297,9 +1300,7 @@ export class GHCrawlService {
 
   listClusters(params: { owner: string; repo: string; includeClosed?: boolean }): ClustersResponse {
     const repository = this.requireRepository(params.owner, params.repo);
-    const latestRun = this.db
-      .prepare("select id from cluster_runs where repo_id = ? and status = 'completed' order by id desc limit 1")
-      .get(repository.id) as { id: number } | undefined;
+    const latestRun = this.getLatestClusterRun(repository.id);
 
     if (!latestRun) {
       return clustersResponseSchema.parse({ repository, clusters: [] });
@@ -1863,6 +1864,18 @@ export class GHCrawlService {
   }
 
   private getLatestClusterRun(repoId: number): { id: number; finished_at: string | null } | null {
+    // Prefer the repo_cluster_state pointer when available
+    const state = this.db
+      .prepare(
+        `select cr.id, cr.finished_at
+         from repo_cluster_state rcs
+         join cluster_runs cr on cr.id = rcs.active_cluster_run_id
+         where rcs.repo_id = ?`,
+      )
+      .get(repoId) as { id: number; finished_at: string | null } | undefined;
+    if (state) return state;
+
+    // Fall back to latest completed run (for repos that haven't been re-clustered yet)
     return (
       (this.db
         .prepare("select id, finished_at from cluster_runs where repo_id = ? and status = 'completed' order by id desc limit 1")
@@ -3250,7 +3263,101 @@ export class GHCrawlService {
   }
 
   private pruneOldClusterRuns(repoId: number, keepRunId: number): void {
-    this.db.prepare('delete from cluster_runs where repo_id = ? and id <> ?').run(repoId, keepRunId);
+    // Keep runs referenced by repo_cluster_state (active + previous)
+    const state = this.db
+      .prepare('select active_cluster_run_id, previous_cluster_run_id from repo_cluster_state where repo_id = ?')
+      .get(repoId) as { active_cluster_run_id: number | null; previous_cluster_run_id: number | null } | undefined;
+
+    const keepIds = new Set<number>([keepRunId]);
+    if (state?.active_cluster_run_id) keepIds.add(state.active_cluster_run_id);
+    if (state?.previous_cluster_run_id) keepIds.add(state.previous_cluster_run_id);
+
+    const placeholders = Array.from(keepIds).map(() => '?').join(',');
+    this.db
+      .prepare(`delete from cluster_runs where repo_id = ? and id not in (${placeholders})`)
+      .run(repoId, ...keepIds);
+  }
+
+  private persistClusterSnapshots(repoId: number, runId: number): void {
+    const clusters = this.db
+      .prepare(
+        `select c.id as cluster_id, c.representative_thread_id, c.member_count,
+                group_concat(cm.thread_id) as member_ids
+         from clusters c
+         left join cluster_members cm on cm.cluster_id = c.id
+         where c.cluster_run_id = ?
+         group by c.id`,
+      )
+      .all(runId) as Array<{
+        cluster_id: number;
+        representative_thread_id: number | null;
+        member_count: number;
+        member_ids: string | null;
+      }>;
+
+    const insert = this.db.prepare(
+      `insert into cluster_snapshots (repo_id, cluster_run_id, cluster_id, representative_thread_id, member_thread_ids, member_count, created_at)
+       values (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const createdAt = nowIso();
+
+    this.db.transaction(() => {
+      for (const cluster of clusters) {
+        const memberIds = cluster.member_ids
+          ? cluster.member_ids.split(',').map(Number).sort((a, b) => a - b)
+          : [];
+        insert.run(
+          repoId,
+          runId,
+          cluster.cluster_id,
+          cluster.representative_thread_id,
+          asJson(memberIds),
+          cluster.member_count,
+          createdAt,
+        );
+      }
+    })();
+  }
+
+  private flipClusterState(repoId: number, newRunId: number): void {
+    const existing = this.db
+      .prepare('select active_cluster_run_id from repo_cluster_state where repo_id = ?')
+      .get(repoId) as { active_cluster_run_id: number | null } | undefined;
+
+    const previousRunId = existing?.active_cluster_run_id ?? null;
+    const updatedAt = nowIso();
+
+    this.db
+      .prepare(
+        `insert into repo_cluster_state (repo_id, active_cluster_run_id, previous_cluster_run_id, updated_at)
+         values (?, ?, ?, ?)
+         on conflict(repo_id) do update set
+           previous_cluster_run_id = excluded.previous_cluster_run_id,
+           active_cluster_run_id = excluded.active_cluster_run_id,
+           updated_at = excluded.updated_at`,
+      )
+      .run(repoId, newRunId, previousRunId, updatedAt);
+  }
+
+  loadClusterSnapshots(runId: number): ClusterSnapshot[] {
+    const rows = this.db
+      .prepare(
+        `select cluster_id, representative_thread_id, member_thread_ids
+         from cluster_snapshots
+         where cluster_run_id = ?
+         order by cluster_id`,
+      )
+      .all(runId) as Array<{
+        cluster_id: number;
+        representative_thread_id: number | null;
+        member_thread_ids: string;
+      }>;
+
+    return rows.map((row) => ({
+      clusterId: row.cluster_id,
+      representativeThreadId: row.representative_thread_id,
+      members: new Set<number>(JSON.parse(row.member_thread_ids) as number[]),
+    }));
   }
 
   private upsertSummary(threadId: number, contentHash: string, summaryKind: string, summaryText: string): void {
