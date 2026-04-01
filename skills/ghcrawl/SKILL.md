@@ -21,6 +21,13 @@ In default mode, do not treat missing credentials as a problem unless the user e
 
 Even in API-enabled mode, never run `sync`, `embed`, `cluster`, or `refresh` unless the user explicitly asks for that work. Those commands can take a long time, consume paid API usage, and trigger rate limiting if used too often.
 
+Current pipeline defaults to keep in mind:
+
+- persistent semantic search and clustering use a `vectorlite` sidecar index
+- the default summary model is `gpt-5-mini`
+- the default embedding basis is `title_summary`, which means `refresh` may run summarize before embed
+- changing summary model or embedding basis with `ghcrawl configure` makes the next refresh rebuild vectors and clusters
+
 Also never run `close-thread` or `close-cluster` unless the user explicitly asks you to mark a local thread or cluster closed.
 
 ## When to use this skill
@@ -59,6 +66,7 @@ ghcrawl threads owner/repo --numbers 42,43,44 --json
 ghcrawl author owner/repo --login lqquan --json
 ghcrawl search owner/repo --query "download stalls" --mode hybrid --json
 ghcrawl neighbors owner/repo --number 42 --limit 10 --json
+ghcrawl configure --json
 ```
 
 These operate on the existing local SQLite dataset.
@@ -73,6 +81,8 @@ By default:
 If the user explicitly wants to inspect those records, add `--include-closed`.
 
 Use `threads --numbers 12345` when you need to find the cluster for one specific issue/PR number. The returned thread record includes `clusterId`. If it is non-null, follow with `cluster-detail --id <clusterId>`.
+
+Use `configure --json` when you need to confirm the currently selected summary model or embedding basis before suggesting an expensive refresh.
 
 Use `threads --numbers ...` when you need a batch of specific issue/PR records. Do not pay the CLI startup cost 10 times for 10 separate single-thread lookups.
 
@@ -134,8 +144,9 @@ ghcrawl refresh owner/repo
 This runs, in fixed order:
 
 1. GitHub sync/reconcile
-2. embed refresh
-3. cluster rebuild
+2. summarize-if-needed
+3. embed refresh
+4. cluster rebuild
 
 You may skip steps only when the user explicitly wants that or the freshness state makes it unnecessary:
 

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { GHCrawlService } from '@ghcrawl/api-core';
+import { GHCrawlService, readPersistedConfig } from '@ghcrawl/api-core';
 import { formatDoctorReport, formatLogLine, getExitCode, parseOwnerRepo, parseRepoFlags, resolveSinceValue, run, runCli } from './main.js';
 
 function createWritableCapture(isTTY?: boolean) {
@@ -39,6 +39,7 @@ function makeRunContext(): { env: NodeJS.ProcessEnv; cwd: string; cleanup: () =>
 const publicCommands = [
   'init',
   'doctor',
+  'configure',
   'version',
   'sync',
   'refresh',
@@ -169,6 +170,38 @@ test('run prints json doctor output when explicitly requested', async () => {
   assert.match(stdout.read(), /"version":/);
   assert.match(stdout.read(), /"health"/);
   assert.match(stdout.read(), /"github"/);
+});
+
+test('configure prints current persisted settings and cost estimates', async () => {
+  const stdout = createWritableCapture(true);
+  const context = makeRunContext();
+
+  try {
+    await run(['configure'], stdout.stream, { env: context.env, cwd: context.cwd });
+  } finally {
+    context.cleanup();
+  }
+
+  assert.match(stdout.read(), /ghcrawl configure/);
+  assert.match(stdout.read(), /summary model: gpt-5-mini/);
+  assert.match(stdout.read(), /embedding basis: title_summary/);
+  assert.match(stdout.read(), /gpt-5\.4-mini: ~\$30 USD/);
+});
+
+test('configure persists summary model changes', async () => {
+  const stdout = createWritableCapture();
+  const context = makeRunContext();
+
+  try {
+    await run(['configure', '--summary-model', 'gpt-5.4-mini', '--json'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+    const persisted = readPersistedConfig({ env: context.env, cwd: context.cwd });
+    assert.equal(persisted.data.summaryModel, 'gpt-5.4-mini');
+  } finally {
+    context.cleanup();
+  }
 });
 
 test('unknown command exits with code 2 and a top-level help hint', async () => {
@@ -409,6 +442,11 @@ test('formatDoctorReport renders a human-readable health summary', () => {
       formatOk: false,
       authOk: false,
       error: 'missing',
+    },
+    vectorlite: {
+      configured: true,
+      runtimeOk: true,
+      error: null,
     },
   });
 

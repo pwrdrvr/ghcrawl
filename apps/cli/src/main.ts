@@ -5,7 +5,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
-import { createApiServer, GHCrawlService, loadConfig, type LoadConfigOptions } from '@ghcrawl/api-core';
+import { createApiServer, GHCrawlService, loadConfig, readPersistedConfig, writePersistedConfig, type LoadConfigOptions } from '@ghcrawl/api-core';
 import { createHeapDiagnostics, type HeapDiagnostics } from './heap-diagnostics.js';
 import { runInitWizard } from './init-wizard.js';
 import { startTui } from './tui/app.js';
@@ -13,6 +13,7 @@ import { startTui } from './tui/app.js';
 type CommandName =
   | 'init'
   | 'doctor'
+  | 'configure'
   | 'version'
   | 'sync'
   | 'refresh'
@@ -43,7 +44,28 @@ type CommandSpec = {
 };
 
 type DoctorResult = Awaited<ReturnType<GHCrawlService['doctor']>>;
-type DoctorReport = DoctorResult & { version: string };
+type DoctorReport = DoctorResult & {
+  version: string;
+  vectorlite?: {
+    configured: boolean;
+    runtimeOk: boolean;
+    error: string | null;
+  };
+};
+
+type ConfigureReport = {
+  configPath: string;
+  updated: boolean;
+  summaryModel: 'gpt-5-mini' | 'gpt-5.4-mini';
+  embeddingBasis: 'title_original' | 'title_summary';
+  vectorBackend: 'vectorlite';
+  costEstimateUsd: {
+    sampleThreads: number;
+    pricingDate: string;
+    gpt5Mini: number;
+    gpt54Mini: number;
+  };
+};
 
 type ParsedGlobalFlags = {
   argv: string[];
@@ -78,6 +100,18 @@ const COMMAND_SPECS: readonly CommandSpec[] = [
     description: 'Check local config, database wiring, and auth health.',
     options: ['--json  Emit machine-readable JSON output explicitly'],
     examples: ['ghcrawl doctor', 'ghcrawl doctor --json'],
+    agentJson: true,
+  },
+  {
+    name: 'configure',
+    synopsis: 'configure [--summary-model gpt-5-mini|gpt-5.4-mini] [--embedding-basis title_original|title_summary] [--json]',
+    description: 'Show or update persisted summarization and embedding settings.',
+    options: [
+      '--summary-model <model>  Select gpt-5-mini or gpt-5.4-mini for summarization',
+      '--embedding-basis <basis>  Select title_original or title_summary for active vectors',
+      '--json  Emit machine-readable JSON output explicitly',
+    ],
+    examples: ['ghcrawl configure', 'ghcrawl configure --summary-model gpt-5.4-mini', 'ghcrawl configure --embedding-basis title_original --json'],
     agentJson: true,
   },
   {
@@ -578,6 +612,24 @@ function parseEnum<T extends string>(command: CommandName, flagName: string, val
   throw new CliUsageError(`Invalid --${flagName}: ${value}. Use one of ${allowed.join(', ')}.`, command);
 }
 
+function buildConfigureReport(options: {
+  configPath: string;
+  updated: boolean;
+  summaryModel: 'gpt-5-mini' | 'gpt-5.4-mini';
+  embeddingBasis: 'title_original' | 'title_summary';
+  vectorBackend: 'vectorlite';
+}): ConfigureReport {
+  return {
+    ...options,
+    costEstimateUsd: {
+      sampleThreads: 20_000,
+      pricingDate: 'April 1, 2026',
+      gpt5Mini: 12,
+      gpt54Mini: 30,
+    },
+  };
+}
+
 export function formatDoctorReport(result: DoctorReport): string {
   const lines = [
     'ghcrawl doctor',
@@ -610,6 +662,39 @@ export function formatDoctorReport(result: DoctorReport): string {
   if (result.openai.error) {
     lines.push(`  note: ${result.openai.error}`);
   }
+  lines.push(
+    '',
+    'Vectorlite',
+    `  configured: ${formatBooleanStatus(result.vectorlite?.configured ?? false)}`,
+    `  runtime ok: ${formatBooleanStatus(result.vectorlite?.runtimeOk ?? false)}`,
+  );
+  if (result.vectorlite?.error) {
+    lines.push(`  note: ${result.vectorlite.error}`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+export function formatConfigureReport(result: ConfigureReport): string {
+  const basisLabel = result.embeddingBasis === 'title_summary'
+    ? 'title + dedupe summary'
+    : 'title + original body';
+  const lines = [
+    'ghcrawl configure',
+    `config path: ${result.configPath}`,
+    `updated: ${result.updated ? 'yes' : 'no'}`,
+    '',
+    'Active settings',
+    `  summary model: ${result.summaryModel}`,
+    `  embedding basis: ${result.embeddingBasis} (${basisLabel})`,
+    `  vector backend: ${result.vectorBackend}`,
+    '',
+    `Estimated one-time summary cost for ~${result.costEstimateUsd.sampleThreads.toLocaleString()} threads`,
+    `  pricing date: ${result.costEstimateUsd.pricingDate}`,
+    `  gpt-5-mini: ~$${result.costEstimateUsd.gpt5Mini.toFixed(0)} USD`,
+    `  gpt-5.4-mini: ~$${result.costEstimateUsd.gpt54Mini.toFixed(0)} USD`,
+    '',
+    'Changing summary model or embedding basis will make the next refresh rebuild vectors and clusters.',
+  ];
   return `${lines.join('\n')}\n`;
 }
 
@@ -783,6 +868,41 @@ export async function run(
         };
         const shouldWriteJson = values.json === true || (stdout as NodeJS.WriteStream).isTTY !== true;
         stdout.write(shouldWriteJson ? `${JSON.stringify(result, null, 2)}\n` : formatDoctorReport(result));
+        return;
+      }
+      case 'configure': {
+        const parsed = parseArgsForCommand('configure', rest, {
+          'summary-model': { type: 'string' },
+          'embedding-basis': { type: 'string' },
+          json: { type: 'boolean' },
+        });
+        const values = parsed.values as RepoCommandValues;
+        const summaryModel = parseEnum('configure', 'summary-model', values['summary-model'], ['gpt-5-mini', 'gpt-5.4-mini']);
+        const embeddingBasis = parseEnum('configure', 'embedding-basis', values['embedding-basis'], ['title_original', 'title_summary']);
+        const current = getConfig();
+        const stored = readPersistedConfig(loadConfigOptions);
+        const next = {
+          ...stored.data,
+          summaryModel: summaryModel ?? current.summaryModel,
+          embeddingBasis: embeddingBasis ?? current.embeddingBasis,
+          vectorBackend: 'vectorlite' as const,
+        };
+        const updated =
+          next.summaryModel !== current.summaryModel ||
+          next.embeddingBasis !== current.embeddingBasis ||
+          next.vectorBackend !== current.vectorBackend;
+        if (updated) {
+          writePersistedConfig(next, loadConfigOptions);
+        }
+        const result = buildConfigureReport({
+          configPath: current.configPath,
+          updated,
+          summaryModel: next.summaryModel as 'gpt-5-mini' | 'gpt-5.4-mini',
+          embeddingBasis: next.embeddingBasis as 'title_original' | 'title_summary',
+          vectorBackend: 'vectorlite',
+        });
+        const shouldWriteJson = values.json === true || (stdout as NodeJS.WriteStream).isTTY !== true;
+        stdout.write(shouldWriteJson ? `${JSON.stringify(result, null, 2)}\n` : formatConfigureReport(result));
         return;
       }
       case 'version': {

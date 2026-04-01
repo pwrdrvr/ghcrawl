@@ -24,6 +24,16 @@ Do not call this automatically on every skill invocation. Use it when:
 
 If the user asked only for read-only analysis, missing auth is not itself a blocker. Work from the existing local dataset through the CLI.
 
+### `ghcrawl configure --json`
+
+Shows the current persisted summary model, embedding basis, vector backend, and the built-in one-time summary cost estimate.
+
+Use this when:
+
+- you need to confirm whether summaries are using `gpt-5-mini` or `gpt-5.4-mini`
+- you need to confirm whether embeddings are built from `title_original` or `title_summary`
+- you want to estimate whether a first refresh after a config change will be expensive
+
 ### `ghcrawl threads owner/repo --numbers <n,n,...> --json`
 
 Bulk read path for specific issue/PR numbers from the local DB.
@@ -63,8 +73,9 @@ Useful flags:
 Runs the staged pipeline in fixed order:
 
 1. GitHub sync/reconcile
-2. embeddings
-3. clusters
+2. summarize-if-needed
+3. embeddings
+4. clusters
 
 Optional skips:
 
@@ -173,6 +184,7 @@ If `ghcrawl` is not installed globally:
 
 ```bash
 pnpm --filter ghcrawl cli doctor --json
+pnpm --filter ghcrawl cli configure --json
 pnpm --filter ghcrawl cli threads owner/repo --numbers 12345 --json
 pnpm --filter ghcrawl cli threads owner/repo --numbers 42,43,44 --json
 pnpm --filter ghcrawl cli threads owner/repo --numbers 42,43,44 --include-closed --json
