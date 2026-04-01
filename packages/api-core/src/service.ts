@@ -57,6 +57,7 @@ import {
   loadConfig,
   requireGithubToken,
   requireOpenAiKey,
+  type EmbeddingBasis,
   type ConfigValueSource,
   type GitcrawlConfig,
 } from './config.js';
@@ -66,6 +67,8 @@ import { buildCanonicalDocument, isBotLikeAuthor } from './documents/normalize.j
 import { makeGitHubClient, type GitHubClient } from './github/client.js';
 import { OpenAiProvider, type AiProvider } from './openai/provider.js';
 import { cosineSimilarity, dotProduct, normalizeEmbedding, rankNearestNeighbors, rankNearestNeighborsByScore } from './search/exact.js';
+import type { VectorStore } from './vector/store.js';
+import { VectorliteStore } from './vector/vectorlite-store.js';
 
 type RunTable = 'sync_runs' | 'summary_runs' | 'embedding_runs' | 'cluster_runs';
 
@@ -115,6 +118,39 @@ type EmbeddingTask = {
 type StoredEmbeddingRow = ThreadRow & {
   source_kind: EmbeddingSourceKind;
   embedding_json: string;
+};
+
+type ActiveVectorTask = {
+  threadId: number;
+  threadNumber: number;
+  basis: EmbeddingBasis;
+  text: string;
+  contentHash: string;
+  estimatedTokens: number;
+  wasTruncated: boolean;
+};
+
+type ActiveVectorRow = ThreadRow & {
+  basis: EmbeddingBasis;
+  model: string;
+  dimensions: number;
+  content_hash: string;
+  vector_json: string;
+  vector_backend: string;
+};
+
+type RepoPipelineStateRow = {
+  repo_id: number;
+  summary_model: string;
+  summary_prompt_version: string;
+  embedding_basis: EmbeddingBasis;
+  embed_model: string;
+  embed_dimensions: number;
+  embed_pipeline_version: string;
+  vector_backend: string;
+  vectors_current_at: string | null;
+  clusters_current_at: string | null;
+  updated_at: string;
 };
 
 type ClusterExperimentMemoryStats = {
@@ -172,9 +208,10 @@ type EmbeddingWorkset = {
     title: string;
     body: string | null;
   }>;
-  tasks: EmbeddingTask[];
+  tasks: ActiveVectorTask[];
   existing: Map<string, string>;
-  pending: EmbeddingTask[];
+  pending: ActiveVectorTask[];
+  missingSummaryThreadNumbers: number[];
 };
 
 type SyncCursorState = {
@@ -288,6 +325,11 @@ export type DoctorResult = {
     authOk: boolean;
     error: string | null;
   };
+  vectorlite: {
+    configured: boolean;
+    runtimeOk: boolean;
+    error: string | null;
+  };
 };
 
 type SyncOptions = {
@@ -317,6 +359,9 @@ const EMBED_TRUNCATION_MARKER = '\n\n[truncated for embedding]';
 const EMBED_CONTEXT_RETRY_ATTEMPTS = 5;
 const EMBED_CONTEXT_RETRY_FALLBACK_SHRINK_RATIO = 0.9;
 const EMBED_CONTEXT_RETRY_TARGET_BUFFER_RATIO = 0.95;
+const SUMMARY_PROMPT_VERSION = 'v1';
+const ACTIVE_EMBED_DIMENSIONS = 1024;
+const ACTIVE_EMBED_PIPELINE_VERSION = 'vectorlite-1024-v1';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -480,12 +525,14 @@ export class GHCrawlService {
   readonly db: SqliteDatabase;
   readonly github?: GitHubClient;
   readonly ai?: AiProvider;
+  readonly vectorStore: VectorStore;
 
   constructor(options: {
     config?: GitcrawlConfig;
     db?: SqliteDatabase;
     github?: GitHubClient;
     ai?: AiProvider;
+    vectorStore?: VectorStore;
   } = {}) {
     this.config = options.config ?? loadConfig();
     ensureRuntimeDirs(this.config);
@@ -493,9 +540,11 @@ export class GHCrawlService {
     migrate(this.db);
     this.github = options.github ?? (this.config.githubToken ? makeGitHubClient({ token: this.config.githubToken }) : undefined);
     this.ai = options.ai ?? (this.config.openaiApiKey ? new OpenAiProvider(this.config.openaiApiKey) : undefined);
+    this.vectorStore = options.vectorStore ?? new VectorliteStore();
   }
 
   close(): void {
+    this.vectorStore.close();
     this.db.close();
   }
 
@@ -562,7 +611,18 @@ export class GHCrawlService {
       }
     }
 
-    return { health, github, openai };
+    const vectorliteHealth = this.vectorStore.checkRuntime();
+
+    return {
+      health,
+      github,
+      openai,
+      vectorlite: {
+        configured: this.config.vectorBackend === 'vectorlite',
+        runtimeOk: vectorliteHealth.ok,
+        error: vectorliteHealth.error,
+      },
+    };
   }
 
   listRepositories(): RepositoriesResponse {
@@ -982,10 +1042,12 @@ export class GHCrawlService {
       const pending = sources.filter((row) => {
         const latest = this.db
           .prepare(
-            'select content_hash from document_summaries where thread_id = ? and summary_kind = ? and model = ? limit 1',
+            'select content_hash, prompt_version from document_summaries where thread_id = ? and summary_kind = ? and model = ? limit 1',
           )
-          .get(row.id, 'dedupe_summary', this.config.summaryModel) as { content_hash: string } | undefined;
-        return latest?.content_hash !== row.summaryContentHash;
+          .get(row.id, 'dedupe_summary', this.config.summaryModel) as
+          | { content_hash: string; prompt_version: string | null }
+          | undefined;
+        return latest?.content_hash !== row.summaryContentHash || latest?.prompt_version !== SUMMARY_PROMPT_VERSION;
       });
 
       params.onProgress?.(
@@ -1131,22 +1193,32 @@ export class GHCrawlService {
     const runId = this.startRun('embedding_runs', repository.id, params.threadNumber ? `thread:${params.threadNumber}` : repository.fullName);
 
     try {
-      const { rows, tasks, pending } = this.getEmbeddingWorkset(repository.id, params.threadNumber);
+      if (!this.isRepoVectorStateCurrent(repository.id) && params.threadNumber === undefined) {
+        this.resetRepositoryVectors(repository.id, repository.fullName);
+      }
+
+      const { rows, tasks, pending, missingSummaryThreadNumbers } = this.getEmbeddingWorkset(repository.id, params.threadNumber);
       const skipped = tasks.length - pending.length;
       const truncated = tasks.filter((task) => task.wasTruncated).length;
 
+      if (missingSummaryThreadNumbers.length > 0) {
+        throw new Error(
+          `Embedding basis ${this.config.embeddingBasis} requires summaries before embedding. Missing summaries for thread(s): ${missingSummaryThreadNumbers.slice(0, 10).join(', ')}${missingSummaryThreadNumbers.length > 10 ? ', …' : ''}.`,
+        );
+      }
+
       params.onProgress?.(
-        `[embed] loaded ${rows.length} open thread(s) and ${tasks.length} embedding source(s) for ${repository.fullName}`,
+        `[embed] loaded ${rows.length} open thread(s) and ${tasks.length} active vector task(s) for ${repository.fullName}`,
       );
       params.onProgress?.(
-        `[embed] pending=${pending.length} skipped=${skipped} truncated=${truncated} model=${this.config.embedModel} batch_size=${this.config.embedBatchSize} concurrency=${this.config.embedConcurrency} max_unread=${this.config.embedMaxUnread} max_batch_tokens=${EMBED_MAX_BATCH_TOKENS}`,
+        `[embed] pending=${pending.length} skipped=${skipped} truncated=${truncated} model=${this.config.embedModel} dimensions=${ACTIVE_EMBED_DIMENSIONS} basis=${this.config.embeddingBasis} batch_size=${this.config.embedBatchSize} concurrency=${this.config.embedConcurrency} max_unread=${this.config.embedMaxUnread} max_batch_tokens=${EMBED_MAX_BATCH_TOKENS}`,
       );
 
       let embedded = 0;
       const batches = this.chunkEmbeddingTasks(pending, this.config.embedBatchSize, EMBED_MAX_BATCH_TOKENS);
       const mapper = new IterableMapper(
         batches,
-        async (batch: EmbeddingTask[]) => {
+        async (batch: ActiveVectorTask[]) => {
           return this.embedBatchWithRecovery(ai, batch, params.onProgress);
         },
         {
@@ -1158,17 +1230,18 @@ export class GHCrawlService {
       let completedBatches = 0;
       for await (const batchResult of mapper) {
         completedBatches += 1;
-        const numbers = batchResult.map(({ task }) => `#${task.threadNumber}:${task.sourceKind}`);
+        const numbers = batchResult.map(({ task }) => `#${task.threadNumber}:${task.basis}`);
         const estimatedTokens = batchResult.reduce((sum, { task }) => sum + task.estimatedTokens, 0);
         params.onProgress?.(
           `[embed] batch ${completedBatches}/${Math.max(batches.length, 1)} size=${batchResult.length} est_tokens=${estimatedTokens} items=${numbers.join(',')}`,
         );
         for (const { task, embedding } of batchResult) {
-          this.upsertEmbedding(task.threadId, task.sourceKind, task.contentHash, embedding);
+          this.upsertActiveVector(repository.id, repository.fullName, task.threadId, task.basis, task.contentHash, embedding);
           embedded += 1;
         }
       }
 
+      this.markRepoVectorsCurrent(repository.id);
       this.finishRun('embedding_runs', runId, 'completed', { embedded });
       return embedResultSchema.parse({ runId, embedded });
     } catch (error) {
@@ -1190,16 +1263,68 @@ export class GHCrawlService {
     const k = params.k ?? 6;
 
     try {
-      const { items, sourceKinds } = this.loadClusterableThreadMeta(repository.id);
+      let items: Array<{ id: number; number: number; title: string }>;
+      let aggregatedEdges: Map<string, { leftThreadId: number; rightThreadId: number; score: number; sourceKinds: Set<EmbeddingSourceKind> }>;
 
-      params.onProgress?.(
-        `[cluster] loaded ${items.length} embedded thread(s) across ${sourceKinds.length} source kind(s) for ${repository.fullName} k=${k} minScore=${minScore}`,
-      );
-      const aggregatedEdges = await this.aggregateRepositoryEdges(repository.id, sourceKinds, {
-        limit: k,
-        minScore,
-        onProgress: params.onProgress,
-      });
+      if (this.isRepoVectorStateCurrent(repository.id)) {
+        const vectorItems = this.loadClusterableActiveVectorMeta(repository.id);
+        const activeIds = new Set(vectorItems.map((item) => item.id));
+        const candidateK = Math.max(k * 16, 64);
+        aggregatedEdges = new Map();
+        let processed = 0;
+        let lastProgressAt = Date.now();
+
+        params.onProgress?.(
+          `[cluster] loaded ${vectorItems.length} active vector(s) for ${repository.fullName} backend=${this.config.vectorBackend} k=${k} candidateK=${candidateK} minScore=${minScore}`,
+        );
+        for (const item of vectorItems) {
+          const neighbors = this.vectorStore.queryNearest({
+            storePath: this.repoVectorStorePath(repository.fullName),
+            dimensions: ACTIVE_EMBED_DIMENSIONS,
+            vector: item.embedding,
+            limit: k,
+            candidateK: candidateK + 1,
+            excludeThreadId: item.id,
+          });
+          for (const neighbor of neighbors) {
+            if (!activeIds.has(neighbor.threadId)) continue;
+            if (neighbor.score < minScore) continue;
+            const key = this.edgeKey(item.id, neighbor.threadId);
+            const existing = aggregatedEdges.get(key);
+            if (existing) {
+              existing.score = Math.max(existing.score, neighbor.score);
+            } else {
+              aggregatedEdges.set(key, {
+                leftThreadId: Math.min(item.id, neighbor.threadId),
+                rightThreadId: Math.max(item.id, neighbor.threadId),
+                score: neighbor.score,
+                sourceKinds: new Set(['dedupe_summary']),
+              });
+            }
+          }
+          processed += 1;
+          const now = Date.now();
+          if (params.onProgress && now - lastProgressAt >= CLUSTER_PROGRESS_INTERVAL_MS) {
+            params.onProgress(`[cluster] queried ${processed}/${vectorItems.length} vectors current_edges=${aggregatedEdges.size}`);
+            lastProgressAt = now;
+          }
+        }
+        items = vectorItems;
+      } else if (this.hasLegacyEmbeddings(repository.id)) {
+        const legacy = this.loadClusterableThreadMeta(repository.id);
+        items = legacy.items;
+        params.onProgress?.(
+          `[cluster] loaded ${items.length} legacy embedded thread(s) across ${legacy.sourceKinds.length} source kind(s) for ${repository.fullName} k=${k} minScore=${minScore}`,
+        );
+        aggregatedEdges = await this.aggregateRepositoryEdges(repository.id, legacy.sourceKinds, {
+          limit: k,
+          minScore,
+          onProgress: params.onProgress,
+        });
+      } else {
+        throw new Error(`Vectors for ${repository.fullName} are stale or missing. Run refresh or embed first.`);
+      }
+
       const edges = Array.from(aggregatedEdges.values()).map((entry) => ({
         leftThreadId: entry.leftThreadId,
         rightThreadId: entry.rightThreadId,
@@ -1214,6 +1339,9 @@ export class GHCrawlService {
       );
       this.persistClusterRun(repository.id, runId, aggregatedEdges, clusters);
       this.pruneOldClusterRuns(repository.id, runId);
+      if (this.isRepoVectorStateCurrent(repository.id)) {
+        this.markRepoClustersCurrent(repository.id);
+      }
 
       params.onProgress?.(`[cluster] persisted ${clusters.length} cluster(s) and pruned older cluster runs`);
 
@@ -1517,11 +1645,30 @@ export class GHCrawlService {
     }
 
     if (mode !== 'keyword' && this.ai) {
-      const [queryEmbedding] = await this.ai.embedTexts({ model: this.config.embedModel, texts: [params.query] });
-      for (const row of this.iterateStoredEmbeddings(repository.id)) {
-        const score = cosineSimilarity(queryEmbedding, JSON.parse(row.embedding_json) as number[]);
-        if (score < 0.2) continue;
-        semanticScores.set(row.id, Math.max(semanticScores.get(row.id) ?? -1, score));
+      if (this.isRepoVectorStateCurrent(repository.id)) {
+        const [queryEmbedding] = await this.ai.embedTexts({
+          model: this.config.embedModel,
+          texts: [params.query],
+          dimensions: ACTIVE_EMBED_DIMENSIONS,
+        });
+        const neighbors = this.vectorStore.queryNearest({
+          storePath: this.repoVectorStorePath(repository.fullName),
+          dimensions: ACTIVE_EMBED_DIMENSIONS,
+          vector: queryEmbedding,
+          limit: limit * 2,
+          candidateK: Math.max(limit * 8, 64),
+        });
+        for (const neighbor of neighbors) {
+          if (neighbor.score < 0.2) continue;
+          semanticScores.set(neighbor.threadId, Math.max(semanticScores.get(neighbor.threadId) ?? -1, neighbor.score));
+        }
+      } else if (this.hasLegacyEmbeddings(repository.id)) {
+        const [queryEmbedding] = await this.ai.embedTexts({ model: this.config.embedModel, texts: [params.query] });
+        for (const row of this.iterateStoredEmbeddings(repository.id)) {
+          const score = cosineSimilarity(queryEmbedding, JSON.parse(row.embedding_json) as number[]);
+          if (score < 0.2) continue;
+          semanticScores.set(row.id, Math.max(semanticScores.get(row.id) ?? -1, score));
+        }
       }
     }
 
@@ -1617,45 +1764,109 @@ export class GHCrawlService {
     const limit = params.limit ?? 10;
     const minScore = params.minScore ?? 0.2;
 
-    const targetRows = this.loadStoredEmbeddingsForThreadNumber(repository.id, params.threadNumber);
-    if (targetRows.length === 0) {
-      throw new Error(
-        `Thread #${params.threadNumber} for ${repository.fullName} was not found with an embedding. Run embed first.`,
-      );
-    }
-    const targetRow = targetRows[0];
-    const targetBySource = new Map<EmbeddingSourceKind, number[]>();
-    for (const row of targetRows) {
-      targetBySource.set(row.source_kind, JSON.parse(row.embedding_json) as number[]);
-    }
+    const targetRow = this.db
+      .prepare(
+        `select t.*, tv.basis, tv.model, tv.dimensions, tv.content_hash, tv.vector_json, tv.vector_backend
+         from threads t
+         join thread_vectors tv on tv.thread_id = t.id
+         where t.repo_id = ?
+           and t.number = ?
+           and t.state = 'open'
+           and t.closed_at_local is null
+           and tv.model = ?
+           and tv.basis = ?
+           and tv.dimensions = ?
+         limit 1`,
+      )
+      .get(
+        repository.id,
+        params.threadNumber,
+        this.config.embedModel,
+        this.config.embeddingBasis,
+        ACTIVE_EMBED_DIMENSIONS,
+      ) as ActiveVectorRow | undefined;
+    let responseThread: ThreadRow | ActiveVectorRow;
+    let neighbors: Array<{ threadId: number; number: number; kind: 'issue' | 'pull_request'; title: string; score: number }>;
 
-    const aggregated = new Map<number, { number: number; kind: 'issue' | 'pull_request'; title: string; score: number }>();
-    for (const row of this.iterateStoredEmbeddings(repository.id)) {
-      if (row.id === targetRow.id) continue;
-      const targetEmbedding = targetBySource.get(row.source_kind);
-      if (!targetEmbedding) continue;
-      const score = cosineSimilarity(targetEmbedding, JSON.parse(row.embedding_json) as number[]);
-      if (score < minScore) continue;
-      const previous = aggregated.get(row.id);
-      if (!previous || score > previous.score) {
-        aggregated.set(row.id, { number: row.number, kind: row.kind, title: row.title, score });
+    if (targetRow) {
+      responseThread = targetRow;
+      const candidateRows = this.vectorStore
+        .queryNearest({
+          storePath: this.repoVectorStorePath(repository.fullName),
+          dimensions: ACTIVE_EMBED_DIMENSIONS,
+          vector: JSON.parse(targetRow.vector_json) as number[],
+          limit: limit * 2,
+          candidateK: Math.max(limit * 8, 64),
+          excludeThreadId: targetRow.id,
+        })
+        .filter((row) => row.score >= minScore);
+      const candidateIds = candidateRows.map((row) => row.threadId);
+      const neighborMeta = candidateIds.length
+        ? (this.db
+            .prepare(
+              `select * from threads
+               where repo_id = ? and state = 'open' and closed_at_local is null and id in (${candidateIds.map(() => '?').join(',')})`,
+            )
+            .all(repository.id, ...candidateIds) as ThreadRow[])
+        : [];
+      const metaById = new Map<number, ThreadRow>(neighborMeta.map((row) => [row.id, row]));
+      neighbors = candidateRows
+        .map((row) => {
+          const meta = metaById.get(row.threadId);
+          if (!meta) {
+            return null;
+          }
+          return {
+            threadId: row.threadId,
+            number: meta.number,
+            kind: meta.kind,
+            title: meta.title,
+            score: row.score,
+          };
+        })
+        .filter((row): row is NonNullable<typeof row> => row !== null)
+        .slice(0, limit);
+    } else {
+      const targetRows = this.loadStoredEmbeddingsForThreadNumber(repository.id, params.threadNumber);
+      if (targetRows.length === 0) {
+        throw new Error(
+          `Thread #${params.threadNumber} for ${repository.fullName} was not found with an embedding. Run embed first.`,
+        );
       }
-    }
+      responseThread = targetRows[0]!;
+      const targetBySource = new Map<EmbeddingSourceKind, number[]>();
+      for (const row of targetRows) {
+        targetBySource.set(row.source_kind, JSON.parse(row.embedding_json) as number[]);
+      }
 
-    const neighbors = Array.from(aggregated.entries())
-      .map(([threadId, value]) => ({
-        threadId,
-        number: value.number,
-        kind: value.kind,
-        title: value.title,
-        score: value.score,
-      }))
-      .sort((left, right) => right.score - left.score)
-      .slice(0, limit);
+      const aggregated = new Map<number, { number: number; kind: 'issue' | 'pull_request'; title: string; score: number }>();
+      for (const row of this.iterateStoredEmbeddings(repository.id)) {
+        if (row.id === responseThread.id) continue;
+        const targetEmbedding = targetBySource.get(row.source_kind);
+        if (!targetEmbedding) continue;
+        const score = cosineSimilarity(targetEmbedding, JSON.parse(row.embedding_json) as number[]);
+        if (score < minScore) continue;
+        const previous = aggregated.get(row.id);
+        if (!previous || score > previous.score) {
+          aggregated.set(row.id, { number: row.number, kind: row.kind, title: row.title, score });
+        }
+      }
+
+      neighbors = Array.from(aggregated.entries())
+        .map(([threadId, value]) => ({
+          threadId,
+          number: value.number,
+          kind: value.kind,
+          title: value.title,
+          score: value.score,
+        }))
+        .sort((left, right) => right.score - left.score)
+        .slice(0, limit);
+    }
 
     return neighborsResponseSchema.parse({
       repository,
-      thread: threadToDto(targetRow),
+      thread: threadToDto(responseThread),
       neighbors,
     });
   }
@@ -1759,6 +1970,16 @@ export class GHCrawlService {
 
     if (selected.sync) {
       sync = await this.syncRepository({
+        owner: params.owner,
+        repo: params.repo,
+        onProgress: params.onProgress,
+      });
+    }
+    if (selected.embed && this.config.embeddingBasis === 'title_summary') {
+      params.onProgress?.(
+        `[refresh] embedding basis ${this.config.embeddingBasis} requires summaries; running summarize before embed`,
+      );
+      await this.summarizeRepository({
         owner: params.owner,
         repo: params.repo,
         onProgress: params.onProgress,
@@ -2029,10 +2250,10 @@ export class GHCrawlService {
       .prepare(
         `select summary_kind, summary_text
          from document_summaries
-         where thread_id = ? and model = ?
+         where thread_id = ? and model = ? and prompt_version = ?
          order by summary_kind asc`,
       )
-      .all(row.id, this.config.summaryModel) as Array<{ summary_kind: string; summary_text: string }>;
+      .all(row.id, this.config.summaryModel, SUMMARY_PROMPT_VERSION) as Array<{ summary_kind: string; summary_text: string }>;
     const summaries: TuiThreadDetail['summaries'] = {};
     for (const summary of summaryRows) {
       if (
@@ -2227,7 +2448,152 @@ export class GHCrawlService {
     };
   }
 
+  private getDesiredPipelineState(): Omit<RepoPipelineStateRow, 'repo_id' | 'vectors_current_at' | 'clusters_current_at' | 'updated_at'> {
+    return {
+      summary_model: this.config.summaryModel,
+      summary_prompt_version: SUMMARY_PROMPT_VERSION,
+      embedding_basis: this.config.embeddingBasis,
+      embed_model: this.config.embedModel,
+      embed_dimensions: ACTIVE_EMBED_DIMENSIONS,
+      embed_pipeline_version: ACTIVE_EMBED_PIPELINE_VERSION,
+      vector_backend: this.config.vectorBackend,
+    };
+  }
+
+  private getRepoPipelineState(repoId: number): RepoPipelineStateRow | null {
+    return (
+      (this.db.prepare('select * from repo_pipeline_state where repo_id = ? limit 1').get(repoId) as RepoPipelineStateRow | undefined) ??
+      null
+    );
+  }
+
+  private isRepoVectorStateCurrent(repoId: number): boolean {
+    const state = this.getRepoPipelineState(repoId);
+    if (!state || !state.vectors_current_at) {
+      return false;
+    }
+    const desired = this.getDesiredPipelineState();
+    return (
+      state.summary_model === desired.summary_model &&
+      state.summary_prompt_version === desired.summary_prompt_version &&
+      state.embedding_basis === desired.embedding_basis &&
+      state.embed_model === desired.embed_model &&
+      state.embed_dimensions === desired.embed_dimensions &&
+      state.embed_pipeline_version === desired.embed_pipeline_version &&
+      state.vector_backend === desired.vector_backend
+    );
+  }
+
+  private isRepoClusterStateCurrent(repoId: number): boolean {
+    const state = this.getRepoPipelineState(repoId);
+    return this.isRepoVectorStateCurrent(repoId) && Boolean(state?.clusters_current_at);
+  }
+
+  private hasLegacyEmbeddings(repoId: number): boolean {
+    const row = this.db
+      .prepare(
+        `select count(*) as count
+         from document_embeddings e
+         join threads t on t.id = e.thread_id
+         where t.repo_id = ?
+           and t.state = 'open'
+           and t.closed_at_local is null
+           and e.model = ?`,
+      )
+      .get(repoId, this.config.embedModel) as { count: number };
+    return row.count > 0;
+  }
+
+  private writeRepoPipelineState(
+    repoId: number,
+    overrides: Partial<Pick<RepoPipelineStateRow, 'vectors_current_at' | 'clusters_current_at'>>,
+  ): void {
+    const desired = this.getDesiredPipelineState();
+    const current = this.getRepoPipelineState(repoId);
+    this.db
+      .prepare(
+        `insert into repo_pipeline_state (
+            repo_id,
+            summary_model,
+            summary_prompt_version,
+            embedding_basis,
+            embed_model,
+            embed_dimensions,
+            embed_pipeline_version,
+            vector_backend,
+            vectors_current_at,
+            clusters_current_at,
+            updated_at
+         ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         on conflict(repo_id) do update set
+           summary_model = excluded.summary_model,
+           summary_prompt_version = excluded.summary_prompt_version,
+           embedding_basis = excluded.embedding_basis,
+           embed_model = excluded.embed_model,
+           embed_dimensions = excluded.embed_dimensions,
+           embed_pipeline_version = excluded.embed_pipeline_version,
+           vector_backend = excluded.vector_backend,
+           vectors_current_at = excluded.vectors_current_at,
+           clusters_current_at = excluded.clusters_current_at,
+           updated_at = excluded.updated_at`,
+      )
+      .run(
+        repoId,
+        desired.summary_model,
+        desired.summary_prompt_version,
+        desired.embedding_basis,
+        desired.embed_model,
+        desired.embed_dimensions,
+        desired.embed_pipeline_version,
+        desired.vector_backend,
+        overrides.vectors_current_at ?? current?.vectors_current_at ?? null,
+        overrides.clusters_current_at ?? current?.clusters_current_at ?? null,
+        nowIso(),
+      );
+  }
+
+  private markRepoVectorsCurrent(repoId: number): void {
+    this.writeRepoPipelineState(repoId, {
+      vectors_current_at: nowIso(),
+      clusters_current_at: null,
+    });
+  }
+
+  private markRepoClustersCurrent(repoId: number): void {
+    const state = this.getRepoPipelineState(repoId);
+    this.writeRepoPipelineState(repoId, {
+      vectors_current_at: state?.vectors_current_at ?? nowIso(),
+      clusters_current_at: nowIso(),
+    });
+  }
+
+  private repoVectorStorePath(repoFullName: string): string {
+    const safeName = repoFullName.replace(/[^a-zA-Z0-9._-]+/g, '__');
+    return path.join(this.config.configDir, 'vectors', `${safeName}.sqlite`);
+  }
+
+  private resetRepositoryVectors(repoId: number, repoFullName: string): void {
+    this.db
+      .prepare(
+        `delete from thread_vectors
+         where thread_id in (select id from threads where repo_id = ?)`,
+      )
+      .run(repoId);
+    this.vectorStore.resetRepository({
+      storePath: this.repoVectorStorePath(repoFullName),
+      dimensions: ACTIVE_EMBED_DIMENSIONS,
+    });
+    this.writeRepoPipelineState(repoId, {
+      vectors_current_at: null,
+      clusters_current_at: null,
+    });
+  }
+
   private getLatestClusterRun(repoId: number): { id: number; finished_at: string | null } | null {
+    const state = this.getRepoPipelineState(repoId);
+    if (state && !this.isRepoClusterStateCurrent(repoId)) {
+      return null;
+    }
     return (
       (this.db
         .prepare("select id, finished_at from cluster_runs where repo_id = ? and status = 'completed' order by id desc limit 1")
@@ -2928,7 +3294,9 @@ export class GHCrawlService {
     }
 
     const summaryInput = parts.join('\n\n');
-    const summaryContentHash = stableContentHash(`summary:${includeComments ? 'with-comments' : 'metadata-only'}\n${summaryInput}`);
+    const summaryContentHash = stableContentHash(
+      `summary:${SUMMARY_PROMPT_VERSION}:${includeComments ? 'with-comments' : 'metadata-only'}\n${summaryInput}`,
+    );
     return { summaryInput, summaryContentHash };
   }
 
@@ -2982,6 +3350,45 @@ export class GHCrawlService {
     return tasks;
   }
 
+  private buildActiveVectorTask(params: {
+    threadId: number;
+    threadNumber: number;
+    title: string;
+    body: string | null;
+    dedupeSummary: string | null;
+  }): ActiveVectorTask | null {
+    const sections = [`title: ${normalizeSummaryText(params.title)}`];
+    if (this.config.embeddingBasis === 'title_summary') {
+      const summary = normalizeSummaryText(params.dedupeSummary ?? '');
+      if (!summary) {
+        return null;
+      }
+      sections.push(`summary: ${summary}`);
+    } else {
+      const body = normalizeSummaryText(params.body ?? '');
+      if (body) {
+        sections.push(`body: ${body}`);
+      }
+    }
+
+    const prepared = this.prepareEmbeddingText(sections.join('\n\n'), EMBED_MAX_ITEM_TOKENS);
+    if (!prepared) {
+      return null;
+    }
+
+    return {
+      threadId: params.threadId,
+      threadNumber: params.threadNumber,
+      basis: this.config.embeddingBasis,
+      text: prepared.text,
+      contentHash: stableContentHash(
+        `embedding:${ACTIVE_EMBED_PIPELINE_VERSION}:${this.config.embeddingBasis}:${this.config.embedModel}:${ACTIVE_EMBED_DIMENSIONS}\n${prepared.text}`,
+      ),
+      estimatedTokens: prepared.estimatedTokens,
+      wasTruncated: prepared.wasTruncated,
+    };
+  }
+
   private prepareEmbeddingText(
     text: string,
     maxEstimatedTokens: number,
@@ -3030,13 +3437,14 @@ export class GHCrawlService {
 
   private async embedBatchWithRecovery(
     ai: AiProvider,
-    batch: EmbeddingTask[],
+    batch: ActiveVectorTask[],
     onProgress?: (message: string) => void,
-  ): Promise<Array<{ task: EmbeddingTask; embedding: number[] }>> {
+  ): Promise<Array<{ task: ActiveVectorTask; embedding: number[] }>> {
     try {
       const embeddings = await ai.embedTexts({
         model: this.config.embedModel,
         texts: batch.map((task) => task.text),
+        dimensions: ACTIVE_EMBED_DIMENSIONS,
       });
       return batch.map((task, index) => ({ task, embedding: embeddings[index] }));
     } catch (error) {
@@ -3052,7 +3460,7 @@ export class GHCrawlService {
         `[embed] batch context error; isolating ${batch.length} item(s) to find oversized input(s)`,
       );
 
-      const recovered: Array<{ task: EmbeddingTask; embedding: number[] }> = [];
+      const recovered: Array<{ task: ActiveVectorTask; embedding: number[] }> = [];
       for (const task of batch) {
         recovered.push(await this.embedSingleTaskWithRecovery(ai, task, onProgress));
       }
@@ -3062,9 +3470,9 @@ export class GHCrawlService {
 
   private async embedSingleTaskWithRecovery(
     ai: AiProvider,
-    task: EmbeddingTask,
+    task: ActiveVectorTask,
     onProgress?: (message: string) => void,
-  ): Promise<{ task: EmbeddingTask; embedding: number[] }> {
+  ): Promise<{ task: ActiveVectorTask; embedding: number[] }> {
     let current = task;
 
     for (let attempt = 0; attempt < EMBED_CONTEXT_RETRY_ATTEMPTS; attempt += 1) {
@@ -3072,6 +3480,7 @@ export class GHCrawlService {
         const [embedding] = await ai.embedTexts({
           model: this.config.embedModel,
           texts: [current.text],
+          dimensions: ACTIVE_EMBED_DIMENSIONS,
         });
         return { task: current, embedding };
       } catch (error) {
@@ -3085,19 +3494,19 @@ export class GHCrawlService {
           throw error;
         }
         onProgress?.(
-          `[embed] shortened #${current.threadNumber}:${current.sourceKind} after context error est_tokens=${current.estimatedTokens}->${next.estimatedTokens}`,
+          `[embed] shortened #${current.threadNumber}:${current.basis} after context error est_tokens=${current.estimatedTokens}->${next.estimatedTokens}`,
         );
         current = next;
       }
     }
 
-    throw new Error(`Unable to shrink embedding input for #${task.threadNumber}:${task.sourceKind} below model limits`);
+    throw new Error(`Unable to shrink embedding input for #${task.threadNumber}:${task.basis} below model limits`);
   }
 
   private shrinkEmbeddingTask(
-    task: EmbeddingTask,
+    task: ActiveVectorTask,
     context?: { limitTokens: number | null; requestedTokens: number | null },
-  ): EmbeddingTask | null {
+  ): ActiveVectorTask | null {
     const withoutMarker = task.text.endsWith(EMBED_TRUNCATION_MARKER)
       ? task.text.slice(0, -EMBED_TRUNCATION_MARKER.length)
       : task.text;
@@ -3116,7 +3525,9 @@ export class GHCrawlService {
     return {
       ...task,
       text: nextText,
-      contentHash: stableContentHash(`embedding:${task.sourceKind}\n${nextText}`),
+      contentHash: stableContentHash(
+        `embedding:${ACTIVE_EMBED_PIPELINE_VERSION}:${task.basis}:${this.config.embedModel}:${ACTIVE_EMBED_DIMENSIONS}\n${nextText}`,
+      ),
       estimatedTokens: this.estimateEmbeddingTokens(nextText),
       wasTruncated: true,
     };
@@ -3142,9 +3553,9 @@ export class GHCrawlService {
     return Math.floor(textLength * EMBED_CONTEXT_RETRY_FALLBACK_SHRINK_RATIO);
   }
 
-  private chunkEmbeddingTasks(items: EmbeddingTask[], maxItems: number, maxEstimatedTokens: number): EmbeddingTask[][] {
-    const chunks: EmbeddingTask[][] = [];
-    let current: EmbeddingTask[] = [];
+  private chunkEmbeddingTasks(items: ActiveVectorTask[], maxItems: number, maxEstimatedTokens: number): ActiveVectorTask[][] {
+    const chunks: ActiveVectorTask[][] = [];
+    let current: ActiveVectorTask[] = [];
     let currentEstimatedTokens = 0;
 
     for (const item of items) {
@@ -3325,6 +3736,34 @@ export class GHCrawlService {
     };
   }
 
+  private loadClusterableActiveVectorMeta(repoId: number): Array<{ id: number; number: number; title: string; embedding: number[] }> {
+    const rows = this.db
+      .prepare(
+        `select t.id, t.number, t.title, tv.vector_json
+         from threads t
+         join thread_vectors tv on tv.thread_id = t.id
+         where t.repo_id = ?
+           and t.state = 'open'
+           and t.closed_at_local is null
+           and tv.model = ?
+           and tv.basis = ?
+           and tv.dimensions = ?
+         order by t.number asc`,
+      )
+      .all(repoId, this.config.embedModel, this.config.embeddingBasis, ACTIVE_EMBED_DIMENSIONS) as Array<{
+      id: number;
+      number: number;
+      title: string;
+      vector_json: string;
+    }>;
+    return rows.map((row) => ({
+      id: row.id,
+      number: row.number,
+      title: row.title,
+      embedding: JSON.parse(row.vector_json) as number[],
+    }));
+  }
+
   private listStoredClusterNeighbors(repoId: number, threadId: number, limit: number): SearchHitDto['neighbors'] {
     const latestRun = this.getLatestClusterRun(repoId);
     if (!latestRun) {
@@ -3398,72 +3837,76 @@ export class GHCrawlService {
       title: string;
       body: string | null;
     }>;
-    const summaryTexts = this.loadCombinedSummaryTextMap(repoId, threadNumber);
-    const tasks = rows.flatMap((row) =>
-      this.buildEmbeddingTasks({
+    const summaryTexts = this.loadDedupeSummaryTextMap(repoId, threadNumber);
+    const missingSummaryThreadNumbers: number[] = [];
+    const tasks = rows.flatMap((row) => {
+      const task = this.buildActiveVectorTask({
         threadId: row.id,
         threadNumber: row.number,
         title: row.title,
         body: row.body,
         dedupeSummary: summaryTexts.get(row.id) ?? null,
-      }),
-    );
+      });
+      if (task) {
+        return [task];
+      }
+      if (this.config.embeddingBasis === 'title_summary') {
+        missingSummaryThreadNumbers.push(row.number);
+      }
+      return [];
+    });
+    const pipelineCurrent = this.isRepoVectorStateCurrent(repoId);
     const existingRows = this.db
       .prepare(
-        `select e.thread_id, e.source_kind, e.content_hash
-         from document_embeddings e
-         join threads t on t.id = e.thread_id
-         where t.repo_id = ? and e.model = ?`,
+        `select tv.thread_id, tv.content_hash
+         from thread_vectors tv
+         join threads t on t.id = tv.thread_id
+         where t.repo_id = ?
+           and tv.model = ?
+           and tv.basis = ?
+           and tv.dimensions = ?`,
       )
-      .all(repoId, this.config.embedModel) as Array<{
+      .all(repoId, this.config.embedModel, this.config.embeddingBasis, ACTIVE_EMBED_DIMENSIONS) as Array<{
         thread_id: number;
-        source_kind: EmbeddingSourceKind;
         content_hash: string;
       }>;
     const existing = new Map<string, string>();
     for (const row of existingRows) {
-      existing.set(`${row.thread_id}:${row.source_kind}`, row.content_hash);
+      existing.set(String(row.thread_id), row.content_hash);
     }
-    const pending = tasks.filter((task) => existing.get(`${task.threadId}:${task.sourceKind}`) !== task.contentHash);
-    return { rows, tasks, existing, pending };
+    const pending = pipelineCurrent
+      ? tasks.filter((task) => existing.get(String(task.threadId)) !== task.contentHash)
+      : tasks;
+    return { rows, tasks, existing, pending, missingSummaryThreadNumbers };
   }
 
-  private loadCombinedSummaryTextMap(repoId: number, threadNumber?: number): Map<number, string> {
+  private loadDedupeSummaryTextMap(repoId: number, threadNumber?: number): Map<number, string> {
     let sql =
-      `select s.thread_id, s.summary_kind, s.summary_text
+      `select s.thread_id, s.summary_text
        from document_summaries s
        join threads t on t.id = s.thread_id
-       where t.repo_id = ? and t.state = 'open' and t.closed_at_local is null and s.model = ?`;
-    const args: Array<number | string> = [repoId, this.config.summaryModel];
+       where t.repo_id = ?
+         and t.state = 'open'
+         and t.closed_at_local is null
+         and s.model = ?
+         and s.summary_kind = 'dedupe_summary'
+         and s.prompt_version = ?`;
+    const args: Array<number | string> = [repoId, this.config.summaryModel, SUMMARY_PROMPT_VERSION];
     if (threadNumber) {
       sql += ' and t.number = ?';
       args.push(threadNumber);
     }
-    sql += ' order by t.number asc, s.summary_kind asc';
+    sql += ' order by t.number asc';
 
     const rows = this.db.prepare(sql).all(...args) as Array<{
       thread_id: number;
-      summary_kind: string;
       summary_text: string;
     }>;
-    const byThread = new Map<number, Map<string, string>>();
-    for (const row of rows) {
-      const entry = byThread.get(row.thread_id) ?? new Map<string, string>();
-      entry.set(row.summary_kind, normalizeSummaryText(row.summary_text));
-      byThread.set(row.thread_id, entry);
-    }
-
     const combined = new Map<number, string>();
-    const order = ['problem_summary', 'solution_summary', 'maintainer_signal_summary', 'dedupe_summary'];
-    for (const [threadId, entry] of byThread.entries()) {
-      const parts = order
-        .map((summaryKind) => {
-          const text = entry.get(summaryKind);
-          return text ? `${summaryKind}: ${text}` : '';
-        })
-        .filter(Boolean);
-      if (parts.length > 0) {
-        combined.set(threadId, parts.join('\n\n'));
+    for (const row of rows) {
+      const text = normalizeSummaryText(row.summary_text);
+      if (text) {
+        combined.set(row.thread_id, text);
       }
     }
     return combined;
@@ -3791,14 +4234,55 @@ export class GHCrawlService {
   private upsertSummary(threadId: number, contentHash: string, summaryKind: string, summaryText: string): void {
     this.db
       .prepare(
-        `insert into document_summaries (thread_id, summary_kind, model, content_hash, summary_text, created_at, updated_at)
-         values (?, ?, ?, ?, ?, ?, ?)
+        `insert into document_summaries (thread_id, summary_kind, model, prompt_version, content_hash, summary_text, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?)
          on conflict(thread_id, summary_kind, model) do update set
+           prompt_version = excluded.prompt_version,
            content_hash = excluded.content_hash,
            summary_text = excluded.summary_text,
            updated_at = excluded.updated_at`,
       )
-      .run(threadId, summaryKind, this.config.summaryModel, contentHash, summaryText, nowIso(), nowIso());
+      .run(threadId, summaryKind, this.config.summaryModel, SUMMARY_PROMPT_VERSION, contentHash, summaryText, nowIso(), nowIso());
+  }
+
+  private upsertActiveVector(
+    repoId: number,
+    repoFullName: string,
+    threadId: number,
+    basis: EmbeddingBasis,
+    contentHash: string,
+    embedding: number[],
+  ): void {
+    this.db
+      .prepare(
+        `insert into thread_vectors (thread_id, basis, model, dimensions, content_hash, vector_json, vector_backend, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         on conflict(thread_id) do update set
+           basis = excluded.basis,
+           model = excluded.model,
+           dimensions = excluded.dimensions,
+           content_hash = excluded.content_hash,
+           vector_json = excluded.vector_json,
+           vector_backend = excluded.vector_backend,
+           updated_at = excluded.updated_at`,
+      )
+      .run(
+        threadId,
+        basis,
+        this.config.embedModel,
+        embedding.length,
+        contentHash,
+        asJson(embedding),
+        this.config.vectorBackend,
+        nowIso(),
+        nowIso(),
+      );
+    this.vectorStore.upsertVector({
+      storePath: this.repoVectorStorePath(repoFullName),
+      dimensions: ACTIVE_EMBED_DIMENSIONS,
+      threadId,
+      vector: embedding,
+    });
   }
 
   private upsertEmbedding(threadId: number, sourceKind: EmbeddingSourceKind, contentHash: string, embedding: number[]): void {

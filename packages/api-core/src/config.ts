@@ -9,6 +9,8 @@ export type SecretProvider = 'plaintext' | 'op';
 export type TuiSortPreference = 'recent' | 'size';
 export type TuiMinClusterSize = 0 | 1 | 10 | 20 | 50;
 export type TuiWideLayoutPreference = 'columns' | 'right-stack';
+export type EmbeddingBasis = 'title_original' | 'title_summary';
+export type VectorBackend = 'vectorlite';
 
 export type TuiRepositoryPreference = {
   minClusterSize: TuiMinClusterSize;
@@ -26,6 +28,8 @@ export type PersistedGitcrawlConfig = {
   apiPort?: number;
   summaryModel?: string;
   embedModel?: string;
+  embeddingBasis?: EmbeddingBasis;
+  vectorBackend?: VectorBackend;
   embedBatchSize?: number;
   embedConcurrency?: number;
   embedMaxUnread?: number;
@@ -51,6 +55,8 @@ export type GitcrawlConfig = {
   opItemName?: string;
   summaryModel: string;
   embedModel: string;
+  embeddingBasis: EmbeddingBasis;
+  vectorBackend: VectorBackend;
   embedBatchSize: number;
   embedConcurrency: number;
   embedMaxUnread: number;
@@ -174,6 +180,14 @@ function getTuiWideLayoutPreference(value: unknown): TuiWideLayoutPreference | u
   return value === 'columns' || value === 'right-stack' ? value : undefined;
 }
 
+function getEmbeddingBasis(value: unknown): EmbeddingBasis | undefined {
+  return value === 'title_original' || value === 'title_summary' ? value : undefined;
+}
+
+function getVectorBackend(value: unknown): VectorBackend | undefined {
+  return value === 'vectorlite' ? value : undefined;
+}
+
 function getTuiPreferences(value: unknown): Record<string, TuiRepositoryPreference> | undefined {
   if (!value || typeof value !== 'object') {
     return undefined;
@@ -219,6 +233,8 @@ export function readPersistedConfig(options: LoadConfigOptions = {}): LoadedStor
       apiPort: getNumber(raw.apiPort),
       summaryModel: getString(raw.summaryModel),
       embedModel: getString(raw.embedModel),
+      embeddingBasis: getEmbeddingBasis(raw.embeddingBasis),
+      vectorBackend: getVectorBackend(raw.vectorBackend),
       embedBatchSize: getNumber(raw.embedBatchSize),
       embedConcurrency: getNumber(raw.embedConcurrency),
       embedMaxUnread: getNumber(raw.embedMaxUnread),
@@ -337,6 +353,18 @@ export function loadConfig(options: LoadConfigOptions = {}): GitcrawlConfig {
     { source: 'dotenv', value: getDotenvString(dotenvValues, 'GHCRAWL_EMBED_MODEL', 'GHCRAWL_EMBED_MODEL') },
     { source: 'default', value: 'text-embedding-3-large' },
   );
+  const embeddingBasis = pickDefined<EmbeddingBasis>(
+    { source: 'env', value: getEmbeddingBasis(getEnvString(env, 'GHCRAWL_EMBEDDING_BASIS', 'GHCRAWL_EMBEDDING_BASIS')) },
+    { source: 'config', value: stored.data.embeddingBasis },
+    { source: 'dotenv', value: getEmbeddingBasis(getDotenvString(dotenvValues, 'GHCRAWL_EMBEDDING_BASIS', 'GHCRAWL_EMBEDDING_BASIS')) },
+    { source: 'default', value: 'title_summary' },
+  );
+  const vectorBackend = pickDefined<VectorBackend>(
+    { source: 'env', value: getVectorBackend(getEnvString(env, 'GHCRAWL_VECTOR_BACKEND', 'GHCRAWL_VECTOR_BACKEND')) },
+    { source: 'config', value: stored.data.vectorBackend },
+    { source: 'dotenv', value: getVectorBackend(getDotenvString(dotenvValues, 'GHCRAWL_VECTOR_BACKEND', 'GHCRAWL_VECTOR_BACKEND')) },
+    { source: 'default', value: 'vectorlite' },
+  );
   const openSearchUrl = pickDefined<string>(
     { source: 'env', value: getEnvString(env, 'GHCRAWL_OPENSEARCH_URL', 'GHCRAWL_OPENSEARCH_URL') },
     { source: 'config', value: stored.data.openSearchUrl },
@@ -375,6 +403,8 @@ export function loadConfig(options: LoadConfigOptions = {}): GitcrawlConfig {
     opItemName: stored.data.opItemName,
     summaryModel: summaryModel.value ?? 'gpt-5-mini',
     embedModel: embedModel.value ?? 'text-embedding-3-large',
+    embeddingBasis: embeddingBasis.value ?? 'title_summary',
+    vectorBackend: vectorBackend.value ?? 'vectorlite',
     embedBatchSize,
     embedConcurrency,
     embedMaxUnread,
@@ -387,6 +417,7 @@ export function loadConfig(options: LoadConfigOptions = {}): GitcrawlConfig {
 export function ensureRuntimeDirs(config: GitcrawlConfig): void {
   fs.mkdirSync(config.configDir, { recursive: true });
   fs.mkdirSync(path.dirname(config.dbPath), { recursive: true });
+  fs.mkdirSync(path.join(config.configDir, 'vectors'), { recursive: true });
 }
 
 export function getTuiRepositoryPreference(config: GitcrawlConfig, owner: string, repo: string): TuiRepositoryPreference {

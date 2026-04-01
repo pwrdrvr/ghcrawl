@@ -21,7 +21,7 @@ export type SummaryUsage = {
 export type AiProvider = {
   checkAuth: () => Promise<void>;
   summarizeThread: (params: { model: string; text: string }) => Promise<{ summary: SummaryResult; usage?: SummaryUsage }>;
-  embedTexts: (params: { model: string; texts: string[] }) => Promise<number[][]>;
+  embedTexts: (params: { model: string; texts: string[]; dimensions?: number }) => Promise<number[][]>;
 };
 
 const summarySchema = z.object({
@@ -116,7 +116,7 @@ export class OpenAiProvider implements AiProvider {
     throw new Error(`OpenAI summarization failed after 3 attempts: ${lastError?.message ?? 'unknown error'}`);
   }
 
-  async embedTexts(params: { model: string; texts: string[] }): Promise<number[][]> {
+  async embedTexts(params: { model: string; texts: string[]; dimensions?: number }): Promise<number[][]> {
     if (params.texts.length === 0) {
       return [];
     }
@@ -127,6 +127,7 @@ export class OpenAiProvider implements AiProvider {
         const response = await this.client.embeddings.create({
           model: params.model,
           input: params.texts,
+          dimensions: params.dimensions,
         });
 
         return response.data.map((item) => item.embedding);

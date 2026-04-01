@@ -125,6 +125,34 @@ const migrationStatements = [
   )
   `,
   `
+  create table if not exists thread_vectors (
+    thread_id integer primary key references threads(id) on delete cascade,
+    basis text not null,
+    model text not null,
+    dimensions integer not null,
+    content_hash text not null,
+    vector_json text not null,
+    vector_backend text not null,
+    created_at text not null,
+    updated_at text not null
+  )
+  `,
+  `
+  create table if not exists repo_pipeline_state (
+    repo_id integer primary key references repositories(id) on delete cascade,
+    summary_model text not null,
+    summary_prompt_version text not null,
+    embedding_basis text not null,
+    embed_model text not null,
+    embed_dimensions integer not null,
+    embed_pipeline_version text not null,
+    vector_backend text not null,
+    vectors_current_at text,
+    clusters_current_at text,
+    updated_at text not null
+  )
+  `,
+  `
   create table if not exists sync_runs (
     id integer primary key,
     repo_id integer references repositories(id) on delete cascade,
@@ -249,8 +277,23 @@ export function migrate(db: SqliteDatabase): void {
     db.exec('alter table clusters add column close_reason_local text');
   }
 
+  const summaryColumns = new Set(
+    (db.prepare('pragma table_info(document_summaries)').all() as Array<{ name: string }>).map((column) => column.name),
+  );
+  if (!summaryColumns.has('prompt_version')) {
+    db.exec("alter table document_summaries add column prompt_version text default 'v1'");
+  }
+
+  const vectorColumns = new Set(
+    (db.prepare('pragma table_info(thread_vectors)').all() as Array<{ name: string }>).map((column) => column.name),
+  );
+  if (!vectorColumns.has('vector_backend')) {
+    db.exec("alter table thread_vectors add column vector_backend text default 'vectorlite'");
+  }
+
   db.exec('create index if not exists idx_threads_repo_number on threads(repo_id, number)');
   db.exec('create index if not exists idx_document_summaries_thread_model on document_summaries(thread_id, model)');
+  db.exec('create index if not exists idx_thread_vectors_basis_model on thread_vectors(basis, model)');
   db.exec('create index if not exists idx_cluster_runs_repo_status_id on cluster_runs(repo_id, status, id)');
   db.exec('create index if not exists idx_clusters_repo_run_id on clusters(repo_id, cluster_run_id, id)');
   db.exec('create index if not exists idx_cluster_members_thread_cluster on cluster_members(thread_id, cluster_id)');

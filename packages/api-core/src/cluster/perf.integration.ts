@@ -201,6 +201,8 @@ function createService(dbPath: string): GHCrawlService {
       openaiApiKeySource: 'none',
       summaryModel: 'gpt-5-mini',
       embedModel: 'text-embedding-3-large',
+      embeddingBasis: 'title_original',
+      vectorBackend: 'vectorlite',
       embedBatchSize: 2,
       embedConcurrency: 2,
       embedMaxUnread: 4,

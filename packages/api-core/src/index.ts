@@ -4,3 +4,5 @@ export * from './documents/normalize.js';
 export * from './search/exact.js';
 export * from './cluster/build.js';
 export * from './service.js';
+export * from './vector/store.js';
+export * from './vector/vectorlite-store.js';

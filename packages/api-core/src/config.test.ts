@@ -55,6 +55,9 @@ test('loadConfig prefers persisted config and stores defaults under the user con
   assert.equal(config.githubTokenSource, 'config');
   assert.equal(config.openaiApiKeySource, 'config');
   assert.equal(config.dbPath, path.join(home, '.config', 'ghcrawl', 'ghcrawl.db'));
+  assert.equal(config.summaryModel, 'gpt-5-mini');
+  assert.equal(config.embeddingBasis, 'title_summary');
+  assert.equal(config.vectorBackend, 'vectorlite');
 });
 
 test('loadConfig lets environment variables override persisted config', () => {
@@ -161,6 +164,30 @@ test('writePersistedConfig creates a readable config file', () => {
   const persisted = readPersistedConfig({ env });
   assert.equal(persisted.data.githubToken, 'ghp_testtoken1234567890');
   assert.equal(persisted.data.openaiApiKey, 'sk-proj-testkey1234567890');
+});
+
+test('persisted config round-trips summary model, embedding basis, and vector backend', () => {
+  const home = makeTempHome();
+  const env = {
+    ...makeTestEnv(),
+    HOME: home,
+  };
+
+  writePersistedConfig(
+    {
+      githubToken: 'ghp_testtoken1234567890',
+      openaiApiKey: 'sk-proj-testkey1234567890',
+      summaryModel: 'gpt-5.4-mini',
+      embeddingBasis: 'title_original',
+      vectorBackend: 'vectorlite',
+    },
+    { env },
+  );
+
+  const loaded = loadConfig({ env, cwd: process.cwd() });
+  assert.equal(loaded.summaryModel, 'gpt-5.4-mini');
+  assert.equal(loaded.embeddingBasis, 'title_original');
+  assert.equal(loaded.vectorBackend, 'vectorlite');
 });
 
 test('config path override redirects persisted config reads and writes', () => {

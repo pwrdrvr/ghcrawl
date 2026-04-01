@@ -1,13 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import { GHCrawlService } from './service.js';
 
 function makeTestConfig(overrides: Partial<GHCrawlService['config']> = {}): GHCrawlService['config'] {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-service-test-'));
   return {
     workspaceRoot: process.cwd(),
-    configDir: '/tmp/ghcrawl-test',
-    configPath: '/tmp/ghcrawl-test/config.json',
+    configDir,
+    configPath: path.join(configDir, 'config.json'),
     configFileExists: true,
     dbPath: ':memory:',
     dbPathSource: 'config',
@@ -19,6 +23,8 @@ function makeTestConfig(overrides: Partial<GHCrawlService['config']> = {}): GHCr
     openaiApiKeySource: 'none',
     summaryModel: 'gpt-5-mini',
     embedModel: 'text-embedding-3-large',
+    embeddingBasis: 'title_original',
+    vectorBackend: 'vectorlite',
     embedBatchSize: 2,
     embedConcurrency: 2,
     embedMaxUnread: 4,
@@ -35,6 +41,14 @@ function makeTestService(
     config: makeTestConfig(),
     github,
     ai,
+  });
+}
+
+function makeEmbedding(seed: number, variant = 0): number[] {
+  return Array.from({ length: 1024 }, (_value, index) => {
+    if (index === 0) return seed;
+    if (index === 1) return variant;
+    return 0;
   });
 }
 
@@ -71,11 +85,13 @@ test('doctor reports config path and successful auth smoke checks', async () => 
 
   try {
     const result = await service.doctor();
-    assert.equal(result.health.configPath, '/tmp/ghcrawl-test/config.json');
+    assert.equal(result.health.configPath, service.config.configPath);
     assert.equal(result.github.formatOk, true);
     assert.equal(result.github.authOk, true);
     assert.equal(result.openai.formatOk, true);
     assert.equal(result.openai.authOk, true);
+    assert.equal(result.vectorlite.configured, true);
+    assert.equal(result.vectorlite.runtimeOk, true);
     assert.equal(githubChecked, 1);
     assert.equal(openAiChecked, 1);
   } finally {
@@ -703,7 +719,7 @@ test('embedRepository batches multi-source embeddings and skips unchanged inputs
       },
       embedTexts: async ({ texts }) => {
         embedCalls.push(texts);
-        return texts.map((text, index) => [text.length, index]);
+        return texts.map((text, index) => makeEmbedding(text.length, index));
       },
     },
   );
@@ -751,33 +767,33 @@ test('embedRepository batches multi-source embeddings and skips unchanged inputs
       );
     service.db
       .prepare(
-        `insert into document_summaries (thread_id, summary_kind, model, content_hash, summary_text, created_at, updated_at)
-         values (?, ?, ?, ?, ?, ?, ?)`,
+        `insert into document_summaries (thread_id, summary_kind, model, prompt_version, content_hash, summary_text, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(10, 'dedupe_summary', 'gpt-5-mini', 'summary-hash', 'Transfer hangs near completion.', now, now);
+      .run(10, 'dedupe_summary', 'gpt-5-mini', 'v1', 'summary-hash', 'Transfer hangs near completion.', now, now);
 
     const first = await service.embedRepository({ owner: 'openclaw', repo: 'openclaw' });
-    assert.equal(first.embedded, 3);
-    assert.equal(embedCalls.length, 2);
+    assert.equal(first.embedded, 1);
+    assert.equal(embedCalls.length, 1);
     assert.deepEqual(
       service.db
-        .prepare('select source_kind from document_embeddings order by source_kind asc')
+        .prepare('select basis from thread_vectors order by basis asc')
         .all()
-        .map((row: unknown) => (row as { source_kind: string }).source_kind),
-      ['body', 'dedupe_summary', 'title'],
+        .map((row: unknown) => (row as { basis: string }).basis),
+      ['title_original'],
     );
 
     const second = await service.embedRepository({ owner: 'openclaw', repo: 'openclaw' });
     assert.equal(second.embedded, 0);
-    assert.equal(embedCalls.length, 2);
+    assert.equal(embedCalls.length, 1);
 
     service.db
       .prepare('update threads set body = ?, updated_at = ? where id = ?')
       .run('The transfer now stalls at 99%.', now, 10);
     const third = await service.embedRepository({ owner: 'openclaw', repo: 'openclaw' });
     assert.equal(third.embedded, 1);
-    assert.equal(embedCalls.length, 3);
-    assert.deepEqual(embedCalls[2], ['The transfer now stalls at 99%.']);
+    assert.equal(embedCalls.length, 2);
+    assert.deepEqual(embedCalls[1], ['title: Downloader hangs\n\nbody: The transfer now stalls at 99%.']);
   } finally {
     service.close();
   }
@@ -812,7 +828,7 @@ test('embedRepository truncates oversized inputs before submission', async () =>
       },
       embedTexts: async ({ texts }) => {
         embedCalls.push(texts);
-        return texts.map((text, index) => [text.length, index]);
+        return texts.map((text, index) => makeEmbedding(text.length, index));
       },
     },
   });
@@ -895,7 +911,7 @@ test('embedRepository truncates oversized inputs before submission', async () =>
 
     const result = await service.embedRepository({ owner: 'openclaw', repo: 'openclaw' });
 
-    assert.equal(result.embedded, 4);
+    assert.equal(result.embedded, 2);
     assert.ok(embedCalls.length >= 1);
     const truncatedBodies = embedCalls.flat().filter((text) => text.includes('[truncated for embedding]'));
     assert.equal(truncatedBodies.length, 2);
@@ -943,7 +959,7 @@ test('embedRepository isolates a failing oversized item from a mixed batch and r
             );
           }
         }
-        return texts.map((text, index) => [text.length, index]);
+        return texts.map((text, index) => makeEmbedding(text.length, index));
       },
     },
   });
@@ -1025,9 +1041,9 @@ test('embedRepository isolates a failing oversized item from a mixed batch and r
 
     const result = await service.embedRepository({ owner: 'openclaw', repo: 'openclaw' });
 
-    assert.equal(result.embedded, 4);
+    assert.equal(result.embedded, 2);
     assert.ok(embedCalls.length >= 3);
-    assert.equal(embedCalls[0].length, 4);
+    assert.equal(embedCalls[0].length, 2);
     assert.ok(embedCalls.flat().some((text) => text.includes('[truncated for embedding]')));
   } finally {
     service.close();
@@ -1069,7 +1085,7 @@ test('embedRepository recovers from wrapped maximum input length errors by shrin
             `OpenAI embeddings failed after 5 attempts: 400 Invalid 'input[${overLimitIndex}]': maximum input length is 8192 tokens.`,
           );
         }
-        return texts.map((text, index) => [text.length, index]);
+        return texts.map((text, index) => makeEmbedding(text.length, index));
       },
     },
   });
@@ -1151,7 +1167,7 @@ test('embedRepository recovers from wrapped maximum input length errors by shrin
 
     const result = await service.embedRepository({ owner: 'openclaw', repo: 'openclaw' });
 
-    assert.equal(result.embedded, 4);
+    assert.equal(result.embedded, 2);
     const shortenedAttempts = Array.from(
       new Set(
         embedCalls
@@ -1627,7 +1643,7 @@ test('tui snapshot returns mixed issue and pull request counts with default rece
     assert.equal(snapshot.stats.lastGithubReconciliationAt, '2026-03-09T12:00:00Z');
     assert.equal(snapshot.stats.lastEmbedRefreshAt, '2026-03-09T13:00:00Z');
     assert.equal(snapshot.stats.staleEmbedThreadCount, 5);
-    assert.equal(snapshot.stats.staleEmbedSourceCount, 10);
+    assert.equal(snapshot.stats.staleEmbedSourceCount, 5);
     assert.equal(snapshot.stats.latestClusterRunId, 1);
     assert.equal(snapshot.clusters.length, 0);
 
@@ -1865,7 +1881,7 @@ test('refreshRepository runs sync, embed, and cluster in order and returns the c
       summarizeThread: async () => {
         throw new Error('not expected');
       },
-      embedTexts: async ({ texts }) => texts.map(() => [1, 0]),
+      embedTexts: async ({ texts }) => texts.map((_text, index) => makeEmbedding(1, index)),
     },
   );
 
@@ -1880,7 +1896,7 @@ test('refreshRepository runs sync, embed, and cluster in order and returns the c
     assert.equal(result.selected.embed, true);
     assert.equal(result.selected.cluster, true);
     assert.equal(result.sync?.threadsSynced, 1);
-    assert.equal(result.embed?.embedded, 2);
+    assert.equal(result.embed?.embedded, 1);
     assert.equal(result.cluster?.clusters, 1);
 
     const syncIndex = messages.findIndex((message) => message.includes('[sync]'));
