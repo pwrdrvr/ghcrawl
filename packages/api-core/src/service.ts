@@ -135,7 +135,7 @@ type ActiveVectorRow = ThreadRow & {
   model: string;
   dimensions: number;
   content_hash: string;
-  vector_json: string;
+  vector_json: Buffer | string;
   vector_backend: string;
 };
 
@@ -362,6 +362,11 @@ const EMBED_CONTEXT_RETRY_TARGET_BUFFER_RATIO = 0.95;
 const SUMMARY_PROMPT_VERSION = 'v1';
 const ACTIVE_EMBED_DIMENSIONS = 1024;
 const ACTIVE_EMBED_PIPELINE_VERSION = 'vectorlite-1024-v1';
+const DEFAULT_CLUSTER_MIN_SCORE = 0.78;
+const VECTORLITE_CLUSTER_EXPANDED_K = 24;
+const VECTORLITE_CLUSTER_EXPANDED_MULTIPLIER = 4;
+const VECTORLITE_CLUSTER_EXPANDED_CANDIDATE_K = 512;
+const VECTORLITE_CLUSTER_EXPANDED_EF_SEARCH = 1024;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -1259,7 +1264,7 @@ export class GHCrawlService {
   }): Promise<ClusterResultDto> {
     const repository = this.requireRepository(params.owner, params.repo);
     const runId = this.startRun('cluster_runs', repository.id, repository.fullName);
-    const minScore = params.minScore ?? 0.82;
+    const minScore = params.minScore ?? DEFAULT_CLUSTER_MIN_SCORE;
     const k = params.k ?? 6;
 
     try {
@@ -1267,23 +1272,24 @@ export class GHCrawlService {
       let aggregatedEdges: Map<string, { leftThreadId: number; rightThreadId: number; score: number; sourceKinds: Set<EmbeddingSourceKind> }>;
 
       if (this.isRepoVectorStateCurrent(repository.id)) {
-        const vectorItems = this.loadClusterableActiveVectorMeta(repository.id);
+        const vectorItems = this.loadClusterableActiveVectorMeta(repository.id, repository.fullName);
         const activeIds = new Set(vectorItems.map((item) => item.id));
-        const candidateK = Math.max(k * 16, 64);
+        const annQuery = this.getVectorliteClusterQuery(vectorItems.length, k);
         aggregatedEdges = new Map();
         let processed = 0;
         let lastProgressAt = Date.now();
 
         params.onProgress?.(
-          `[cluster] loaded ${vectorItems.length} active vector(s) for ${repository.fullName} backend=${this.config.vectorBackend} k=${k} candidateK=${candidateK} minScore=${minScore}`,
+          `[cluster] loaded ${vectorItems.length} active vector(s) for ${repository.fullName} backend=${this.config.vectorBackend} k=${k} query_limit=${annQuery.limit} candidateK=${annQuery.candidateK} efSearch=${annQuery.efSearch ?? 'default'} minScore=${minScore}`,
         );
         for (const item of vectorItems) {
           const neighbors = this.vectorStore.queryNearest({
             storePath: this.repoVectorStorePath(repository.fullName),
             dimensions: ACTIVE_EMBED_DIMENSIONS,
             vector: item.embedding,
-            limit: k,
-            candidateK: candidateK + 1,
+            limit: annQuery.limit,
+            candidateK: annQuery.candidateK + 1,
+            efSearch: annQuery.efSearch,
             excludeThreadId: item.id,
           });
           for (const neighbor of neighbors) {
@@ -1341,6 +1347,7 @@ export class GHCrawlService {
       this.pruneOldClusterRuns(repository.id, runId);
       if (this.isRepoVectorStateCurrent(repository.id)) {
         this.markRepoClustersCurrent(repository.id);
+        this.cleanupMigratedRepositoryArtifacts(repository.id, repository.fullName, params.onProgress);
       }
 
       params.onProgress?.(`[cluster] persisted ${clusters.length} cluster(s) and pruned older cluster runs`);
@@ -1376,7 +1383,7 @@ export class GHCrawlService {
     const sourceKinds = params.sourceKinds ?? loaded.sourceKinds;
     const items = loaded.items;
     const aggregation = params.aggregation ?? 'max';
-    const minScore = params.minScore ?? 0.82;
+    const minScore = params.minScore ?? DEFAULT_CLUSTER_MIN_SCORE;
     const k = params.k ?? 6;
     const candidateK = Math.max(k, params.candidateK ?? Math.max(k * 16, 64));
     const efSearch = params.efSearch;
@@ -1794,7 +1801,7 @@ export class GHCrawlService {
         .queryNearest({
           storePath: this.repoVectorStorePath(repository.fullName),
           dimensions: ACTIVE_EMBED_DIMENSIONS,
-          vector: JSON.parse(targetRow.vector_json) as number[],
+          vector: this.parseStoredVector(targetRow.vector_json),
           limit: limit * 2,
           candidateK: Math.max(limit * 8, 64),
           excludeThreadId: targetRow.id,
@@ -2587,6 +2594,51 @@ export class GHCrawlService {
       vectors_current_at: null,
       clusters_current_at: null,
     });
+  }
+
+  private cleanupMigratedRepositoryArtifacts(repoId: number, repoFullName: string, onProgress?: (message: string) => void): void {
+    const legacyEmbeddingCount = this.countLegacyEmbeddings(repoId);
+    const inlineJsonVectorCount = this.countInlineJsonThreadVectors(repoId);
+    if (legacyEmbeddingCount === 0 && inlineJsonVectorCount === 0) {
+      return;
+    }
+
+    if (legacyEmbeddingCount > 0) {
+      this.db
+        .prepare(
+          `delete from document_embeddings
+           where thread_id in (select id from threads where repo_id = ?)`,
+        )
+        .run(repoId);
+      onProgress?.(`[cleanup] removed ${legacyEmbeddingCount} legacy document embedding row(s) after vector migration`);
+    }
+
+    if (inlineJsonVectorCount > 0) {
+      const rows = this.db
+        .prepare(
+          `select tv.thread_id, tv.vector_json
+           from thread_vectors tv
+           join threads t on t.id = tv.thread_id
+           where t.repo_id = ?
+             and typeof(tv.vector_json) = 'text'
+             and tv.vector_json != ''`,
+        )
+        .all(repoId) as Array<{ thread_id: number; vector_json: string }>;
+      const update = this.db.prepare('update thread_vectors set vector_json = ?, updated_at = ? where thread_id = ?');
+      this.db.transaction(() => {
+        for (const row of rows) {
+          update.run(this.vectorBlob(JSON.parse(row.vector_json) as number[]), nowIso(), row.thread_id);
+        }
+      })();
+      onProgress?.(`[cleanup] compacted ${inlineJsonVectorCount} inline SQLite vector payload(s) from JSON to binary blobs`);
+    }
+
+    if (this.config.dbPath !== ':memory:') {
+      onProgress?.(`[cleanup] checkpointing WAL and vacuuming ${repoFullName} migration changes`);
+      this.db.pragma('wal_checkpoint(TRUNCATE)');
+      this.db.exec('VACUUM');
+      this.db.pragma('wal_checkpoint(TRUNCATE)');
+    }
   }
 
   private getLatestClusterRun(repoId: number): { id: number; finished_at: string | null } | null {
@@ -3736,7 +3788,7 @@ export class GHCrawlService {
     };
   }
 
-  private loadClusterableActiveVectorMeta(repoId: number): Array<{ id: number; number: number; title: string; embedding: number[] }> {
+  private loadClusterableActiveVectorMeta(repoId: number, _repoFullName: string): Array<{ id: number; number: number; title: string; embedding: number[] }> {
     const rows = this.db
       .prepare(
         `select t.id, t.number, t.title, tv.vector_json
@@ -3754,13 +3806,13 @@ export class GHCrawlService {
       id: number;
       number: number;
       title: string;
-      vector_json: string;
+      vector_json: Buffer | string;
     }>;
     return rows.map((row) => ({
       id: row.id,
       number: row.number,
       title: row.title,
-      embedding: JSON.parse(row.vector_json) as number[],
+      embedding: this.parseStoredVector(row.vector_json),
     }));
   }
 
@@ -4272,7 +4324,7 @@ export class GHCrawlService {
         this.config.embedModel,
         embedding.length,
         contentHash,
-        asJson(embedding),
+        this.vectorBlob(embedding),
         this.config.vectorBackend,
         nowIso(),
         nowIso(),
@@ -4283,6 +4335,72 @@ export class GHCrawlService {
       threadId,
       vector: embedding,
     });
+  }
+
+  private countLegacyEmbeddings(repoId: number): number {
+    const row = this.db
+      .prepare(
+        `select count(*) as count
+         from document_embeddings
+         where thread_id in (select id from threads where repo_id = ?)`,
+      )
+      .get(repoId) as { count: number };
+    return row.count;
+  }
+
+  private countInlineJsonThreadVectors(repoId: number): number {
+    const row = this.db
+      .prepare(
+        `select count(*) as count
+         from thread_vectors
+         where thread_id in (select id from threads where repo_id = ?)
+           and typeof(vector_json) = 'text'
+           and vector_json != ''`,
+      )
+      .get(repoId) as { count: number };
+    return row.count;
+  }
+
+  private getVectorliteClusterQuery(totalItems: number, requestedK: number): {
+    limit: number;
+    candidateK: number;
+    efSearch?: number;
+  } {
+    if (totalItems < CLUSTER_PARALLEL_MIN_EMBEDDINGS) {
+      return {
+        limit: requestedK,
+        candidateK: Math.max(requestedK * 16, 64),
+      };
+    }
+
+    const limit = Math.min(
+      Math.max(requestedK * VECTORLITE_CLUSTER_EXPANDED_MULTIPLIER, VECTORLITE_CLUSTER_EXPANDED_K),
+      Math.max(1, totalItems - 1),
+    );
+    const candidateK = Math.min(
+      Math.max(limit * 16, VECTORLITE_CLUSTER_EXPANDED_CANDIDATE_K),
+      Math.max(limit, totalItems - 1),
+    );
+    return {
+      limit,
+      candidateK,
+      efSearch: Math.max(candidateK * 2, VECTORLITE_CLUSTER_EXPANDED_EF_SEARCH),
+    };
+  }
+
+  private vectorBlob(values: number[]): Buffer {
+    return Buffer.from(Float32Array.from(values).buffer);
+  }
+
+  private parseStoredVector(value: Buffer | string): number[] {
+    if (typeof value === 'string') {
+      if (!value) {
+        throw new Error('Stored vector payload is empty. Run refresh or embed first.');
+      }
+      return JSON.parse(value) as number[];
+    }
+    const floats = new Float32Array(value.buffer, value.byteOffset, Math.floor(value.byteLength / Float32Array.BYTES_PER_ELEMENT));
+    return Array.from(floats);
   }
 
   private upsertEmbedding(threadId: number, sourceKind: EmbeddingSourceKind, contentHash: string, embedding: number[]): void {

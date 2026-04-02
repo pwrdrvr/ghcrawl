@@ -777,10 +777,13 @@ test('embedRepository batches multi-source embeddings and skips unchanged inputs
     assert.equal(embedCalls.length, 1);
     assert.deepEqual(
       service.db
-        .prepare('select basis from thread_vectors order by basis asc')
+        .prepare('select basis, vector_json from thread_vectors order by basis asc')
         .all()
-        .map((row: unknown) => (row as { basis: string }).basis),
-      ['title_original'],
+        .map((row: unknown) => {
+          const typed = row as { basis: string; vector_json: Buffer | string };
+          return { basis: typed.basis, vectorKind: Buffer.isBuffer(typed.vector_json) ? 'blob' : typeof typed.vector_json };
+        }),
+      [{ basis: 'title_original', vectorKind: 'blob' }],
     );
 
     const second = await service.embedRepository({ owner: 'openclaw', repo: 'openclaw' });
@@ -794,6 +797,66 @@ test('embedRepository batches multi-source embeddings and skips unchanged inputs
     assert.equal(third.embedded, 1);
     assert.equal(embedCalls.length, 2);
     assert.deepEqual(embedCalls[1], ['title: Downloader hangs\n\nbody: The transfer now stalls at 99%.']);
+  } finally {
+    service.close();
+  }
+});
+
+test('listNeighbors uses the vectorlite sidecar for current active vectors', async () => {
+  const service = new GHCrawlService({
+    config: makeTestConfig(),
+    github: {
+      checkAuth: async () => undefined,
+      getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+      listRepositoryIssues: async () => [],
+      getIssue: async () => {
+        throw new Error('not expected');
+      },
+      getPull: async () => {
+        throw new Error('not expected');
+      },
+      listIssueComments: async () => [],
+      listPullReviews: async () => [],
+      listPullReviewComments: async () => [],
+    },
+    ai: {
+      checkAuth: async () => undefined,
+      summarizeThread: async () => {
+        throw new Error('not expected');
+      },
+      embedTexts: async ({ texts }) => texts.map((_text, index) => (index === 0 ? makeEmbedding(1, 0) : makeEmbedding(0.99, 0.01))),
+    },
+  });
+
+  try {
+    const now = '2026-03-09T00:00:00Z';
+    const insertThread = service.db.prepare(
+      `insert into repositories (id, owner, name, full_name, github_repo_id, raw_json, updated_at)
+       values (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insertThread.run(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '1', '{}', now);
+    const insert = service.db.prepare(
+      `insert into threads (
+        id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
+        labels_json, assignees_json, raw_json, content_hash, is_draft, created_at_gh, updated_at_gh, closed_at_gh,
+        merged_at_gh, first_pulled_at, last_pulled_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insert.run(10, 1, '100', 42, 'issue', 'open', 'Downloader hangs', 'The transfer never finishes.', 'alice', 'User', 'https://github.com/openclaw/openclaw/issues/42', '[]', '[]', '{}', 'hash-42', 0, now, now, null, null, now, now, now);
+    insert.run(11, 1, '101', 43, 'issue', 'open', 'Downloader retry issue', 'The transfer retries forever.', 'bob', 'User', 'https://github.com/openclaw/openclaw/issues/43', '[]', '[]', '{}', 'hash-43', 0, now, now, null, null, now, now, now);
+
+    await service.embedRepository({ owner: 'openclaw', repo: 'openclaw' });
+
+    const result = service.listNeighbors({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      threadNumber: 42,
+      limit: 2,
+      minScore: 0.1,
+    });
+
+    assert.equal(result.thread.number, 42);
+    assert.deepEqual(result.neighbors.map((neighbor) => neighbor.number), [43]);
   } finally {
     service.close();
   }
@@ -1514,6 +1577,83 @@ test('clusterRepository prunes older cluster runs for the repo after a successfu
 
     assert.deepEqual(runRows.map((row) => row.id), [result.runId]);
     assert.equal(oldEdgeCount.count, 0);
+  } finally {
+    service.close();
+  }
+});
+
+test('clusterRepository purges legacy embeddings and inline vector payloads after a current-vector rebuild', async () => {
+  const service = new GHCrawlService({
+    config: makeTestConfig(),
+    github: {
+      checkAuth: async () => undefined,
+      getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+      listRepositoryIssues: async () => [],
+      getIssue: async () => {
+        throw new Error('not expected');
+      },
+      getPull: async () => {
+        throw new Error('not expected');
+      },
+      listIssueComments: async () => [],
+      listPullReviews: async () => [],
+      listPullReviewComments: async () => [],
+    },
+    ai: {
+      checkAuth: async () => undefined,
+      summarizeThread: async () => {
+        throw new Error('not expected');
+      },
+      embedTexts: async ({ texts }) => texts.map((_text, index) => (index === 0 ? makeEmbedding(1, 0) : makeEmbedding(0.99, 0.01))),
+    },
+  });
+
+  try {
+    const now = '2026-03-09T00:00:00Z';
+    service.db
+      .prepare(
+        `insert into repositories (id, owner, name, full_name, github_repo_id, raw_json, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '1', '{}', now);
+
+    const insertThread = service.db.prepare(
+      `insert into threads (
+        id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
+        labels_json, assignees_json, raw_json, content_hash, is_draft, created_at_gh, updated_at_gh, closed_at_gh,
+        merged_at_gh, first_pulled_at, last_pulled_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insertThread.run(10, 1, '100', 42, 'issue', 'open', 'Downloader hangs', 'The transfer never finishes.', 'alice', 'User', 'https://github.com/openclaw/openclaw/issues/42', '[]', '[]', '{}', 'hash-42', 0, now, now, null, null, now, now, now);
+    insertThread.run(11, 1, '101', 43, 'issue', 'open', 'Fix downloader hang', 'Implements a fix.', 'bob', 'User', 'https://github.com/openclaw/openclaw/issues/43', '[]', '[]', '{}', 'hash-43', 0, now, now, null, null, now, now, now);
+
+    const insertLegacy = service.db.prepare(
+      `insert into document_embeddings (thread_id, source_kind, model, dimensions, content_hash, embedding_json, created_at, updated_at)
+       values (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const sourceKind of ['title', 'body', 'dedupe_summary'] as const) {
+      insertLegacy.run(10, sourceKind, 'text-embedding-3-large', 2, `hash-42-${sourceKind}`, '[1,0]', now, now);
+      insertLegacy.run(11, sourceKind, 'text-embedding-3-large', 2, `hash-43-${sourceKind}`, '[0.99,0.01]', now, now);
+    }
+
+    await service.embedRepository({ owner: 'openclaw', repo: 'openclaw' });
+    const beforeCluster = service.db.prepare('select count(*) as count from document_embeddings').get() as { count: number };
+    assert.equal(beforeCluster.count, 6);
+
+    await service.clusterRepository({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      k: 1,
+      minScore: 0.5,
+    });
+
+    const legacyCount = service.db.prepare('select count(*) as count from document_embeddings').get() as { count: number };
+    const inlineVectors = service.db
+      .prepare('select typeof(vector_json) as vector_kind from thread_vectors order by thread_id asc')
+      .all() as Array<{ vector_kind: string }>;
+
+    assert.equal(legacyCount.count, 0);
+    assert.deepEqual(inlineVectors.map((row) => row.vector_kind), ['blob', 'blob']);
   } finally {
     service.close();
   }
