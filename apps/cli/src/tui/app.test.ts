@@ -73,9 +73,11 @@ test('renderDetailPane escapes user-provided text before rendering into a tags-e
   const rendered = renderDetailPane(detail, cluster, 'detail');
   assert.match(rendered, /Cluster 1 \(#42 representative issue\)/);
   assert.match(rendered, /Bad \\{bold\\}title\\{\/bold\\}/);
+  assert.match(rendered, /LLM Summary:/);
   assert.match(rendered, /Body with \\{red-fg\\}tags\\{\/red-fg\\}/);
   assert.match(rendered, /Summary \\{yellow-fg\\}text\\{\/yellow-fg\\}/);
   assert.match(rendered, /Neighbor \\{blue-fg\\}title\\{\/blue-fg\\}/);
+  assert.ok(rendered.indexOf('LLM Summary:') < rendered.indexOf('{bold}Body{/bold}'));
 });
 
 test('parseOwnerRepoValue accepts owner slash repo values and rejects invalid ones', () => {

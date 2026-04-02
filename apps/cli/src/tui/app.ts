@@ -1241,7 +1241,10 @@ export function renderDetailPane(
     ? `{bold}Closed:{/bold} ${escapeBlessedText(thread.closedAtLocal ?? thread.closedAtGh ?? 'yes')} ${thread.closeReasonLocal ? `(${escapeBlessedText(thread.closeReasonLocal)})` : ''}`.trimEnd()
     : '{bold}Closed:{/bold} no';
   const summaries = Object.entries(threadDetail.summaries)
-    .map(([key, value]) => `{bold}${key}:{/bold}\n${escapeBlessedText(value)}`)
+    .map(([key, value]) => {
+      const label = key === 'dedupe_summary' ? 'LLM Summary' : key;
+      return `{bold}${escapeBlessedText(label)}:{/bold}\n${escapeBlessedText(value)}`;
+    })
     .join('\n\n');
   const neighbors =
     threadDetail.neighbors.length > 0
@@ -1261,10 +1264,10 @@ export function renderDetailPane(
     `{bold}Updated:{/bold} ${thread.updatedAtGh ?? 'unknown'}`,
     `{bold}Labels:{/bold} ${labels}`,
     `{bold}URL:{/bold} ${escapeBlessedText(thread.htmlUrl)}`,
+    summaries ? `\n\n${summaries}` : '',
     '',
     `{bold}Body{/bold}`,
     escapeBlessedText(thread.body ?? '(no body)'),
-    summaries ? `\n\n${summaries}` : '',
     `\n\n{bold}Neighbors{/bold}\n${neighbors}`,
   ]
     .filter(Boolean)
