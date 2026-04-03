@@ -201,6 +201,13 @@ type ClusterExperimentResult = {
   clusterSizes: ClusterExperimentClusterSizeStats;
   clustersDetail: ClusterExperimentCluster[] | null;
 };
+
+type SummaryModelPricing = {
+  inputCostPerM: number;
+  cachedInputCostPerM: number;
+  outputCostPerM: number;
+};
+
 type EmbeddingWorkset = {
   rows: Array<{
     id: number;
@@ -367,6 +374,18 @@ const VECTORLITE_CLUSTER_EXPANDED_K = 24;
 const VECTORLITE_CLUSTER_EXPANDED_MULTIPLIER = 4;
 const VECTORLITE_CLUSTER_EXPANDED_CANDIDATE_K = 512;
 const VECTORLITE_CLUSTER_EXPANDED_EF_SEARCH = 1024;
+const SUMMARY_MODEL_PRICING: Record<string, SummaryModelPricing> = {
+  'gpt-5-mini': {
+    inputCostPerM: 0.25,
+    cachedInputCostPerM: 0.025,
+    outputCostPerM: 2.0,
+  },
+  'gpt-5.4-mini': {
+    inputCostPerM: 0.75,
+    cachedInputCostPerM: 0.075,
+    outputCostPerM: 4.5,
+  },
+};
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -1066,10 +1085,7 @@ export class GHCrawlService {
       let cachedInputTokens = 0;
       const startTime = Date.now();
 
-      // gpt-5.4-mini pricing per million tokens
-      const INPUT_COST_PER_M = 0.75;
-      const CACHED_INPUT_COST_PER_M = 0.075;
-      const OUTPUT_COST_PER_M = 4.50;
+      const pricing = SUMMARY_MODEL_PRICING[this.config.summaryModel] ?? null;
 
       // Stage 1: concurrent API calls
       const fetcher = new IterableMapper(
@@ -1110,20 +1126,10 @@ export class GHCrawlService {
 
         // Compute cost and ETA every 10 items or on the last item
         if (index % 10 === 0 || index === pending.length) {
-          const uncachedInput = inputTokens - cachedInputTokens;
-          const costSoFar =
-            (uncachedInput / 1_000_000) * INPUT_COST_PER_M +
-            (cachedInputTokens / 1_000_000) * CACHED_INPUT_COST_PER_M +
-            (outputTokens / 1_000_000) * OUTPUT_COST_PER_M;
           const remaining = pending.length - index;
           const avgIn = inputTokens / index;
           const avgOut = outputTokens / index;
           const avgCachedIn = cachedInputTokens / index;
-          const estTotalCost =
-            costSoFar +
-            ((remaining * (avgIn - avgCachedIn)) / 1_000_000) * INPUT_COST_PER_M +
-            ((remaining * avgCachedIn) / 1_000_000) * CACHED_INPUT_COST_PER_M +
-            ((remaining * avgOut) / 1_000_000) * OUTPUT_COST_PER_M;
 
           const elapsedSec = (Date.now() - startTime) / 1000;
           const secPerItem = elapsedSec / index;
@@ -1131,9 +1137,25 @@ export class GHCrawlService {
           const etaMin = Math.round(etaSec / 60);
           const etaStr = etaMin >= 60 ? `${Math.floor(etaMin / 60)}h${etaMin % 60}m` : `${etaMin}m`;
 
-          params.onProgress?.(
-            `[summarize] ${index}/${pending.length} thread #${row.number} | cost=$${costSoFar.toFixed(2)} est_total=$${estTotalCost.toFixed(2)} | avg_in=${Math.round(avgIn)} avg_out=${Math.round(avgOut)} | ETA ${etaStr}`,
-          );
+          if (pricing) {
+            const uncachedInput = inputTokens - cachedInputTokens;
+            const costSoFar =
+              (uncachedInput / 1_000_000) * pricing.inputCostPerM +
+              (cachedInputTokens / 1_000_000) * pricing.cachedInputCostPerM +
+              (outputTokens / 1_000_000) * pricing.outputCostPerM;
+            const estTotalCost =
+              costSoFar +
+              ((remaining * (avgIn - avgCachedIn)) / 1_000_000) * pricing.inputCostPerM +
+              ((remaining * avgCachedIn) / 1_000_000) * pricing.cachedInputCostPerM +
+              ((remaining * avgOut) / 1_000_000) * pricing.outputCostPerM;
+            params.onProgress?.(
+              `[summarize] ${index}/${pending.length} thread #${row.number} | cost=$${costSoFar.toFixed(2)} est_total=$${estTotalCost.toFixed(2)} | avg_in=${Math.round(avgIn)} avg_out=${Math.round(avgOut)} | ETA ${etaStr}`,
+            );
+          } else {
+            params.onProgress?.(
+              `[summarize] ${index}/${pending.length} thread #${row.number} | avg_in=${Math.round(avgIn)} avg_out=${Math.round(avgOut)} | ETA ${etaStr}`,
+            );
+          }
         }
         summarized += 1;
       }
@@ -1198,8 +1220,15 @@ export class GHCrawlService {
     const runId = this.startRun('embedding_runs', repository.id, params.threadNumber ? `thread:${params.threadNumber}` : repository.fullName);
 
     try {
-      if (!this.isRepoVectorStateCurrent(repository.id) && params.threadNumber === undefined) {
-        this.resetRepositoryVectors(repository.id, repository.fullName);
+      if (params.threadNumber === undefined) {
+        if (!this.isRepoVectorStateCurrent(repository.id)) {
+          this.resetRepositoryVectors(repository.id, repository.fullName);
+        } else {
+          const pruned = this.pruneInactiveRepositoryVectors(repository.id, repository.fullName);
+          if (pruned > 0) {
+            params.onProgress?.(`[embed] pruned ${pruned} closed or inactive vector(s) before refresh`);
+          }
+        }
       }
 
       const { rows, tasks, pending, missingSummaryThreadNumbers } = this.getEmbeddingWorkset(repository.id, params.threadNumber);
@@ -1380,8 +1409,13 @@ export class GHCrawlService {
     const backend = params.backend ?? 'vectorlite';
     const repository = this.requireRepository(params.owner, params.repo);
     const loaded = this.loadClusterableThreadMeta(repository.id);
-    const sourceKinds = params.sourceKinds ?? loaded.sourceKinds;
-    const items = loaded.items;
+    const activeVectors = this.isRepoVectorStateCurrent(repository.id) ? this.loadNormalizedActiveVectors(repository.id) : [];
+    const activeSourceKind: EmbeddingSourceKind = this.config.embeddingBasis === 'title_summary' ? 'dedupe_summary' : 'body';
+    const useActiveVectors = activeVectors.length > 0 && (params.sourceKinds === undefined || loaded.items.length === 0);
+    const sourceKinds = useActiveVectors ? [activeSourceKind] : (params.sourceKinds ?? loaded.sourceKinds);
+    const items = useActiveVectors
+      ? activeVectors.map((item) => ({ id: item.id, number: item.number, title: item.title }))
+      : loaded.items;
     const aggregation = params.aggregation ?? 'max';
     const minScore = params.minScore ?? DEFAULT_CLUSTER_MIN_SCORE;
     const k = params.k ?? 6;
@@ -1397,6 +1431,12 @@ export class GHCrawlService {
       peakHeapUsedBytes = Math.max(peakHeapUsedBytes, usage.heapUsed);
     };
     recordMemory();
+
+    if (useActiveVectors && params.sourceKinds && loaded.items.length === 0) {
+      params.onProgress?.(
+        `[cluster-experiment] legacy source embeddings are unavailable for ${repository.fullName}; falling back to active ${this.config.embeddingBasis} vectors`,
+      );
+    }
 
     params.onProgress?.(
       `[cluster-experiment] loaded ${items.length} embedded thread(s) across ${sourceKinds.length} source kind(s) for ${repository.fullName} backend=${backend} k=${k} candidateK=${candidateK} minScore=${minScore} aggregation=${aggregation}`,
@@ -1415,12 +1455,9 @@ export class GHCrawlService {
 
     try {
       if (backend === 'exact') {
-        const totalItems = sourceKinds.reduce((sum, sourceKind) => sum + this.countEmbeddingsForSourceKind(repository.id, sourceKind), 0);
-        let processedItems = 0;
-
-        for (const sourceKind of sourceKinds) {
+        if (useActiveVectors) {
           const loadStartedAt = Date.now();
-          const normalizedRows = this.loadNormalizedEmbeddingsForSourceKind(repository.id, sourceKind);
+          const normalizedRows = activeVectors.map(({ id, embedding }) => ({ id, normalizedEmbedding: embedding }));
           loadMs += Date.now() - loadStartedAt;
           recordMemory();
 
@@ -1433,14 +1470,41 @@ export class GHCrawlService {
               recordMemory();
               if (!params.onProgress) return;
               params.onProgress(
-                `[cluster-experiment] exact ${processedItems + progress.processedItems}/${totalItems} source embeddings processed current_edges~=${perSourceScores.size + progress.currentEdgeEstimate}`,
+                `[cluster-experiment] exact ${progress.processedItems}/${normalizedRows.length} active vectors processed current_edges~=${perSourceScores.size + progress.currentEdgeEstimate}`,
               );
             },
           });
           edgeBuildMs += Date.now() - edgesStartedAt;
-          processedItems += normalizedRows.length;
-          this.collectSourceKindScores(perSourceScores, edges, sourceKind);
+          this.collectSourceKindScores(perSourceScores, edges, activeSourceKind);
           recordMemory();
+        } else {
+          const totalItems = sourceKinds.reduce((sum, sourceKind) => sum + this.countEmbeddingsForSourceKind(repository.id, sourceKind), 0);
+          let processedItems = 0;
+
+          for (const sourceKind of sourceKinds) {
+            const loadStartedAt = Date.now();
+            const normalizedRows = this.loadNormalizedEmbeddingsForSourceKind(repository.id, sourceKind);
+            loadMs += Date.now() - loadStartedAt;
+            recordMemory();
+
+            const edgesStartedAt = Date.now();
+            const edges = buildSourceKindEdges(normalizedRows, {
+              limit: k,
+              minScore,
+              progressIntervalMs: CLUSTER_PROGRESS_INTERVAL_MS,
+              onProgress: (progress) => {
+                recordMemory();
+                if (!params.onProgress) return;
+                params.onProgress(
+                  `[cluster-experiment] exact ${processedItems + progress.processedItems}/${totalItems} source embeddings processed current_edges~=${perSourceScores.size + progress.currentEdgeEstimate}`,
+                );
+              },
+            });
+            edgeBuildMs += Date.now() - edgesStartedAt;
+            processedItems += normalizedRows.length;
+            this.collectSourceKindScores(perSourceScores, edges, sourceKind);
+            recordMemory();
+          }
         }
       } else {
         const setupStartedAt = Date.now();
@@ -1455,23 +1519,33 @@ export class GHCrawlService {
         setupMs += Date.now() - setupStartedAt;
         recordMemory();
 
-        for (const sourceKind of sourceKinds) {
-          const sourceRowCount = this.countEmbeddingsForSourceKind(repository.id, sourceKind);
+        const vectorSources = useActiveVectors
+          ? [
+              {
+                sourceKind: activeSourceKind,
+                rows: activeVectors.map(({ id, embedding }) => ({ id, normalizedEmbedding: embedding })),
+              },
+            ]
+          : sourceKinds.map((sourceKind) => ({
+              sourceKind,
+              rows: this.loadNormalizedEmbeddingsForSourceKind(repository.id, sourceKind).map((row) => ({
+                id: row.id,
+                normalizedEmbedding: row.normalizedEmbedding,
+              })),
+            }));
+
+        for (const source of vectorSources) {
+          const sourceRowCount = source.rows.length;
           if (sourceRowCount === 0) {
             continue;
           }
 
-          const firstRow = this.loadNormalizedEmbeddingForSourceKindHead(repository.id, sourceKind);
-          if (!firstRow) {
-            continue;
-          }
-
-          const tableName = `vector_${sourceKind}`;
-          const dimension = firstRow.normalizedEmbedding.length;
+          const dimension = source.rows[0]!.normalizedEmbedding.length;
           const safeCandidateK = Math.min(candidateK, Math.max(1, sourceRowCount - 1));
+          const tableName = `vector_${source.sourceKind}`;
 
           params.onProgress?.(
-            `[cluster-experiment] building ${sourceKind} HNSW index with ${sourceRowCount} vector(s)`,
+            `[cluster-experiment] building ${source.sourceKind} HNSW index with ${sourceRowCount} vector(s)`,
           );
           const indexStartedAt = Date.now();
           tempDb.exec(
@@ -1480,7 +1554,7 @@ export class GHCrawlService {
           const insert = tempDb.prepare(`insert into ${tableName}(rowid, vec) values (?, ?)`);
           tempDb.transaction(() => {
             const loadStartedAt = Date.now();
-            for (const row of this.iterateNormalizedEmbeddingsForSourceKind(repository.id, sourceKind)) {
+            for (const row of source.rows) {
               insert.run(row.id, this.normalizedEmbeddingBuffer(row.normalizedEmbedding));
             }
             loadMs += Date.now() - loadStartedAt;
@@ -1497,7 +1571,7 @@ export class GHCrawlService {
           let processed = 0;
           let lastProgressAt = Date.now();
           const queryLoadStartedAt = Date.now();
-          for (const row of this.iterateNormalizedEmbeddingsForSourceKind(repository.id, sourceKind)) {
+          for (const row of source.rows) {
             const candidates = query.all(this.normalizedEmbeddingBuffer(row.normalizedEmbedding)) as Array<{
               rowid: number;
               distance: number;
@@ -1518,11 +1592,11 @@ export class GHCrawlService {
               const key = this.edgeKey(row.id, candidate.item.rowid);
               const existing = perSourceScores.get(key);
               if (existing) {
-                existing.scores.set(sourceKind, Math.max(existing.scores.get(sourceKind) ?? -1, score));
+                existing.scores.set(source.sourceKind, Math.max(existing.scores.get(source.sourceKind) ?? -1, score));
                 continue;
               }
               const scores = new Map<EmbeddingSourceKind, number>();
-              scores.set(sourceKind, score);
+              scores.set(source.sourceKind, score);
               perSourceScores.set(key, {
                 leftThreadId: Math.min(row.id, candidate.item.rowid),
                 rightThreadId: Math.max(row.id, candidate.item.rowid),
@@ -1535,7 +1609,7 @@ export class GHCrawlService {
             if (params.onProgress && now - lastProgressAt >= CLUSTER_PROGRESS_INTERVAL_MS) {
               recordMemory();
               params.onProgress(
-                `[cluster-experiment] querying ${sourceKind} index ${processed}/${sourceRowCount} current_edges=${perSourceScores.size} added_this_step=${addedThisRow}`,
+                `[cluster-experiment] querying ${source.sourceKind} index ${processed}/${sourceRowCount} current_edges=${perSourceScores.size} added_this_step=${addedThisRow}`,
               );
               lastProgressAt = now;
             }
@@ -2594,6 +2668,34 @@ export class GHCrawlService {
       vectors_current_at: null,
       clusters_current_at: null,
     });
+  }
+
+  private pruneInactiveRepositoryVectors(repoId: number, repoFullName: string): number {
+    const rows = this.db
+      .prepare(
+        `select tv.thread_id
+         from thread_vectors tv
+         join threads t on t.id = tv.thread_id
+         where t.repo_id = ?
+           and (t.state != 'open' or t.closed_at_local is not null)`,
+      )
+      .all(repoId) as Array<{ thread_id: number }>;
+    if (rows.length === 0) {
+      return 0;
+    }
+
+    const deleteVectorRow = this.db.prepare('delete from thread_vectors where thread_id = ?');
+    this.db.transaction(() => {
+      for (const row of rows) {
+        deleteVectorRow.run(row.thread_id);
+        this.vectorStore.deleteVector({
+          storePath: this.repoVectorStorePath(repoFullName),
+          dimensions: ACTIVE_EMBED_DIMENSIONS,
+          threadId: row.thread_id,
+        });
+      }
+    })();
+    return rows.length;
   }
 
   private cleanupMigratedRepositoryArtifacts(repoId: number, repoFullName: string, onProgress?: (message: string) => void): void {
@@ -3813,6 +3915,15 @@ export class GHCrawlService {
       number: row.number,
       title: row.title,
       embedding: this.parseStoredVector(row.vector_json),
+    }));
+  }
+
+  private loadNormalizedActiveVectors(repoId: number): Array<{ id: number; number: number; title: string; embedding: number[] }> {
+    return this.loadClusterableActiveVectorMeta(repoId, '').map((row) => ({
+      id: row.id,
+      number: row.number,
+      title: row.title,
+      embedding: normalizeEmbedding(row.embedding).normalized,
     }));
   }
 

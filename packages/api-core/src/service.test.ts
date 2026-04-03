@@ -600,6 +600,99 @@ test('summarizeRepository includes hydrated human comments when includeComments 
   }
 });
 
+test('summarizeRepository prices progress output using the configured summary model', async () => {
+  const progress: string[] = [];
+  const service = makeTestService(
+    {
+      checkAuth: async () => undefined,
+      getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+      listRepositoryIssues: async () => [],
+      getIssue: async () => {
+        throw new Error('not expected');
+      },
+      getPull: async () => {
+        throw new Error('not expected');
+      },
+      listIssueComments: async () => [],
+      listPullReviews: async () => [],
+      listPullReviewComments: async () => [],
+    },
+    {
+      checkAuth: async () => undefined,
+      summarizeThread: async () => ({
+        summary: {
+          problemSummary: 'Problem',
+          solutionSummary: 'Solution',
+          maintainerSignalSummary: 'Signal',
+          dedupeSummary: 'Dedupe',
+        },
+        usage: {
+          inputTokens: 1_000_000,
+          outputTokens: 0,
+          totalTokens: 1_000_000,
+          cachedInputTokens: 0,
+          reasoningTokens: 0,
+        },
+      }),
+      embedTexts: async () => [],
+    },
+  );
+
+  try {
+    const now = '2026-03-09T00:00:00Z';
+    service.db
+      .prepare(
+        `insert into repositories (id, owner, name, full_name, github_repo_id, raw_json, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '1', '{}', now);
+    service.db
+      .prepare(
+        `insert into threads (
+          id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
+          labels_json, assignees_json, raw_json, content_hash, is_draft, created_at_gh, updated_at_gh, closed_at_gh,
+          merged_at_gh, first_pulled_at, last_pulled_at, updated_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        10,
+        1,
+        '100',
+        42,
+        'issue',
+        'open',
+        'Downloader hangs',
+        'The transfer never finishes.',
+        'alice',
+        'User',
+        'https://github.com/openclaw/openclaw/issues/42',
+        '["bug"]',
+        '[]',
+        '{}',
+        'hash-42',
+        0,
+        now,
+        now,
+        null,
+        null,
+        now,
+        now,
+        now,
+      );
+
+    await service.summarizeRepository({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      threadNumber: 42,
+      onProgress: (message) => progress.push(message),
+    });
+
+    assert.ok(progress.some((message) => message.includes('cost=$0.25') && message.includes('est_total=$0.25')));
+  } finally {
+    service.close();
+  }
+});
+
 test('purgeComments removes hydrated comments and refreshes canonical documents', () => {
   const service = makeTestService({
     checkAuth: async () => undefined,
@@ -857,6 +950,84 @@ test('listNeighbors uses the vectorlite sidecar for current active vectors', asy
 
     assert.equal(result.thread.number, 42);
     assert.deepEqual(result.neighbors.map((neighbor) => neighbor.number), [43]);
+  } finally {
+    service.close();
+  }
+});
+
+test('embedRepository prunes closed vectors before reusing current active vectors', async () => {
+  const service = new GHCrawlService({
+    config: makeTestConfig(),
+    github: {
+      checkAuth: async () => undefined,
+      getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+      listRepositoryIssues: async () => [],
+      getIssue: async () => {
+        throw new Error('not expected');
+      },
+      getPull: async () => {
+        throw new Error('not expected');
+      },
+      listIssueComments: async () => [],
+      listPullReviews: async () => [],
+      listPullReviewComments: async () => [],
+    },
+    ai: {
+      checkAuth: async () => undefined,
+      summarizeThread: async () => {
+        throw new Error('not expected');
+      },
+      embedTexts: async ({ texts }) =>
+        texts.map((text) => {
+          if (text.includes('Target issue')) return makeEmbedding(1, 0);
+          if (text.includes('Closed similar one')) return makeEmbedding(0.999, 0.001);
+          if (text.includes('Closed similar two')) return makeEmbedding(0.998, 0.002);
+          if (text.includes('Open fallback')) return makeEmbedding(0.9, 0.1);
+          throw new Error(`unexpected embedding input: ${text}`);
+        }),
+    },
+  });
+
+  try {
+    const now = '2026-03-09T00:00:00Z';
+    service.db
+      .prepare(
+        `insert into repositories (id, owner, name, full_name, github_repo_id, raw_json, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '1', '{}', now);
+    const insertThread = service.db.prepare(
+      `insert into threads (
+        id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
+        labels_json, assignees_json, raw_json, content_hash, is_draft, created_at_gh, updated_at_gh, closed_at_gh,
+        merged_at_gh, first_pulled_at, last_pulled_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insertThread.run(10, 1, '100', 42, 'issue', 'open', 'Target issue', 'Primary issue body.', 'alice', 'User', 'https://github.com/openclaw/openclaw/issues/42', '[]', '[]', '{}', 'hash-42', 0, now, now, null, null, now, now, now);
+    insertThread.run(11, 1, '101', 43, 'issue', 'open', 'Closed similar one', 'Very similar body.', 'bob', 'User', 'https://github.com/openclaw/openclaw/issues/43', '[]', '[]', '{}', 'hash-43', 0, now, now, null, null, now, now, now);
+    insertThread.run(12, 1, '102', 44, 'issue', 'open', 'Closed similar two', 'Also very similar body.', 'carol', 'User', 'https://github.com/openclaw/openclaw/issues/44', '[]', '[]', '{}', 'hash-44', 0, now, now, null, null, now, now, now);
+    insertThread.run(13, 1, '103', 45, 'issue', 'open', 'Open fallback', 'Somewhat similar body.', 'dave', 'User', 'https://github.com/openclaw/openclaw/issues/45', '[]', '[]', '{}', 'hash-45', 0, now, now, null, null, now, now, now);
+
+    await service.embedRepository({ owner: 'openclaw', repo: 'openclaw' });
+
+    service.db
+      .prepare('update threads set state = ?, closed_at_gh = ?, updated_at = ? where id in (?, ?)')
+      .run('closed', now, now, 11, 12);
+
+    const rerun = await service.embedRepository({ owner: 'openclaw', repo: 'openclaw' });
+    assert.equal(rerun.embedded, 0);
+
+    const vectorCount = service.db.prepare('select count(*) as count from thread_vectors').get() as { count: number };
+    assert.equal(vectorCount.count, 2);
+
+    const result = service.listNeighbors({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      threadNumber: 42,
+      limit: 1,
+      minScore: 0.1,
+    });
+    assert.deepEqual(result.neighbors.map((neighbor) => neighbor.number), [45]);
   } finally {
     service.close();
   }
@@ -1654,6 +1825,77 @@ test('clusterRepository purges legacy embeddings and inline vector payloads afte
 
     assert.equal(legacyCount.count, 0);
     assert.deepEqual(inlineVectors.map((row) => row.vector_kind), ['blob', 'blob']);
+  } finally {
+    service.close();
+  }
+});
+
+test('clusterExperiment falls back to active vectors when legacy embeddings are absent', async () => {
+  const service = new GHCrawlService({
+    config: makeTestConfig(),
+    github: {
+      checkAuth: async () => undefined,
+      getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+      listRepositoryIssues: async () => [],
+      getIssue: async () => {
+        throw new Error('not expected');
+      },
+      getPull: async () => {
+        throw new Error('not expected');
+      },
+      listIssueComments: async () => [],
+      listPullReviews: async () => [],
+      listPullReviewComments: async () => [],
+    },
+    ai: {
+      checkAuth: async () => undefined,
+      summarizeThread: async () => {
+        throw new Error('not expected');
+      },
+      embedTexts: async ({ texts }) => texts.map((_text, index) => (index === 0 ? makeEmbedding(1, 0) : makeEmbedding(0.99, 0.01))),
+    },
+  });
+
+  try {
+    const now = '2026-03-09T00:00:00Z';
+    service.db
+      .prepare(
+        `insert into repositories (id, owner, name, full_name, github_repo_id, raw_json, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '1', '{}', now);
+
+    const insertThread = service.db.prepare(
+      `insert into threads (
+        id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
+        labels_json, assignees_json, raw_json, content_hash, is_draft, created_at_gh, updated_at_gh, closed_at_gh,
+        merged_at_gh, first_pulled_at, last_pulled_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insertThread.run(10, 1, '100', 42, 'issue', 'open', 'Downloader hangs', 'The transfer never finishes.', 'alice', 'User', 'https://github.com/openclaw/openclaw/issues/42', '[]', '[]', '{}', 'hash-42', 0, now, now, null, null, now, now, now);
+    insertThread.run(11, 1, '101', 43, 'issue', 'open', 'Downloader retry issue', 'The transfer retries forever.', 'bob', 'User', 'https://github.com/openclaw/openclaw/issues/43', '[]', '[]', '{}', 'hash-43', 0, now, now, null, null, now, now, now);
+
+    await service.embedRepository({ owner: 'openclaw', repo: 'openclaw' });
+
+    const exact = service.clusterExperiment({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      backend: 'exact',
+      k: 1,
+      minScore: 0.5,
+    });
+    const vectorlite = service.clusterExperiment({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      backend: 'vectorlite',
+      k: 1,
+      minScore: 0.5,
+    });
+
+    assert.equal(exact.threads, 2);
+    assert.equal(exact.clusters, 1);
+    assert.equal(vectorlite.threads, 2);
+    assert.equal(vectorlite.clusters, 1);
   } finally {
     service.close();
   }
