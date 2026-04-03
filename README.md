@@ -45,7 +45,7 @@ ghcrawl tui owner/repo
 - save plaintext keys in `~/.config/ghcrawl/config.json`
 - or guide you through a 1Password CLI (`op`) setup that keeps keys out of the config file
 
-`ghcrawl refresh owner/repo` is the main pipeline command. It pulls the latest open GitHub issues and pull requests, summarizes changed items when the active embedding basis depends on summaries, refreshes vectors, and rebuilds the clusters you browse in the TUI.
+`ghcrawl refresh owner/repo` is the main pipeline command. It pulls the latest open GitHub issues and pull requests, summarizes changed items only when the active embedding basis depends on summaries, refreshes vectors, and rebuilds the clusters you browse in the TUI.
 
 ## Typical Commands
 
@@ -126,7 +126,7 @@ ghcrawl embed owner/repo    # generate or refresh the single active vector per t
 ghcrawl cluster owner/repo  # rebuild local related-work clusters from the current vectors (local-only, but can take ~10 minutes on a ~12k issue/PR repo)
 ```
 
-Run them in that order. If your embedding basis is `title_summary`, `refresh` automatically inserts the summarize stage before embed for you.
+Run them in that order. If your embedding basis is `title_summary`, `refresh` automatically inserts the summarize stage before embed for you. With the default `title_original` basis, `refresh` does not summarize unless you run `summarize` explicitly.
 
 ## Init And Doctor
 
@@ -178,10 +178,12 @@ ghcrawl configure --embedding-basis title_original
 Current defaults:
 
 - summary model: `gpt-5-mini`
-- embedding basis: `title_summary` (`title + dedupe summary`)
+- embedding basis: `title_original` (`title + original body`)
 - vector backend: `vectorlite`
 
 Changing the summary model or embedding basis makes the next `refresh` rebuild vectors and clusters for that repo.
+
+If you opt into `title_summary`, ghcrawl summarizes before embedding and uses `title + dedupe summary` as the active vector text. On `openclaw/openclaw`, that improved non-solo cluster membership by about 50% versus `title_original`, but it adds OpenAI spend. A first summarize of roughly `18k` open issues and PRs in that repo typically costs about `$15-$30` with `gpt-5-mini`; later refreshes are usually much cheaper because only changed items need summaries.
 
 ### 1Password CLI Example
 
@@ -298,7 +300,7 @@ The agent and build contract for this repo lives in [SPEC.md](./SPEC.md).
 - `embed` defaults to `text-embedding-3-large` with `dimensions=1024`
 - `embed` maintains one active vector per thread, stored in a persistent `vectorlite` sidecar index
 - `embed` stores an input hash per thread and will not resubmit unchanged text for re-embedding
-- the default embedding basis is `title + dedupe summary`; use `ghcrawl configure` to switch to `title + original body`
+- the default embedding basis is `title + original body`; use `ghcrawl configure --embedding-basis title_summary` if you want to summarize before embedding
 - `sync --since` accepts ISO timestamps and relative durations like `15m`, `2h`, `7d`, and `1mo`
 - `sync --limit <count>` is the best smoke-test path on a busy repository
 - `tui` remembers sort order and min cluster size per repository in the persisted config file

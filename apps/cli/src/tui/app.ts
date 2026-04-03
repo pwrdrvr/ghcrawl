@@ -836,7 +836,11 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     void (async () => {
       modalOpen = true;
       try {
-        const selection = await promptUpdatePipelineSelection(widgets.screen, snapshot?.stats ?? null);
+        const selection = await promptUpdatePipelineSelection(
+          widgets.screen,
+          snapshot?.stats ?? null,
+          params.service.config.embeddingBasis,
+        );
         if (!selection) {
           render();
           return;
@@ -1351,6 +1355,23 @@ export function buildUpdatePipelineLabels(
   });
 }
 
+export function buildUpdatePipelineHelpContent(embeddingBasis: 'title_original' | 'title_summary'): string {
+  const summariesEnabled = embeddingBasis === 'title_summary';
+  const summaryStatus = summariesEnabled
+    ? 'LLM summaries: enabled via title_summary.'
+    : 'LLM summaries: disabled; current basis is title_original.';
+  const summaryAction = summariesEnabled
+    ? 'On openclaw/openclaw this improved non-solo cluster membership by about 50% versus title_original.'
+    : 'Enable with `ghcrawl configure --embedding-basis title_summary` if you want richer clustering; on openclaw/openclaw that improved non-solo cluster membership by about 50%.';
+  return [
+    'Usually you want all three. Run order is fixed: GitHub sync/reconcile -> embeddings -> clusters.',
+    `${summaryStatus} ${summaryAction}`,
+    'A first summarize of ~18k open issues/PRs in openclaw/openclaw typically costs about $15-$30 with gpt-5-mini.',
+    'Later refreshes are usually much cheaper because only changed items need summaries.',
+    'Toggle with space, move with arrows, Enter to start, Esc to cancel.',
+  ].join('\n');
+}
+
 export function buildHelpContent(): string {
   return [
     '{bold}ghcrawl TUI Help{/bold}',
@@ -1477,6 +1498,7 @@ async function promptHelp(screen: blessed.Widgets.Screen): Promise<void> {
 async function promptUpdatePipelineSelection(
   screen: blessed.Widgets.Screen,
   stats: TuiRepoStats | null,
+  embeddingBasis: 'title_original' | 'title_summary',
 ): Promise<UpdateTaskSelection | null> {
   const selection: UpdateTaskSelection = { sync: true, embed: true, cluster: true };
   const modalWidth = '76%';
@@ -1490,7 +1512,7 @@ async function promptUpdatePipelineSelection(
     top: 'center',
     left: 'center',
     width: modalWidth,
-    height: 11,
+    height: 14,
     style: {
       border: { fg: '#5bc0eb' },
       item: { fg: 'white' },
@@ -1500,14 +1522,12 @@ async function promptUpdatePipelineSelection(
   });
   const help = blessed.box({
     parent: screen,
-    top: 'center-4',
+    top: 'center-5',
     left: 'center',
     width: modalWidth,
-    height: 4,
+    height: 7,
     style: { fg: 'white', bg: '#101522' },
-    content:
-      'Usually you want all three. Run order is fixed: GitHub sync/reconcile -> embeddings -> clusters.\n' +
-      'Toggle with space, move with arrows, Enter to start, Esc to cancel.',
+    content: buildUpdatePipelineHelpContent(embeddingBasis),
   });
 
   box.focus();

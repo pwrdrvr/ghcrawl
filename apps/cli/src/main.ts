@@ -678,6 +678,9 @@ export function formatConfigureReport(result: ConfigureReport): string {
   const basisLabel = result.embeddingBasis === 'title_summary'
     ? 'title + dedupe summary'
     : 'title + original body';
+  const summaryModeNote = result.embeddingBasis === 'title_summary'
+    ? 'enabled automatically during refresh'
+    : 'disabled by default; enable title_summary to summarize before embedding';
   const lines = [
     'ghcrawl configure',
     `config path: ${result.configPath}`,
@@ -686,6 +689,7 @@ export function formatConfigureReport(result: ConfigureReport): string {
     'Active settings',
     `  summary model: ${result.summaryModel}`,
     `  embedding basis: ${result.embeddingBasis} (${basisLabel})`,
+    `  llm summaries: ${summaryModeNote}`,
     `  vector backend: ${result.vectorBackend}`,
     '',
     `Estimated one-time summary cost for ~${result.costEstimateUsd.sampleThreads.toLocaleString()} threads`,

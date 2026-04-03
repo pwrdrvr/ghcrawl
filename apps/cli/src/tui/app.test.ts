@@ -6,6 +6,7 @@ import type { TuiClusterDetail, TuiRepoStats, TuiThreadDetail } from '@ghcrawl/a
 import {
   buildRefreshCliArgs,
   buildHelpContent,
+  buildUpdatePipelineHelpContent,
   buildUpdatePipelineLabels,
   describeUpdateTask,
   escapeBlessedText,
@@ -199,6 +200,17 @@ test('buildHelpContent includes the full key command list', () => {
   assert.match(content, /q\s+quit the TUI/);
   assert.doesNotMatch(content, /j \/ k/);
   assert.match(content, /This popup scrolls\./);
+});
+
+test('buildUpdatePipelineHelpContent explains the LLM summary tradeoff for both modes', () => {
+  const disabled = buildUpdatePipelineHelpContent('title_original');
+  assert.match(disabled, /LLM summaries: disabled/);
+  assert.match(disabled, /configure --embedding-basis title_summary/);
+  assert.match(disabled, /\$15-\$30/);
+
+  const enabled = buildUpdatePipelineHelpContent('title_summary');
+  assert.match(enabled, /LLM summaries: enabled/);
+  assert.match(enabled, /about 50%/);
 });
 
 test('buildRefreshCliArgs maps the staged selection to refresh skip flags', () => {

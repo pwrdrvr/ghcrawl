@@ -25,8 +25,9 @@ Current pipeline defaults to keep in mind:
 
 - persistent semantic search and clustering use a `vectorlite` sidecar index
 - the default summary model is `gpt-5-mini`
-- the default embedding basis is `title_summary`, which means `refresh` may run summarize before embed
+- the default embedding basis is `title_original`, so `refresh` does not summarize unless the user explicitly switches to `title_summary`
 - changing summary model or embedding basis with `ghcrawl configure` makes the next refresh rebuild vectors and clusters
+- opting into `title_summary` can materially improve clustering quality, but it adds OpenAI cost; on `openclaw/openclaw` it improved non-solo cluster membership by about 50%
 
 Also never run `close-thread` or `close-cluster` unless the user explicitly asks you to mark a local thread or cluster closed.
 

@@ -357,7 +357,7 @@ export function loadConfig(options: LoadConfigOptions = {}): GitcrawlConfig {
     { source: 'env', value: getEmbeddingBasis(getEnvString(env, 'GHCRAWL_EMBEDDING_BASIS', 'GHCRAWL_EMBEDDING_BASIS')) },
     { source: 'config', value: stored.data.embeddingBasis },
     { source: 'dotenv', value: getEmbeddingBasis(getDotenvString(dotenvValues, 'GHCRAWL_EMBEDDING_BASIS', 'GHCRAWL_EMBEDDING_BASIS')) },
-    { source: 'default', value: 'title_summary' },
+    { source: 'default', value: 'title_original' },
   );
   const vectorBackend = pickDefined<VectorBackend>(
     { source: 'env', value: getVectorBackend(getEnvString(env, 'GHCRAWL_VECTOR_BACKEND', 'GHCRAWL_VECTOR_BACKEND')) },
@@ -403,7 +403,7 @@ export function loadConfig(options: LoadConfigOptions = {}): GitcrawlConfig {
     opItemName: stored.data.opItemName,
     summaryModel: summaryModel.value ?? 'gpt-5-mini',
     embedModel: embedModel.value ?? 'text-embedding-3-large',
-    embeddingBasis: embeddingBasis.value ?? 'title_summary',
+    embeddingBasis: embeddingBasis.value ?? 'title_original',
     vectorBackend: vectorBackend.value ?? 'vectorlite',
     embedBatchSize,
     embedConcurrency,

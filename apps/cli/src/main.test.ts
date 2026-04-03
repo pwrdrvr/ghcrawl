@@ -184,7 +184,7 @@ test('configure prints current persisted settings and cost estimates', async () 
 
   assert.match(stdout.read(), /ghcrawl configure/);
   assert.match(stdout.read(), /summary model: gpt-5-mini/);
-  assert.match(stdout.read(), /embedding basis: title_summary/);
+  assert.match(stdout.read(), /embedding basis: title_original/);
   assert.match(stdout.read(), /gpt-5\.4-mini: ~\$30 USD/);
 });
 

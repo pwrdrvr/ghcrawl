@@ -56,7 +56,7 @@ test('loadConfig prefers persisted config and stores defaults under the user con
   assert.equal(config.openaiApiKeySource, 'config');
   assert.equal(config.dbPath, path.join(home, '.config', 'ghcrawl', 'ghcrawl.db'));
   assert.equal(config.summaryModel, 'gpt-5-mini');
-  assert.equal(config.embeddingBasis, 'title_summary');
+  assert.equal(config.embeddingBasis, 'title_original');
   assert.equal(config.vectorBackend, 'vectorlite');
 });
 
