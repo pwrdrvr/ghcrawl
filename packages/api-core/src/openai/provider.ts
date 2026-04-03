@@ -18,10 +18,20 @@ export type SummaryUsage = {
   reasoningTokens: number;
 };
 
+export type EmbedUsage = {
+  promptTokens: number;
+  totalTokens: number;
+};
+
+export type EmbedResult = {
+  embeddings: number[][];
+  usage?: EmbedUsage;
+};
+
 export type AiProvider = {
   checkAuth: () => Promise<void>;
   summarizeThread: (params: { model: string; text: string }) => Promise<{ summary: SummaryResult; usage?: SummaryUsage }>;
-  embedTexts: (params: { model: string; texts: string[]; dimensions?: number }) => Promise<number[][]>;
+  embedTexts: (params: { model: string; texts: string[]; dimensions?: number }) => Promise<EmbedResult>;
 };
 
 const summarySchema = z.object({
@@ -116,9 +126,9 @@ export class OpenAiProvider implements AiProvider {
     throw new Error(`OpenAI summarization failed after 3 attempts: ${lastError?.message ?? 'unknown error'}`);
   }
 
-  async embedTexts(params: { model: string; texts: string[]; dimensions?: number }): Promise<number[][]> {
+  async embedTexts(params: { model: string; texts: string[]; dimensions?: number }): Promise<EmbedResult> {
     if (params.texts.length === 0) {
-      return [];
+      return { embeddings: [] };
     }
 
     let lastError: Error | null = null;
@@ -130,7 +140,12 @@ export class OpenAiProvider implements AiProvider {
           dimensions: params.dimensions,
         });
 
-        return response.data.map((item) => item.embedding);
+        return {
+          embeddings: response.data.map((item) => item.embedding),
+          usage: response.usage
+            ? { promptTokens: response.usage.prompt_tokens, totalTokens: response.usage.total_tokens }
+            : undefined,
+        };
       } catch (error) {
         const shouldRetry =
           error instanceof RateLimitError ||
