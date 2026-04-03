@@ -201,6 +201,8 @@ export type SyncResultDto = z.infer<typeof syncResultSchema>;
 export const embedResultSchema = z.object({
   runId: z.number().int().positive(),
   embedded: z.number().int().nonnegative(),
+  promptTokens: z.number().int().nonnegative().optional(),
+  estimatedCostUsd: z.number().nonnegative().nullable().optional(),
 });
 export type EmbedResultDto = z.infer<typeof embedResultSchema>;
 
