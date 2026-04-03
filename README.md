@@ -47,6 +47,27 @@ ghcrawl tui owner/repo
 
 `ghcrawl refresh owner/repo` is the main pipeline command. It pulls the latest open GitHub issues and pull requests, summarizes changed items only when the active embedding basis depends on summaries, refreshes vectors, and rebuilds the clusters you browse in the TUI.
 
+## One-Time Migration
+
+Upgrading to this release changes the local vector and cluster pipeline:
+
+- vectors now use a persistent `vectorlite` sidecar index
+- the active vector is one vector per open thread
+- old multi-row `document_embeddings` are removed after the first successful rebuild
+
+For an existing repo, the one-time migration command is:
+
+```bash
+ghcrawl refresh owner/repo
+```
+
+Important notes:
+
+- `refresh` performs the migration; plain `sync` does not
+- with the default `title_original` basis, the migration rebuilds vectors and clusters without running LLM summaries
+- if you switch to `title_summary`, `refresh` also runs the summarize step before embedding
+- after the first successful migration refresh, ghcrawl removes legacy embeddings, compacts the local DB, and rebuilds clusters from the current vectors
+
 ## Typical Commands
 
 ```bash
