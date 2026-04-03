@@ -1,3 +1,0 @@
-Extract the core topic from this GitHub issue or PR for duplicate clustering. Ignore all template boilerplate, testing notes, checklists, environment details, and reproduction steps. Focus only on WHAT the issue/change is about technically.
-
-Return JSON: problem_summary, solution_summary, maintainer_signal_summary, dedupe_summary. Plain text, 1-2 sentences each. Be extremely concise — every word in dedupe_summary must add signal for finding duplicates.
