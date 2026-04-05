@@ -67,7 +67,7 @@ import { buildCanonicalDocument, isBotLikeAuthor } from './documents/normalize.j
 import { makeGitHubClient, type GitHubClient } from './github/client.js';
 import { OpenAiProvider, type AiProvider } from './openai/provider.js';
 import { cosineSimilarity, dotProduct, normalizeEmbedding, rankNearestNeighbors, rankNearestNeighborsByScore } from './search/exact.js';
-import type { VectorStore } from './vector/store.js';
+import type { VectorNeighbor, VectorQueryParams, VectorStore } from './vector/store.js';
 import { VectorliteStore } from './vector/vectorlite-store.js';
 
 type RunTable = 'sync_runs' | 'summary_runs' | 'embedding_runs' | 'cluster_runs';
@@ -1312,9 +1312,7 @@ export class GHCrawlService {
           `[cluster] loaded ${vectorItems.length} active vector(s) for ${repository.fullName} backend=${this.config.vectorBackend} k=${k} query_limit=${annQuery.limit} candidateK=${annQuery.candidateK} efSearch=${annQuery.efSearch ?? 'default'} minScore=${minScore}`,
         );
         for (const item of vectorItems) {
-          const neighbors = this.vectorStore.queryNearest({
-            storePath: this.repoVectorStorePath(repository.fullName),
-            dimensions: ACTIVE_EMBED_DIMENSIONS,
+          const neighbors = this.queryNearestWithRecovery(repository.id, repository.fullName, {
             vector: item.embedding,
             limit: annQuery.limit,
             candidateK: annQuery.candidateK + 1,
@@ -1732,9 +1730,7 @@ export class GHCrawlService {
           texts: [params.query],
           dimensions: ACTIVE_EMBED_DIMENSIONS,
         });
-        const neighbors = this.vectorStore.queryNearest({
-          storePath: this.repoVectorStorePath(repository.fullName),
-          dimensions: ACTIVE_EMBED_DIMENSIONS,
+        const neighbors = this.queryNearestWithRecovery(repository.id, repository.fullName, {
           vector: queryEmbedding,
           limit: limit * 2,
           candidateK: Math.max(limit * 8, 64),
@@ -1871,15 +1867,12 @@ export class GHCrawlService {
 
     if (targetRow) {
       responseThread = targetRow;
-      const candidateRows = this.vectorStore
-        .queryNearest({
-          storePath: this.repoVectorStorePath(repository.fullName),
-          dimensions: ACTIVE_EMBED_DIMENSIONS,
-          vector: this.parseStoredVector(targetRow.vector_json),
-          limit: limit * 2,
-          candidateK: Math.max(limit * 8, 64),
-          excludeThreadId: targetRow.id,
-        })
+      const candidateRows = this.queryNearestWithRecovery(repository.id, repository.fullName, {
+        vector: this.parseStoredVector(targetRow.vector_json),
+        limit: limit * 2,
+        candidateK: Math.max(limit * 8, 64),
+        excludeThreadId: targetRow.id,
+      })
         .filter((row) => row.score >= minScore);
       const candidateIds = candidateRows.map((row) => row.threadId);
       const neighborMeta = candidateIds.length
@@ -2651,6 +2644,50 @@ export class GHCrawlService {
   private repoVectorStorePath(repoFullName: string): string {
     const safeName = repoFullName.replace(/[^a-zA-Z0-9._-]+/g, '__');
     return path.join(this.config.configDir, 'vectors', `${safeName}.sqlite`);
+  }
+
+  private queryNearestWithRecovery(
+    repoId: number,
+    repoFullName: string,
+    params: Omit<VectorQueryParams, 'storePath' | 'dimensions'>,
+  ): VectorNeighbor[] {
+    try {
+      return this.vectorStore.queryNearest({
+        ...params,
+        storePath: this.repoVectorStorePath(repoFullName),
+        dimensions: ACTIVE_EMBED_DIMENSIONS,
+      });
+    } catch (error) {
+      if (!this.isCorruptedVectorIndexError(error)) {
+        throw error;
+      }
+      this.rebuildRepositoryVectorStore(repoId, repoFullName);
+      return this.vectorStore.queryNearest({
+        ...params,
+        storePath: this.repoVectorStorePath(repoFullName),
+        dimensions: ACTIVE_EMBED_DIMENSIONS,
+      });
+    }
+  }
+
+  private rebuildRepositoryVectorStore(repoId: number, repoFullName: string): void {
+    this.vectorStore.resetRepository({
+      storePath: this.repoVectorStorePath(repoFullName),
+      dimensions: ACTIVE_EMBED_DIMENSIONS,
+    });
+    for (const row of this.loadClusterableActiveVectorMeta(repoId, repoFullName)) {
+      this.vectorStore.upsertVector({
+        storePath: this.repoVectorStorePath(repoFullName),
+        dimensions: ACTIVE_EMBED_DIMENSIONS,
+        threadId: row.id,
+        vector: row.embedding,
+      });
+    }
+  }
+
+  private isCorruptedVectorIndexError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return /Failed to load index from file|corrupted or unsupported/i.test(message);
   }
 
   private resetRepositoryVectors(repoId: number, repoFullName: string): void {
