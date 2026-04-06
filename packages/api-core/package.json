@@ -50,7 +50,7 @@
     "@octokit/plugin-throttling": "^11.0.1",
     "@shutterstock/p-map-iterable": "^1.1.2",
     "better-sqlite3": "^12.2.0",
-    "dotenv": "^17.2.2",
+    "dotenv": "^17.4.1",
     "octokit": "^5.0.3",
     "openai": "^6.33.0",
     "vectorlite": "^0.2.0",
