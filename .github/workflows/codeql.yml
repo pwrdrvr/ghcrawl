@@ -34,7 +34,7 @@ jobs:
           queries: security-extended
 
       - name: Install Node.js and dependencies
-        uses: ./.github/actions/configure-nodejs
+        uses: pwrdrvr/configure-nodejs@v1
 
       - name: Build workspace
         run: pnpm build
