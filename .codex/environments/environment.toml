@@ -3,7 +3,20 @@ version = 1
 name = "ghcrawl"
 
 [setup]
-script = "pnpm install"
+script = '''
+export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+
+if [ -s "$NVM_DIR/nvm.sh" ]; then
+  . "$NVM_DIR/nvm.sh"
+  nvm use --silent default >/dev/null 2>&1 || nvm use --silent node >/dev/null 2>&1 || true
+fi
+
+if command -v pnpm >/dev/null 2>&1; then
+  pnpm install
+else
+  corepack pnpm install
+fi
+'''
 
 [[actions]]
 name = "tui"
