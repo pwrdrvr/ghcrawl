@@ -181,6 +181,8 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     threadDetailCache.clear();
   };
 
+  const formatTuiError = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
   const rebuildClusterItems = (): void => {
     if (!snapshot) {
       clusterItems = ['Pick a repository with p'];
@@ -894,11 +896,12 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     }
   };
 
-  const switchRepository = (
+  const setRepositoryPending = (
     target: RepositoryTarget,
     overrides?: Partial<{
       minClusterSize: TuiMinSizeFilter;
       sortMode: TuiClusterSortMode;
+      status: string;
     }>,
   ): void => {
     currentRepository = target;
@@ -919,7 +922,18 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     selectedMemberThreadId = null;
     memberRows = [];
     memberIndex = -1;
-    status = `Switched to ${target.owner}/${target.repo}`;
+    status = overrides?.status ?? `Switched to ${target.owner}/${target.repo}`;
+    render();
+  };
+
+  const switchRepository = (
+    target: RepositoryTarget,
+    overrides?: Partial<{
+      minClusterSize: TuiMinSizeFilter;
+      sortMode: TuiClusterSortMode;
+    }>,
+  ): void => {
+    setRepositoryPending(target, overrides);
     refreshAll(false);
   };
 
@@ -929,7 +943,10 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       return false;
     }
 
-    switchRepository(target, { minClusterSize: 1 });
+    setRepositoryPending(target, {
+      minClusterSize: 1,
+      status: `Preparing ${target.owner}/${target.repo}`,
+    });
     pushActivity(`[repo] opened ${target.owner}/${target.repo}; starting initial update pipeline in the background`);
     return startBackgroundUpdatePipeline(target, { sync: true, embed: true, cluster: true });
   };
@@ -966,6 +983,9 @@ export async function startTui(params: StartTuiParams): Promise<void> {
         }
         runRepositoryBootstrap(target);
         updateFocus('clusters');
+      } catch (error) {
+        status = 'Repository action failed';
+        pushActivity(`[repo] action failed: ${formatTuiError(error)}`);
       } finally {
         modalOpen = false;
       }
@@ -1003,6 +1023,10 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       }
       updateFocus('clusters');
       return true;
+    } catch (error) {
+      status = 'Repository selection failed';
+      pushActivity(`[repo] selection failed: ${formatTuiError(error)}`);
+      return false;
     } finally {
       modalOpen = false;
     }
