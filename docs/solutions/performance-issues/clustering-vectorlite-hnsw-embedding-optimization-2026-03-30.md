@@ -28,52 +28,6 @@ tags:
 
 GitCrawl clusters ~18,500 GitHub issues/PRs by embedding similarity to identify duplicates and related threads. The original pipeline used exact k-nearest-neighbor search on title+body embeddings with unbounded clustering. This produced 4.73/5 coherence but ungoverned cluster growth (max 455 members), only 31.2% coverage, and 1.70% outlier rate. The goal was to improve coherence, control cluster sizes, and increase coverage.
 
-## Provenance
-
-- Project: [pwrdrvr/ghcrawl](https://github.com/pwrdrvr/ghcrawl)
-- Recovered source session: `b82c1142-949a-433d-9486-df441f2d36bd`
-- Entry point: `/ce-optimize`
-- Notes: the prompts below were cleaned up for spelling, grammar, and readability while preserving the original intent
-
-### Sample Kickoff Prompt
-
-Short version:
-
-```text
-We want Vectorlite ANN plus post-processing to completely replace the in-memory exact kNN search.
-
-We are only getting about 18% cluster membership for the ~18k open issues and PRs in the default home-directory database. We want to run an optimization that uses that database as a starting point but does not modify the shared copy.
-
-The working model should be:
-- copy the database for the run
-- convert the copy to use Vectorlite as the base for each test
-- make a per-experiment copy when needed
-- discard those copies afterward, or keep cluster population artifacts without embeddings for later analysis
-```
-
-Expanded version:
-
-```text
-We have about 18k open issues and PRs. We want to test several changes that improve clustering quality, reduce the count of singleton clusters, and improve the quality of matches within each cluster.
-
-We do not need clusters to mean "exactly the same issue" across all issues and PRs. We want useful, slightly broader clusters that let us extract the superset of repeated reports. We care more about grouping related reports together than about splitting clusters because one item mentions a narrower sub-point.
-
-Use the shared default database only as input. Do not mutate it. Each experiment should work from its own copied database so we can compare runs safely and keep useful artifacts for later analysis.
-```
-
-### Early Signal From The First Sweep
-
-This was the first useful threshold sweep recovered from the optimization thread before later judge-driven refinements:
-
-| Experiment | minScore | Multi-member % | Max cluster size | Edges |
-|---|---:|---:|---:|---:|
-| Baseline | 0.82 | 31.4% | 619 | 6,934 |
-| Exp 2 | 0.80 | 42.0% | 2,417 | 10,744 |
-| Exp 3 | 0.78 | 53.2% | 4,905 | 16,400 |
-| Exp 1 | 0.75 | 68.6% | 9,780 | 29,157 |
-
-The immediate takeaway from the optimize loop was that lowering the threshold increased coverage fast, but Union-Find transitive closure created degenerate mega-clusters. That pushed the work toward bounded clustering, refinement, and eventually judge-scored evaluation.
-
 ## Approach
 
 ### Phase 1: Summarization Prompt Optimization
