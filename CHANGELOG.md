@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.8.0-beta.2 - 2026-04-11
+
+### Fixes
+
+- Kept the TUI running when adding a new repository instead of exiting the session unexpectedly. Thanks @huntharo (#48)
+- Bootstrapped `pnpm` during Codex environment setup so local automation can start more reliably.
+
+### Internal
+
+- Updated `dotenv` from `17.3.1` to `17.4.1`. Thanks @dependabot[bot] (#45)
+- Updated `@clack/prompts` from `1.1.0` to `1.2.0`. Thanks @dependabot[bot] (#46)
+- Updated `@types/node` from `24.12.0` to `24.12.2`. Thanks @dependabot[bot] (#47)
+
 ## v0.8.0-beta.1 - 2026-04-03
 
 ### Highlights

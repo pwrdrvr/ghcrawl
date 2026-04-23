@@ -27,7 +27,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install Node.js and dependencies
-        uses: ./.github/actions/configure-nodejs
+        uses: pwrdrvr/configure-nodejs@v1
         with:
           lookup-only: true
 
@@ -40,7 +40,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install Node.js and dependencies
-        uses: ./.github/actions/configure-nodejs
+        uses: pwrdrvr/configure-nodejs@v1
 
       - name: Run workspace typecheck
         run: pnpm typecheck
@@ -54,7 +54,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install Node.js and dependencies
-        uses: ./.github/actions/configure-nodejs
+        uses: pwrdrvr/configure-nodejs@v1
 
       - name: Run workspace tests
         run: pnpm test
@@ -68,7 +68,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install Node.js and dependencies
-        uses: ./.github/actions/configure-nodejs
+        uses: pwrdrvr/configure-nodejs@v1
 
       - name: Run cluster performance integration test
         env:
@@ -92,7 +92,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install Node.js and dependencies
-        uses: ./.github/actions/configure-nodejs
+        uses: pwrdrvr/configure-nodejs@v1
 
       - name: Verify non-interactive doctor JSON
         run: pnpm health
@@ -112,7 +112,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install Node.js and dependencies
-        uses: ./.github/actions/configure-nodejs
+        uses: pwrdrvr/configure-nodejs@v1
 
       - name: Pack and install publishable workspace packages
         run: pnpm pack:smoke
