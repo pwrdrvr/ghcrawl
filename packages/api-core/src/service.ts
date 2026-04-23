@@ -2722,16 +2722,27 @@ export class GHCrawlService {
     }
 
     const deleteVectorRow = this.db.prepare('delete from thread_vectors where thread_id = ?');
+    let shouldRebuildVectorStore = false;
     this.db.transaction(() => {
       for (const row of rows) {
         deleteVectorRow.run(row.thread_id);
-        this.vectorStore.deleteVector({
-          storePath: this.repoVectorStorePath(repoFullName),
-          dimensions: ACTIVE_EMBED_DIMENSIONS,
-          threadId: row.thread_id,
-        });
+        try {
+          this.vectorStore.deleteVector({
+            storePath: this.repoVectorStorePath(repoFullName),
+            dimensions: ACTIVE_EMBED_DIMENSIONS,
+            threadId: row.thread_id,
+          });
+        } catch (error) {
+          if (!this.isCorruptedVectorIndexError(error)) {
+            throw error;
+          }
+          shouldRebuildVectorStore = true;
+        }
       }
     })();
+    if (shouldRebuildVectorStore) {
+      this.rebuildRepositoryVectorStore(repoId, repoFullName);
+    }
     return rows.length;
   }
 
@@ -4477,12 +4488,19 @@ export class GHCrawlService {
         nowIso(),
         nowIso(),
       );
-    this.vectorStore.upsertVector({
-      storePath: this.repoVectorStorePath(repoFullName),
-      dimensions: ACTIVE_EMBED_DIMENSIONS,
-      threadId,
-      vector: embedding,
-    });
+    try {
+      this.vectorStore.upsertVector({
+        storePath: this.repoVectorStorePath(repoFullName),
+        dimensions: ACTIVE_EMBED_DIMENSIONS,
+        threadId,
+        vector: embedding,
+      });
+    } catch (error) {
+      if (!this.isCorruptedVectorIndexError(error)) {
+        throw error;
+      }
+      this.rebuildRepositoryVectorStore(repoId, repoFullName);
+    }
   }
 
   private countLegacyEmbeddings(repoId: number): number {

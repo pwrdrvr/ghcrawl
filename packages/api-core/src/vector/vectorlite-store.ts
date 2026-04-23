@@ -68,34 +68,16 @@ export class VectorliteStore implements VectorStore {
   }
 
   upsertVector(params: { storePath: string; dimensions: number; threadId: number; vector: number[] }): void {
-    try {
-      const handle = this.getHandle(params.storePath, params.dimensions);
-      handle.db.exec(`delete from ${TABLE_NAME} where rowid = ${Math.trunc(params.threadId)}`);
-      handle.db
-        .prepare(`insert into ${TABLE_NAME}(rowid, vec) values (?, ?)`)
-        .run(params.threadId, this.vectorBuffer(params.vector));
-    } catch (error) {
-      if (!this.isCorruptedIndexError(error)) {
-        throw error;
-      }
-      this.resetStoreFiles(params.storePath);
-      const handle = this.getHandle(params.storePath, params.dimensions);
-      handle.db
-        .prepare(`insert into ${TABLE_NAME}(rowid, vec) values (?, ?)`)
-        .run(params.threadId, this.vectorBuffer(params.vector));
-    }
+    const handle = this.getHandle(params.storePath, params.dimensions);
+    handle.db.exec(`delete from ${TABLE_NAME} where rowid = ${Math.trunc(params.threadId)}`);
+    handle.db
+      .prepare(`insert into ${TABLE_NAME}(rowid, vec) values (?, ?)`)
+      .run(params.threadId, this.vectorBuffer(params.vector));
   }
 
   deleteVector(params: { storePath: string; dimensions: number; threadId: number }): void {
-    try {
-      const handle = this.getHandle(params.storePath, params.dimensions);
-      handle.db.exec(`delete from ${TABLE_NAME} where rowid = ${Math.trunc(params.threadId)}`);
-    } catch (error) {
-      if (!this.isCorruptedIndexError(error)) {
-        throw error;
-      }
-      this.resetStoreFiles(params.storePath);
-    }
+    const handle = this.getHandle(params.storePath, params.dimensions);
+    handle.db.exec(`delete from ${TABLE_NAME} where rowid = ${Math.trunc(params.threadId)}`);
   }
 
   queryNearest(params: VectorQueryParams): VectorNeighbor[] {
