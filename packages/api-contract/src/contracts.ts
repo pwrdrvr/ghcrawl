@@ -223,6 +223,7 @@ export const syncResultSchema = z.object({
   runId: z.number().int().positive(),
   threadsSynced: z.number().int().nonnegative(),
   commentsSynced: z.number().int().nonnegative(),
+  codeFilesSynced: z.number().int().nonnegative().default(0),
   threadsClosed: z.number().int().nonnegative(),
 });
 export type SyncResultDto = z.infer<typeof syncResultSchema>;
