@@ -16,6 +16,7 @@ import {
   renderMarkdownForTerminal,
   renderDetailPane,
   resolveBlessedTerminal,
+  resolveClusterHeaderSortFromClick,
   splitClusterDisplayTitle,
 } from './app.js';
 
@@ -134,6 +135,14 @@ test('formatClusterListLabel keeps counts first and splits cluster name from tit
 test('formatClusterListHeader marks the active clickable sort column', () => {
   assert.match(formatClusterListHeader('size'), /cnt\*/);
   assert.match(formatClusterListHeader('recent'), /updated\*/);
+});
+
+test('resolveClusterHeaderSortFromClick maps visible header regions to stable sort choices', () => {
+  assert.equal(resolveClusterHeaderSortFromClick(0, 120, 'recent'), 'size');
+  assert.equal(resolveClusterHeaderSortFromClick(115, 120, 'size'), 'recent');
+  assert.equal(resolveClusterHeaderSortFromClick(24, 120, 'size'), 'recent');
+  assert.equal(resolveClusterHeaderSortFromClick(24, 120, 'recent'), 'size');
+  assert.equal(resolveClusterHeaderSortFromClick(52, 60, 'size'), 'recent');
 });
 
 test('formatClusterShortName returns the first meaningful words', () => {

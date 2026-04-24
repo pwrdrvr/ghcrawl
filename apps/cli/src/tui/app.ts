@@ -101,6 +101,16 @@ const ACTIVITY_LOG_LIMIT = 200;
 const FOOTER_LOG_LINES = 1;
 const CLUSTER_LIST_HEADER_INDEX = 0;
 const CLUSTER_LIST_FIRST_ITEM_INDEX = 1;
+const CLUSTER_COUNT_WIDTH = 3;
+const CLUSTER_NAME_WIDTH = 22;
+const CLUSTER_TITLE_WIDTH = 56;
+const CLUSTER_MIX_WIDTH = 7;
+const CLUSTER_UPDATED_WIDTH = 8;
+const CLUSTER_COLUMN_GAP = 2;
+const CLUSTER_NAME_START = CLUSTER_COUNT_WIDTH + CLUSTER_COLUMN_GAP;
+const CLUSTER_TITLE_START = CLUSTER_NAME_START + CLUSTER_NAME_WIDTH + CLUSTER_COLUMN_GAP;
+const CLUSTER_MIX_START = CLUSTER_TITLE_START + CLUSTER_TITLE_WIDTH + CLUSTER_COLUMN_GAP;
+const CLUSTER_UPDATED_START = CLUSTER_MIX_START + CLUSTER_MIX_WIDTH + CLUSTER_COLUMN_GAP;
 
 export async function startTui(params: StartTuiParams): Promise<void> {
   const selectedRepository = params.owner && params.repo ? { owner: params.owner, repo: params.repo } : null;
@@ -1011,8 +1021,9 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     const itemIndex = getListItemIndexFromMouse(widgets.clusters, event);
     if (event.button === 'left' && itemIndex === CLUSTER_LIST_HEADER_INDEX) {
       suppressNextClusterSelect = true;
-      const relativeX = Number(event.x) - Number(widgets.clusters.aleft) - 2;
-      setSortMode(relativeX <= 5 ? 'size' : relativeX >= 88 ? 'recent' : cycleSortMode(sortMode));
+      const relativeX = Math.max(0, Number(event.x) - Number(widgets.clusters.aleft) - 2);
+      const innerWidth = Math.max(1, Number(widgets.clusters.width) - 2);
+      setSortMode(resolveClusterHeaderSortFromClick(relativeX, innerWidth, sortMode));
       return;
     }
     if (event.button !== 'right') return;
@@ -1647,17 +1658,42 @@ export function parseOwnerRepoValue(value: string): { owner: string; repo: strin
 }
 
 export function formatClusterListLabel(cluster: TuiClusterSummary): string {
-  const countLabel = String(cluster.totalCount).padStart(3);
-  const mixLabel = `${cluster.issueCount}I/${cluster.pullRequestCount}P`.padStart(7);
-  const updated = formatRelativeTime(cluster.latestUpdatedAt).padStart(8);
+  const countLabel = String(cluster.totalCount).padStart(CLUSTER_COUNT_WIDTH);
+  const mixLabel = `${cluster.issueCount}I/${cluster.pullRequestCount}P`.padStart(CLUSTER_MIX_WIDTH);
+  const updated = formatRelativeTime(cluster.latestUpdatedAt).padStart(CLUSTER_UPDATED_WIDTH);
   const title = splitClusterDisplayTitle(cluster.displayTitle);
-  return `${countLabel}  ${title.name.padEnd(22).slice(0, 22)}  ${title.title.padEnd(56).slice(0, 56)}  ${mixLabel}  ${updated}`;
+  return [
+    countLabel,
+    title.name.padEnd(CLUSTER_NAME_WIDTH).slice(0, CLUSTER_NAME_WIDTH),
+    title.title.padEnd(CLUSTER_TITLE_WIDTH).slice(0, CLUSTER_TITLE_WIDTH),
+    mixLabel,
+    updated,
+  ].join('  ');
 }
 
 export function formatClusterListHeader(sortMode: TuiClusterSortMode): string {
-  const countLabel = (sortMode === 'size' ? 'cnt*' : 'cnt').padStart(3);
-  const updated = (sortMode === 'recent' ? 'updated*' : 'updated').padStart(8);
-  return `${countLabel}  ${'cluster'.padEnd(22)}  ${'title'.padEnd(56)}  ${'mix'.padStart(7)}  ${updated}`;
+  const countLabel = (sortMode === 'size' ? 'cnt*' : 'cnt').padStart(CLUSTER_COUNT_WIDTH);
+  const updated = (sortMode === 'recent' ? 'updated*' : 'updated').padStart(CLUSTER_UPDATED_WIDTH);
+  return [
+    countLabel,
+    'cluster'.padEnd(CLUSTER_NAME_WIDTH),
+    'title'.padEnd(CLUSTER_TITLE_WIDTH),
+    'mix'.padStart(CLUSTER_MIX_WIDTH),
+    updated,
+  ].join('  ');
+}
+
+export function resolveClusterHeaderSortFromClick(relativeX: number, visibleWidth: number, currentSortMode: TuiClusterSortMode): TuiClusterSortMode {
+  if (relativeX < CLUSTER_NAME_START) {
+    return 'size';
+  }
+
+  const visibleUpdatedStart = Math.min(CLUSTER_UPDATED_START, Math.max(CLUSTER_NAME_START, visibleWidth - CLUSTER_UPDATED_WIDTH - CLUSTER_COLUMN_GAP));
+  if (relativeX >= visibleUpdatedStart) {
+    return 'recent';
+  }
+
+  return cycleSortMode(currentSortMode);
 }
 
 export function formatClusterShortName(title: string, maxWords = 3): string {
