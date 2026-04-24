@@ -1,11 +1,143 @@
+import crypto from 'node:crypto';
+
 import type { SqliteDatabase } from '../db/sqlite.js';
 import type { EvidenceTier, SimilarityEvidenceBreakdown } from './evidence-score.js';
+import type { DeterministicThreadFingerprint } from './thread-fingerprint.js';
 
 function nowIso(): string {
   return new Date().toISOString();
 }
 
+function stableHash(value: string): string {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function jsonHash(value: unknown): string {
+  return stableHash(JSON.stringify(value));
+}
+
+function upsertInlineBlob(
+  db: SqliteDatabase,
+  params: {
+    text: string;
+    mediaType: string;
+  },
+): number {
+  const sha256 = stableHash(params.text);
+  db.prepare(
+    `insert into blobs (sha256, media_type, compression, size_bytes, storage_kind, storage_path, inline_text, created_at)
+     values (?, ?, 'none', ?, 'inline', null, ?, ?)
+     on conflict(sha256) do nothing`,
+  ).run(sha256, params.mediaType, Buffer.byteLength(params.text), params.text, nowIso());
+  const row = db.prepare('select id from blobs where sha256 = ? limit 1').get(sha256) as { id: number };
+  return row.id;
+}
+
 export type PipelineRunKind = 'sync' | 'fingerprint' | 'enrich' | 'edge' | 'cluster';
+
+export function upsertThreadRevision(
+  db: SqliteDatabase,
+  params: {
+    threadId: number;
+    sourceUpdatedAt?: string | null;
+    title: string;
+    body?: string | null;
+    labels: string[];
+    rawJson?: string | null;
+  },
+): number {
+  const labels = Array.from(new Set(params.labels)).sort();
+  const contentHash = jsonHash({
+    title: params.title,
+    body: params.body ?? '',
+    labels,
+    rawJson: params.rawJson ?? null,
+  });
+  const rawJsonBlobId =
+    params.rawJson && params.rawJson !== '{}'
+      ? upsertInlineBlob(db, {
+          text: params.rawJson,
+          mediaType: 'application/vnd.ghcrawl.thread.raw+json',
+        })
+      : null;
+  db.prepare(
+    `insert into thread_revisions (
+       thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, raw_json_blob_id, created_at
+     ) values (?, ?, ?, ?, ?, ?, ?, ?)
+     on conflict(thread_id, content_hash) do update set
+       source_updated_at = excluded.source_updated_at,
+       raw_json_blob_id = excluded.raw_json_blob_id`,
+  ).run(
+    params.threadId,
+    params.sourceUpdatedAt ?? null,
+    contentHash,
+    stableHash(params.title),
+    stableHash(params.body ?? ''),
+    jsonHash(labels),
+    rawJsonBlobId,
+    nowIso(),
+  );
+  const row = db
+    .prepare('select id from thread_revisions where thread_id = ? and content_hash = ? limit 1')
+    .get(params.threadId, contentHash) as { id: number };
+  return row.id;
+}
+
+export function upsertThreadFingerprint(
+  db: SqliteDatabase,
+  params: {
+    threadRevisionId: number;
+    fingerprint: DeterministicThreadFingerprint;
+  },
+): void {
+  const minhashBlobId = upsertInlineBlob(db, {
+    text: JSON.stringify(params.fingerprint.minhashSignature),
+    mediaType: 'application/vnd.ghcrawl.minhash+json',
+  });
+  const winnowBlobId = upsertInlineBlob(db, {
+    text: JSON.stringify(params.fingerprint.winnowHashes),
+    mediaType: 'application/vnd.ghcrawl.winnow+json',
+  });
+  const featureJson = JSON.stringify({
+    salientTitleTokens: params.fingerprint.salientTitleTokens,
+    hunkSignatures: params.fingerprint.hunkSignatures,
+    patchIds: params.fingerprint.patchIds,
+  });
+  db.prepare(
+    `insert into thread_fingerprints (
+       thread_revision_id, algorithm_version, fingerprint_hash, fingerprint_slug,
+       title_tokens_json, body_token_hash, linked_refs_json, file_set_hash, module_buckets_json,
+       minhash_signature_blob_id, simhash64, winnow_hashes_blob_id, feature_json, created_at
+     ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     on conflict(thread_revision_id, algorithm_version) do update set
+       fingerprint_hash = excluded.fingerprint_hash,
+       fingerprint_slug = excluded.fingerprint_slug,
+       title_tokens_json = excluded.title_tokens_json,
+       body_token_hash = excluded.body_token_hash,
+       linked_refs_json = excluded.linked_refs_json,
+       file_set_hash = excluded.file_set_hash,
+       module_buckets_json = excluded.module_buckets_json,
+       minhash_signature_blob_id = excluded.minhash_signature_blob_id,
+       simhash64 = excluded.simhash64,
+       winnow_hashes_blob_id = excluded.winnow_hashes_blob_id,
+       feature_json = excluded.feature_json`,
+  ).run(
+    params.threadRevisionId,
+    params.fingerprint.algorithmVersion,
+    params.fingerprint.fingerprintHash,
+    params.fingerprint.fingerprintSlug,
+    JSON.stringify(params.fingerprint.titleTokens),
+    jsonHash(params.fingerprint.bodyTokens),
+    JSON.stringify(params.fingerprint.linkedRefs),
+    jsonHash(params.fingerprint.changedFiles),
+    JSON.stringify(params.fingerprint.moduleBuckets),
+    minhashBlobId,
+    params.fingerprint.simhash64,
+    winnowBlobId,
+    featureJson,
+    nowIso(),
+  );
+}
 
 export function createPipelineRun(
   db: SqliteDatabase,

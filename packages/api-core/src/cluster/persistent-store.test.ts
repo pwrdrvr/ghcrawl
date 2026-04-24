@@ -11,6 +11,8 @@ import {
   upsertClusterGroup,
   upsertClusterMembership,
   upsertSimilarityEdgeEvidence,
+  upsertThreadFingerprint,
+  upsertThreadRevision,
 } from './persistent-store.js';
 import { buildDeterministicThreadFingerprint } from './thread-fingerprint.js';
 
@@ -121,6 +123,63 @@ test('persistent cluster store upserts edge evidence and governed memberships', 
     assert.equal(membershipCount.count, 2);
     assert.equal(eventCount.count, 1);
     assert.equal(run.status, 'completed');
+  } finally {
+    db.close();
+  }
+});
+
+test('persistent cluster store records thread revisions and deterministic fingerprints', () => {
+  const db = openDb(':memory:');
+  try {
+    migrate(db);
+    seedRepoAndThreads(db);
+    const fingerprint = buildDeterministicThreadFingerprint({
+      threadId: 10,
+      number: 10,
+      kind: 'pull_request',
+      title: 'Fix cache collision',
+      body: 'Cache keys collide across repos.',
+      labels: ['bug'],
+      changedFiles: ['packages/api-core/src/cache.ts'],
+      linkedRefs: ['123'],
+      hunkSignatures: ['h1'],
+      patchIds: ['p1'],
+    });
+    const revisionId = upsertThreadRevision(db, {
+      threadId: 10,
+      sourceUpdatedAt: '2026-01-01T00:00:00Z',
+      title: 'Fix cache collision',
+      body: 'Cache keys collide across repos.',
+      labels: ['bug'],
+      rawJson: '{"number":10}',
+    });
+
+    upsertThreadFingerprint(db, { threadRevisionId: revisionId, fingerprint });
+    upsertThreadFingerprint(db, { threadRevisionId: revisionId, fingerprint });
+
+    const revisionCount = db.prepare('select count(*) as count from thread_revisions').get() as { count: number };
+    const fingerprintRow = db
+      .prepare(
+        `select fingerprint_hash, fingerprint_slug, simhash64, minhash_signature_blob_id, winnow_hashes_blob_id
+         from thread_fingerprints
+         where thread_revision_id = ?`,
+      )
+      .get(revisionId) as {
+      fingerprint_hash: string;
+      fingerprint_slug: string;
+      simhash64: string;
+      minhash_signature_blob_id: number;
+      winnow_hashes_blob_id: number;
+    };
+    const blobCount = db.prepare('select count(*) as count from blobs').get() as { count: number };
+
+    assert.equal(revisionCount.count, 1);
+    assert.equal(fingerprintRow.fingerprint_hash, fingerprint.fingerprintHash);
+    assert.equal(fingerprintRow.fingerprint_slug, fingerprint.fingerprintSlug);
+    assert.equal(fingerprintRow.simhash64, fingerprint.simhash64);
+    assert.ok(fingerprintRow.minhash_signature_blob_id > 0);
+    assert.ok(fingerprintRow.winnow_hashes_blob_id > 0);
+    assert.equal(blobCount.count, 3);
   } finally {
     db.close();
   }
