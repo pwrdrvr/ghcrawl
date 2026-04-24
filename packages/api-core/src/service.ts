@@ -65,7 +65,8 @@ import { migrate } from './db/migrate.js';
 import { openDb, type SqliteDatabase } from './db/sqlite.js';
 import { buildCanonicalDocument, isBotLikeAuthor } from './documents/normalize.js';
 import { makeGitHubClient, type GitHubClient } from './github/client.js';
-import { OpenAiProvider, type AiProvider } from './openai/provider.js';
+import { OpenAiProvider, type AiProvider, type EmbedUsage } from './openai/provider.js';
+import { computeCost } from './openai/pricing.js';
 import { cosineSimilarity, dotProduct, normalizeEmbedding, rankNearestNeighbors, rankNearestNeighborsByScore } from './search/exact.js';
 import type { VectorNeighbor, VectorQueryParams, VectorStore } from './vector/store.js';
 import { VectorliteStore } from './vector/vectorlite-store.js';
@@ -1025,7 +1026,7 @@ export class GHCrawlService {
     threadNumber?: number;
     includeComments?: boolean;
     onProgress?: (message: string) => void;
-  }): Promise<{ runId: number; summarized: number; inputTokens: number; outputTokens: number; totalTokens: number }> {
+  }): Promise<{ runId: number; summarized: number; inputTokens: number; outputTokens: number; totalTokens: number; estimatedCostUsd: number | null }> {
     const ai = this.requireAi();
     const repository = this.requireRepository(params.owner, params.repo);
     const runId = this.startRun('summary_runs', repository.id, params.threadNumber ? `thread:${params.threadNumber}` : repository.fullName);
@@ -1160,8 +1161,13 @@ export class GHCrawlService {
         summarized += 1;
       }
 
-      this.finishRun('summary_runs', runId, 'completed', { summarized, inputTokens, outputTokens, totalTokens });
-      return { runId, summarized, inputTokens, outputTokens, totalTokens };
+      const costResult = computeCost(this.config.summaryModel, { promptTokens: inputTokens, completionTokens: outputTokens });
+      const estimatedCostUsd = costResult?.estimatedCostUsd ?? null;
+      params.onProgress?.(
+        `[summarize] done: ${summarized} summarized, ${totalTokens} tokens, estimated cost: $${estimatedCostUsd?.toFixed(4) ?? 'unknown'}`,
+      );
+      this.finishRun('summary_runs', runId, 'completed', { summarized, inputTokens, outputTokens, totalTokens, estimatedCostUsd });
+      return { runId, summarized, inputTokens, outputTokens, totalTokens, estimatedCostUsd };
     } catch (error) {
       this.finishRun('summary_runs', runId, 'failed', null, error);
       throw error;
@@ -1249,6 +1255,7 @@ export class GHCrawlService {
       );
 
       let embedded = 0;
+      let promptTokens = 0;
       const batches = this.chunkEmbeddingTasks(pending, this.config.embedBatchSize, EMBED_MAX_BATCH_TOKENS);
       const mapper = new IterableMapper(
         batches,
@@ -1269,15 +1276,21 @@ export class GHCrawlService {
         params.onProgress?.(
           `[embed] batch ${completedBatches}/${Math.max(batches.length, 1)} size=${batchResult.length} est_tokens=${estimatedTokens} items=${numbers.join(',')}`,
         );
-        for (const { task, embedding } of batchResult) {
+        for (const { task, embedding, usage } of batchResult) {
           this.upsertActiveVector(repository.id, repository.fullName, task.threadId, task.basis, task.contentHash, embedding);
           embedded += 1;
+          if (usage) promptTokens += usage.promptTokens;
         }
       }
 
       this.markRepoVectorsCurrent(repository.id);
-      this.finishRun('embedding_runs', runId, 'completed', { embedded });
-      return embedResultSchema.parse({ runId, embedded });
+      const costResult = computeCost(this.config.embedModel, { promptTokens, completionTokens: 0 });
+      const estimatedCostUsd = costResult?.estimatedCostUsd ?? null;
+      params.onProgress?.(
+        `[embed] done: ${embedded} embedded, ~${promptTokens} tokens, estimated cost: $${estimatedCostUsd?.toFixed(4) ?? 'unknown'}`,
+      );
+      this.finishRun('embedding_runs', runId, 'completed', { embedded, promptTokens, estimatedCostUsd });
+      return embedResultSchema.parse({ runId, embedded, promptTokens, estimatedCostUsd });
     } catch (error) {
       this.finishRun('embedding_runs', runId, 'failed', null, error);
       throw error;
@@ -1725,7 +1738,7 @@ export class GHCrawlService {
 
     if (mode !== 'keyword' && this.ai) {
       if (this.isRepoVectorStateCurrent(repository.id)) {
-        const [queryEmbedding] = await this.ai.embedTexts({
+        const { embeddings: [queryEmbedding] } = await this.ai.embedTexts({
           model: this.config.embedModel,
           texts: [params.query],
           dimensions: ACTIVE_EMBED_DIMENSIONS,
@@ -1740,7 +1753,7 @@ export class GHCrawlService {
           semanticScores.set(neighbor.threadId, Math.max(semanticScores.get(neighbor.threadId) ?? -1, neighbor.score));
         }
       } else if (this.hasLegacyEmbeddings(repository.id)) {
-        const [queryEmbedding] = await this.ai.embedTexts({ model: this.config.embedModel, texts: [params.query] });
+        const { embeddings: [queryEmbedding] } = await this.ai.embedTexts({ model: this.config.embedModel, texts: [params.query] });
         for (const row of this.iterateStoredEmbeddings(repository.id)) {
           const score = cosineSimilarity(queryEmbedding, JSON.parse(row.embedding_json) as number[]);
           if (score < 0.2) continue;
@@ -3641,14 +3654,17 @@ export class GHCrawlService {
     ai: AiProvider,
     batch: ActiveVectorTask[],
     onProgress?: (message: string) => void,
-  ): Promise<Array<{ task: ActiveVectorTask; embedding: number[] }>> {
+  ): Promise<Array<{ task: ActiveVectorTask; embedding: number[]; usage?: EmbedUsage }>> {
     try {
-      const embeddings = await ai.embedTexts({
+      const result = await ai.embedTexts({
         model: this.config.embedModel,
         texts: batch.map((task) => task.text),
         dimensions: ACTIVE_EMBED_DIMENSIONS,
       });
-      return batch.map((task, index) => ({ task, embedding: embeddings[index] }));
+      const perItem = result.usage && batch.length > 0
+        ? { promptTokens: Math.round(result.usage.promptTokens / batch.length), totalTokens: Math.round(result.usage.totalTokens / batch.length) }
+        : undefined;
+      return batch.map((task, index) => ({ task, embedding: result.embeddings[index], usage: perItem }));
     } catch (error) {
       if (!this.isEmbeddingContextError(error) || batch.length === 1) {
         if (batch.length === 1 && this.isEmbeddingContextError(error)) {
@@ -3662,7 +3678,7 @@ export class GHCrawlService {
         `[embed] batch context error; isolating ${batch.length} item(s) to find oversized input(s)`,
       );
 
-      const recovered: Array<{ task: ActiveVectorTask; embedding: number[] }> = [];
+      const recovered: Array<{ task: ActiveVectorTask; embedding: number[]; usage?: EmbedUsage }> = [];
       for (const task of batch) {
         recovered.push(await this.embedSingleTaskWithRecovery(ai, task, onProgress));
       }
@@ -3674,17 +3690,17 @@ export class GHCrawlService {
     ai: AiProvider,
     task: ActiveVectorTask,
     onProgress?: (message: string) => void,
-  ): Promise<{ task: ActiveVectorTask; embedding: number[] }> {
+  ): Promise<{ task: ActiveVectorTask; embedding: number[]; usage?: EmbedUsage }> {
     let current = task;
 
     for (let attempt = 0; attempt < EMBED_CONTEXT_RETRY_ATTEMPTS; attempt += 1) {
       try {
-        const [embedding] = await ai.embedTexts({
+        const result = await ai.embedTexts({
           model: this.config.embedModel,
           texts: [current.text],
           dimensions: ACTIVE_EMBED_DIMENSIONS,
         });
-        return { task: current, embedding };
+        return { task: current, embedding: result.embeddings[0], usage: result.usage };
       } catch (error) {
         const context = this.parseEmbeddingContextError(error);
         if (!context) {

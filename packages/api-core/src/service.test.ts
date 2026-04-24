@@ -80,7 +80,7 @@ test('doctor reports config path and successful auth smoke checks', async () => 
       summarizeThread: async () => {
         throw new Error('not expected');
       },
-      embedTexts: async () => [],
+      embedTexts: async () => ({ embeddings: [] }),
     },
   });
 
@@ -423,7 +423,7 @@ test('summarizeRepository excludes hydrated comments by default and reports toke
           },
         };
       },
-      embedTexts: async () => [],
+      embedTexts: async () => ({ embeddings: [] }),
     },
   );
 
@@ -485,6 +485,8 @@ test('summarizeRepository excludes hydrated comments by default and reports toke
     assert.equal(result.inputTokens, 123);
     assert.equal(result.outputTokens, 45);
     assert.equal(result.totalTokens, 168);
+    assert.ok(result.estimatedCostUsd !== null, 'should report estimated cost');
+    assert.ok(result.estimatedCostUsd! > 0, 'cost should be positive');
     assert.equal(summaryInputs.length, 1);
     assert.match(summaryInputs[0], /title: Downloader hangs/);
     assert.match(summaryInputs[0], /body: The transfer never finishes\./);
@@ -524,7 +526,7 @@ test('summarizeRepository includes hydrated human comments when includeComments 
           },
         };
       },
-      embedTexts: async () => [],
+      embedTexts: async () => ({ embeddings: [] }),
     },
   );
 
@@ -813,7 +815,11 @@ test('embedRepository batches multi-source embeddings and skips unchanged inputs
       },
       embedTexts: async ({ texts }) => {
         embedCalls.push(texts);
-        return texts.map((text, index) => makeEmbedding(text.length, index));
+        const totalTokens = texts.reduce((sum, t) => sum + t.length, 0);
+        return {
+          embeddings: texts.map((text, index) => makeEmbedding(text.length, index)),
+          usage: { promptTokens: totalTokens, totalTokens },
+        };
       },
     },
   );
@@ -868,6 +874,8 @@ test('embedRepository batches multi-source embeddings and skips unchanged inputs
 
     const first = await service.embedRepository({ owner: 'openclaw', repo: 'openclaw' });
     assert.equal(first.embedded, 1);
+    assert.ok(first.promptTokens !== undefined && first.promptTokens > 0, 'should report prompt tokens');
+    assert.ok(first.estimatedCostUsd !== undefined && first.estimatedCostUsd !== null, 'should report estimated cost');
     assert.equal(embedCalls.length, 1);
     assert.deepEqual(
       service.db
@@ -1063,7 +1071,11 @@ test('embedRepository truncates oversized inputs before submission', async () =>
       },
       embedTexts: async ({ texts }) => {
         embedCalls.push(texts);
-        return texts.map((text, index) => makeEmbedding(text.length, index));
+        const totalTokens = texts.reduce((sum, t) => sum + t.length, 0);
+        return {
+          embeddings: texts.map((text, index) => makeEmbedding(text.length, index)),
+          usage: { promptTokens: totalTokens, totalTokens },
+        };
       },
     },
   });
@@ -1194,7 +1206,11 @@ test('embedRepository isolates a failing oversized item from a mixed batch and r
             );
           }
         }
-        return texts.map((text, index) => makeEmbedding(text.length, index));
+        const totalTokens = texts.reduce((sum, t) => sum + t.length, 0);
+        return {
+          embeddings: texts.map((text, index) => makeEmbedding(text.length, index)),
+          usage: { promptTokens: totalTokens, totalTokens },
+        };
       },
     },
   });
@@ -1320,7 +1336,11 @@ test('embedRepository recovers from wrapped maximum input length errors by shrin
             `OpenAI embeddings failed after 5 attempts: 400 Invalid 'input[${overLimitIndex}]': maximum input length is 8192 tokens.`,
           );
         }
-        return texts.map((text, index) => makeEmbedding(text.length, index));
+        const totalTokens = texts.reduce((sum, t) => sum + t.length, 0);
+        return {
+          embeddings: texts.map((text, index) => makeEmbedding(text.length, index)),
+          usage: { promptTokens: totalTokens, totalTokens },
+        };
       },
     },
   });
@@ -2434,7 +2454,10 @@ test('refreshRepository runs sync, embed, and cluster in order and returns the c
       summarizeThread: async () => {
         throw new Error('not expected');
       },
-      embedTexts: async ({ texts }) => texts.map((_text, index) => makeEmbedding(1, index)),
+      embedTexts: async ({ texts }) => ({
+        embeddings: texts.map((_text, index) => makeEmbedding(1, index)),
+        usage: { promptTokens: texts.length * 10, totalTokens: texts.length * 10 },
+      }),
     },
   );
 
