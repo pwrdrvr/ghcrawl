@@ -18,6 +18,7 @@ import {
   clusterResultSchema,
   clusterSummariesResponseSchema,
   clustersResponseSchema,
+  durableClustersResponseSchema,
   embedResultSchema,
   healthResponseSchema,
   neighborsResponseSchema,
@@ -36,6 +37,7 @@ import {
   type ClusterResultDto,
   type ClusterSummariesResponse,
   type ClustersResponse,
+  type DurableClustersResponse,
   type ExcludeClusterMemberRequest,
   type EmbedResultDto,
   type HealthResponse,
@@ -2137,6 +2139,89 @@ export class GHCrawlService {
     return clustersResponseSchema.parse({
       repository,
       clusters: clusterValues.filter((cluster) => (params.includeClosed ? true : !cluster.isClosed)),
+    });
+  }
+
+  listDurableClusters(params: { owner: string; repo: string; includeInactive?: boolean; memberLimit?: number }): DurableClustersResponse {
+    const repository = this.requireRepository(params.owner, params.repo);
+    const clusterRows = this.db
+      .prepare(
+        `select id, stable_key, stable_slug, status, cluster_type, representative_thread_id, title
+         from cluster_groups
+         where repo_id = ?
+           and (? = 1 or status = 'active')
+         order by updated_at desc, id asc`,
+      )
+      .all(repository.id, params.includeInactive ? 1 : 0) as Array<{
+      id: number;
+      stable_key: string;
+      stable_slug: string;
+      status: 'active' | 'closed' | 'merged' | 'split';
+      cluster_type: string | null;
+      representative_thread_id: number | null;
+      title: string | null;
+    }>;
+    if (clusterRows.length === 0) {
+      return durableClustersResponseSchema.parse({ repository, clusters: [] });
+    }
+
+    const clusterIds = clusterRows.map((row) => row.id);
+    const placeholders = clusterIds.map(() => '?').join(',');
+    const memberRows = this.db
+      .prepare(
+        `select
+           cm.cluster_id,
+           cm.role as membership_role,
+           cm.state as membership_state,
+           cm.score_to_representative as membership_score,
+           t.*
+         from cluster_memberships cm
+         join threads t on t.id = cm.thread_id
+         where cm.cluster_id in (${placeholders})
+         order by
+           case cm.role when 'canonical' then 0 else 1 end,
+           case cm.state when 'active' then 0 when 'pending_review' then 1 else 2 end,
+           t.number asc`,
+      )
+      .all(...clusterIds) as Array<
+      ThreadRow & {
+        cluster_id: number;
+        membership_role: 'canonical' | 'duplicate' | 'related';
+        membership_state: 'active' | 'removed_by_user' | 'blocked_by_override' | 'pending_review' | 'stale';
+        membership_score: number | null;
+      }
+    >;
+    const membersByCluster = new Map<number, typeof memberRows>();
+    for (const row of memberRows) {
+      const members = membersByCluster.get(row.cluster_id) ?? [];
+      members.push(row);
+      membersByCluster.set(row.cluster_id, members);
+    }
+
+    return durableClustersResponseSchema.parse({
+      repository,
+      clusters: clusterRows.map((cluster) => {
+        const rows = membersByCluster.get(cluster.id) ?? [];
+        const visibleRows = params.memberLimit === undefined ? rows : rows.slice(0, params.memberLimit);
+        return {
+          clusterId: cluster.id,
+          stableKey: cluster.stable_key,
+          stableSlug: cluster.stable_slug,
+          status: cluster.status,
+          clusterType: cluster.cluster_type,
+          title: cluster.title,
+          representativeThreadId: cluster.representative_thread_id,
+          activeCount: rows.filter((row) => row.membership_state === 'active').length,
+          removedCount: rows.filter((row) => row.membership_state === 'removed_by_user').length,
+          blockedCount: rows.filter((row) => row.membership_state === 'blocked_by_override').length,
+          members: visibleRows.map((row) => ({
+            thread: threadToDto(row),
+            role: row.membership_role,
+            state: row.membership_state,
+            scoreToRepresentative: row.membership_score,
+          })),
+        };
+      }),
     });
   }
 

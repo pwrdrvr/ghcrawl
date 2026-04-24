@@ -2997,6 +2997,62 @@ test('excludeThreadFromCluster records a durable manual exclusion', () => {
   }
 });
 
+test('listDurableClusters returns stable slugs and governed member states', () => {
+  const service = makeTestService({
+    checkAuth: async () => undefined,
+    getRepo: async () => ({}),
+    listRepositoryIssues: async () => [],
+    getIssue: async () => ({}),
+    getPull: async () => ({}),
+    listIssueComments: async () => [],
+    listPullReviews: async () => [],
+    listPullReviewComments: async () => [],
+  });
+
+  try {
+    const now = '2026-03-10T12:00:00Z';
+    service.db
+      .prepare(
+        `insert into repositories (id, owner, name, full_name, github_repo_id, raw_json, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '1', '{}', now);
+    const insertThread = service.db.prepare(
+      `insert into threads (
+        id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
+        labels_json, assignees_json, raw_json, content_hash, is_draft, created_at_gh, updated_at_gh, closed_at_gh,
+        merged_at_gh, first_pulled_at, last_pulled_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insertThread.run(10, 1, '100', 42, 'issue', 'open', 'Issue one', 'body', 'alice', 'User', 'https://github.com/openclaw/openclaw/issues/42', '[]', '[]', '{}', 'hash-42', 0, now, now, null, null, now, now, now);
+    insertThread.run(11, 1, '101', 43, 'issue', 'open', 'Issue two', 'body', 'bob', 'User', 'https://github.com/openclaw/openclaw/issues/43', '[]', '[]', '{}', 'hash-43', 0, now, now, null, null, now, now, now);
+    service.db
+      .prepare(
+        `insert into cluster_groups (
+          id, repo_id, stable_key, stable_slug, status, cluster_type, representative_thread_id, title, created_at, updated_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(7, 1, 'stable-key', 'trace-alpha-river', 'active', 'duplicate_candidate', 10, 'Cluster trace-alpha-river', now, now);
+    const insertMembership = service.db.prepare(
+      `insert into cluster_memberships (
+        cluster_id, thread_id, role, state, score_to_representative, first_seen_run_id, last_seen_run_id,
+        added_by, removed_by, added_reason_json, removed_reason_json, created_at, updated_at, removed_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insertMembership.run(7, 10, 'canonical', 'active', 1, null, null, 'algo', null, '{}', null, now, now, null);
+    insertMembership.run(7, 11, 'related', 'blocked_by_override', 0.87, null, null, 'algo', 'user', '{}', '{}', now, now, now);
+
+    const response = service.listDurableClusters({ owner: 'openclaw', repo: 'openclaw' });
+
+    assert.equal(response.clusters[0]?.stableSlug, 'trace-alpha-river');
+    assert.equal(response.clusters[0]?.activeCount, 1);
+    assert.equal(response.clusters[0]?.blockedCount, 1);
+    assert.equal(response.clusters[0]?.members[1]?.state, 'blocked_by_override');
+  } finally {
+    service.close();
+  }
+});
+
 test('syncRepository records actors and repo stats from thread and comment authors', async () => {
   const service = makeTestService({
     checkAuth: async () => undefined,
