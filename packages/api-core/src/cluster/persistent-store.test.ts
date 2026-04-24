@@ -7,7 +7,9 @@ import { scoreSimilarityEvidence } from './evidence-score.js';
 import {
   createPipelineRun,
   finishPipelineRun,
+  refreshActorRepoStats,
   recordClusterEvent,
+  upsertActor,
   upsertClusterGroup,
   upsertClusterMembership,
   upsertSimilarityEdgeEvidence,
@@ -123,6 +125,40 @@ test('persistent cluster store upserts edge evidence and governed memberships', 
     assert.equal(membershipCount.count, 2);
     assert.equal(eventCount.count, 1);
     assert.equal(run.status, 'completed');
+  } finally {
+    db.close();
+  }
+});
+
+test('persistent cluster store upserts actors and recomputes repo stats', () => {
+  const db = openDb(':memory:');
+  try {
+    migrate(db);
+    seedRepoAndThreads(db);
+    const actorId = upsertActor(db, {
+      providerUserId: 'alice-id',
+      login: 'alice',
+      displayName: 'Alice',
+      actorType: 'User',
+      rawJson: '{"login":"alice"}',
+    });
+    db.prepare(
+      `insert into comments (
+        thread_id, github_id, comment_type, author_login, author_type, body, is_bot, raw_json, created_at_gh, updated_at_gh
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(10, 'c1', 'issue_comment', 'alice', 'User', 'confirmed', 0, '{}', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z');
+
+    refreshActorRepoStats(db, 1);
+
+    const actor = db.prepare('select login, display_name from actors where id = ?').get(actorId) as { login: string; display_name: string };
+    const stats = db.prepare('select opened_prs, comments, trust_tier from actor_repo_stats where repo_id = ? and actor_id = ?').get(1, actorId) as {
+      opened_prs: number;
+      comments: number;
+      trust_tier: string;
+    };
+
+    assert.deepEqual(actor, { login: 'alice', display_name: 'Alice' });
+    assert.deepEqual(stats, { opened_prs: 2, comments: 1, trust_tier: 'unknown' });
   } finally {
     db.close();
   }
