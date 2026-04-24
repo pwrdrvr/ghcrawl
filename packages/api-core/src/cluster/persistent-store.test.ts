@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { migrate } from '../db/migrate.js';
 import { openDb } from '../db/sqlite.js';
+import { buildCodeSnapshotSignature } from './code-signature.js';
 import { scoreSimilarityEvidence } from './evidence-score.js';
 import {
   createPipelineRun,
@@ -15,6 +16,7 @@ import {
   upsertSimilarityEdgeEvidence,
   upsertThreadFingerprint,
   upsertThreadRevision,
+  upsertThreadCodeSnapshot,
 } from './persistent-store.js';
 import { buildDeterministicThreadFingerprint } from './thread-fingerprint.js';
 
@@ -216,6 +218,63 @@ test('persistent cluster store records thread revisions and deterministic finger
     assert.ok(fingerprintRow.minhash_signature_blob_id > 0);
     assert.ok(fingerprintRow.winnow_hashes_blob_id > 0);
     assert.equal(blobCount.count, 3);
+  } finally {
+    db.close();
+  }
+});
+
+test('persistent cluster store records code snapshots, changed files, and hunk signatures', () => {
+  const db = openDb(':memory:');
+  try {
+    migrate(db);
+    seedRepoAndThreads(db);
+    const revisionId = upsertThreadRevision(db, {
+      threadId: 10,
+      sourceUpdatedAt: '2026-01-01T00:00:00Z',
+      title: 'Fix cache collision',
+      body: '',
+      labels: [],
+      rawJson: '{}',
+    });
+    const signature = buildCodeSnapshotSignature([
+      {
+        filename: 'packages/api-core/src/cache.ts',
+        status: 'modified',
+        additions: 1,
+        deletions: 1,
+        changes: 2,
+        patch: '@@ -1 +1 @@\n-oldKey\n+newKey',
+      },
+    ]);
+
+    const snapshotId = upsertThreadCodeSnapshot(db, {
+      threadRevisionId: revisionId,
+      baseSha: 'base',
+      headSha: 'head',
+      signature,
+    });
+
+    const snapshot = db.prepare('select files_changed, additions, deletions, patch_digest from thread_code_snapshots where id = ?').get(snapshotId) as {
+      files_changed: number;
+      additions: number;
+      deletions: number;
+      patch_digest: string;
+    };
+    const file = db.prepare('select path, patch_blob_id from thread_changed_files where snapshot_id = ?').get(snapshotId) as {
+      path: string;
+      patch_blob_id: number;
+    };
+    const hunkCount = db.prepare('select count(*) as count from thread_hunk_signatures where snapshot_id = ?').get(snapshotId) as { count: number };
+
+    assert.deepEqual(snapshot, {
+      files_changed: 1,
+      additions: 1,
+      deletions: 1,
+      patch_digest: signature.patchDigest,
+    });
+    assert.equal(file.path, 'packages/api-core/src/cache.ts');
+    assert.ok(file.patch_blob_id > 0);
+    assert.equal(hunkCount.count, 1);
   } finally {
     db.close();
   }

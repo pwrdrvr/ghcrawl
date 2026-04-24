@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 
 import type { SqliteDatabase } from '../db/sqlite.js';
+import type { CodeSnapshotSignature } from './code-signature.js';
 import type { EvidenceTier, SimilarityEvidenceBreakdown } from './evidence-score.js';
 import type { DeterministicThreadFingerprint } from './thread-fingerprint.js';
 
@@ -233,6 +234,84 @@ export function upsertThreadFingerprint(
     featureJson,
     nowIso(),
   );
+}
+
+export function upsertThreadCodeSnapshot(
+  db: SqliteDatabase,
+  params: {
+    threadRevisionId: number;
+    baseSha?: string | null;
+    headSha?: string | null;
+    signature: CodeSnapshotSignature;
+  },
+): number {
+  const timestamp = nowIso();
+  const filesChanged = params.signature.files.length;
+  const additions = params.signature.files.reduce((sum, file) => sum + file.additions, 0);
+  const deletions = params.signature.files.reduce((sum, file) => sum + file.deletions, 0);
+  db.prepare(
+    `insert into thread_code_snapshots (
+       thread_revision_id, base_sha, head_sha, files_changed, additions, deletions, patch_digest, raw_diff_blob_id, created_at
+     ) values (?, ?, ?, ?, ?, ?, ?, null, ?)
+     on conflict(thread_revision_id) do update set
+       base_sha = excluded.base_sha,
+       head_sha = excluded.head_sha,
+       files_changed = excluded.files_changed,
+       additions = excluded.additions,
+       deletions = excluded.deletions,
+       patch_digest = excluded.patch_digest`,
+  ).run(
+    params.threadRevisionId,
+    params.baseSha ?? null,
+    params.headSha ?? null,
+    filesChanged,
+    additions,
+    deletions,
+    params.signature.patchDigest,
+    timestamp,
+  );
+  const snapshot = db
+    .prepare('select id from thread_code_snapshots where thread_revision_id = ? limit 1')
+    .get(params.threadRevisionId) as { id: number };
+
+  db.prepare('delete from thread_changed_files where snapshot_id = ?').run(snapshot.id);
+  db.prepare('delete from thread_hunk_signatures where snapshot_id = ?').run(snapshot.id);
+
+  const insertFile = db.prepare(
+    `insert into thread_changed_files (
+       snapshot_id, path, status, additions, deletions, previous_path, patch_blob_id, patch_hash
+     ) values (?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const file of params.signature.files) {
+    const patchBlobId = file.patch
+      ? upsertInlineBlob(db, {
+          text: file.patch,
+          mediaType: 'text/x-diff',
+        })
+      : null;
+    insertFile.run(
+      snapshot.id,
+      file.filename,
+      file.status ?? null,
+      file.additions,
+      file.deletions,
+      file.previousFilename ?? null,
+      patchBlobId,
+      file.patch ? stableHash(file.patch) : null,
+    );
+  }
+
+  const insertHunk = db.prepare(
+    `insert into thread_hunk_signatures (
+       snapshot_id, path, hunk_hash, context_hash, added_token_hash, removed_token_hash, created_at
+     ) values (?, ?, ?, ?, ?, ?, ?)
+     on conflict(snapshot_id, path, hunk_hash) do nothing`,
+  );
+  for (const hunk of params.signature.hunkSignatures) {
+    insertHunk.run(snapshot.id, hunk.path, hunk.hunkHash, hunk.contextHash, hunk.addedTokenHash, hunk.removedTokenHash, timestamp);
+  }
+
+  return snapshot.id;
 }
 
 export function createPipelineRun(
