@@ -33,7 +33,7 @@ test('buildDeterministicThreadFingerprint is stable without model inputs', () =>
 
   assert.equal(first.fingerprintHash, second.fingerprintHash);
   assert.equal(first.fingerprintSlug, second.fingerprintSlug);
-  assert.equal(first.algorithmVersion, 'thread-fingerprint-v1');
+  assert.equal(first.algorithmVersion, 'thread-fingerprint-v2');
   assert.ok(first.minhashSignature.length > 0);
 });
 

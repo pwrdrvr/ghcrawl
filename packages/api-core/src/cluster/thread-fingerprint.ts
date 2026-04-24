@@ -73,7 +73,7 @@ export type FingerprintPairBreakdown = {
   lineage: number;
 };
 
-export const THREAD_FINGERPRINT_ALGORITHM_VERSION = 'thread-fingerprint-v1';
+export const THREAD_FINGERPRINT_ALGORITHM_VERSION = 'thread-fingerprint-v2';
 
 export function tokenize(value: string | null | undefined): string[] {
   return Array.from(value?.toLowerCase().matchAll(TOKEN_RE) ?? []).map((match) => match[0]);

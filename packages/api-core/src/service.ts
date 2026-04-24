@@ -55,7 +55,7 @@ import {
 
 import { buildClusters, buildRefinedClusters, buildSizeBoundedClusters } from './cluster/build.js';
 import { buildCodeSnapshotSignature } from './cluster/code-signature.js';
-import { buildDeterministicClusterGraph, extractDeterministicRefs } from './cluster/deterministic-engine.js';
+import { buildDeterministicClusterGraphFromFingerprints, extractDeterministicRefs } from './cluster/deterministic-engine.js';
 import { buildSourceKindEdges } from './cluster/exact-edges.js';
 import { humanKeyForValue } from './cluster/human-key.js';
 import { LLM_KEY_SUMMARY_PROMPT_VERSION, llmKeyInputHash } from './cluster/llm-key-summary.js';
@@ -76,6 +76,7 @@ import {
 import {
   buildDeterministicThreadFingerprint,
   THREAD_FINGERPRINT_ALGORITHM_VERSION,
+  type DeterministicThreadFingerprint,
 } from './cluster/thread-fingerprint.js';
 import {
   ensureRuntimeDirs,
@@ -90,6 +91,7 @@ import {
 } from './config.js';
 import { migrate } from './db/migrate.js';
 import { openDb, type SqliteDatabase } from './db/sqlite.js';
+import { readTextBlob } from './db/blob-store.js';
 import { buildCanonicalDocument, isBotLikeAuthor } from './documents/normalize.js';
 import { makeGitHubClient, type GitHubClient } from './github/client.js';
 import { OpenAiProvider, type AiProvider } from './openai/provider.js';
@@ -484,6 +486,16 @@ function asJson(value: unknown): string {
 
 function parseArray(value: string): string[] {
   return JSON.parse(value) as string[];
+}
+
+function parseStringArrayJson(value: string | null | undefined): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === 'string') : [];
+  } catch {
+    return [];
+  }
 }
 
 function userLogin(payload: Record<string, unknown>): string | null {
@@ -1600,7 +1612,12 @@ export class GHCrawlService {
       } else {
         const deterministicItems = this.loadDeterministicClusterableThreadMeta(repository.id);
         this.materializeLatestDeterministicFingerprints(deterministicItems, params.onProgress);
-        const deterministic = buildDeterministicClusterGraph(deterministicItems, { topK: Math.max(k * 8, 64) });
+        const persistedFingerprints = this.loadLatestDeterministicFingerprints(deterministicItems.map((item) => item.id));
+        const deterministic = buildDeterministicClusterGraphFromFingerprints(
+          deterministicItems.map((item) => ({ id: item.id, number: item.number, title: item.title })),
+          persistedFingerprints,
+          { topK: Math.max(k * 8, 64) },
+        );
         items = deterministicItems.map((item) => ({ id: item.id, number: item.number, title: item.title }));
         aggregatedEdges = new Map();
         for (const edge of deterministic.edges) {
@@ -4555,6 +4572,82 @@ export class GHCrawlService {
     }
     onProgress?.(`[fingerprint] latest revisions computed=${computed} skipped=${skipped}`);
     return { computed, skipped };
+  }
+
+  private loadLatestDeterministicFingerprints(threadIds: number[]): Map<number, DeterministicThreadFingerprint> {
+    if (threadIds.length === 0) return new Map();
+    const placeholders = threadIds.map(() => '?').join(',');
+    const rows = this.db
+      .prepare(
+        `select
+           tr.thread_id,
+           tf.fingerprint_hash,
+           tf.fingerprint_slug,
+           tf.title_tokens_json,
+           tf.linked_refs_json,
+           tf.module_buckets_json,
+           tf.minhash_signature_blob_id,
+           tf.simhash64,
+           tf.winnow_hashes_blob_id,
+           tf.feature_json
+         from thread_revisions tr
+         join (
+           select thread_id, max(id) as revision_id
+           from thread_revisions
+           where thread_id in (${placeholders})
+           group by thread_id
+         ) latest on latest.revision_id = tr.id
+         join thread_fingerprints tf on tf.thread_revision_id = tr.id
+         where tf.algorithm_version = ?`,
+      )
+      .all(...threadIds, THREAD_FINGERPRINT_ALGORITHM_VERSION) as Array<{
+      thread_id: number;
+      fingerprint_hash: string;
+      fingerprint_slug: string;
+      title_tokens_json: string;
+      linked_refs_json: string;
+      module_buckets_json: string;
+      minhash_signature_blob_id: number | null;
+      simhash64: string;
+      winnow_hashes_blob_id: number | null;
+      feature_json: string;
+    }>;
+
+    const fingerprints = new Map<number, DeterministicThreadFingerprint>();
+    for (const row of rows) {
+      const feature = (() => {
+        try {
+          return JSON.parse(row.feature_json) as Record<string, unknown>;
+        } catch {
+          return {};
+        }
+      })();
+      const stringFeature = (key: string): string[] => {
+        const value = feature[key];
+        return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
+      };
+      fingerprints.set(row.thread_id, {
+        algorithmVersion: THREAD_FINGERPRINT_ALGORITHM_VERSION,
+        fingerprintHash: row.fingerprint_hash,
+        fingerprintSlug: row.fingerprint_slug,
+        titleTokens: parseStringArrayJson(row.title_tokens_json),
+        salientTitleTokens: stringFeature('salientTitleTokens'),
+        bodyTokens: [],
+        linkedRefs: parseStringArrayJson(row.linked_refs_json),
+        moduleBuckets: parseStringArrayJson(row.module_buckets_json),
+        changedFiles: stringFeature('changedFiles'),
+        hunkSignatures: stringFeature('hunkSignatures'),
+        patchIds: stringFeature('patchIds'),
+        minhashSignature: row.minhash_signature_blob_id
+          ? parseStringArrayJson(readTextBlob(this.db, this.blobStoreRoot(), row.minhash_signature_blob_id))
+          : [],
+        simhash64: row.simhash64,
+        winnowHashes: row.winnow_hashes_blob_id
+          ? parseStringArrayJson(readTextBlob(this.db, this.blobStoreRoot(), row.winnow_hashes_blob_id))
+          : [],
+      });
+    }
+    return fingerprints;
   }
 
   private loadNormalizedActiveVectors(repoId: number): Array<{ id: number; number: number; title: string; embedding: number[] }> {

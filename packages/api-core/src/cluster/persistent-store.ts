@@ -216,6 +216,7 @@ export function upsertThreadFingerprint(
   });
   const featureJson = JSON.stringify({
     salientTitleTokens: params.fingerprint.salientTitleTokens,
+    changedFiles: params.fingerprint.changedFiles,
     hunkSignatures: params.fingerprint.hunkSignatures,
     patchIds: params.fingerprint.patchIds,
   });

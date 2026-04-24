@@ -17,6 +17,12 @@ export type DeterministicClusterInput = {
   patchIds?: string[];
 };
 
+export type DeterministicClusterNode = {
+  id: number;
+  number: number;
+  title: string;
+};
+
 export type DeterministicClusterEdge = SimilarityEdge & {
   tier: 'strong' | 'weak';
   breakdown: SimilarityEvidenceBreakdown;
@@ -81,7 +87,6 @@ export function buildDeterministicClusterGraph(
   params: { maxBucketSize?: number; topK?: number } = {},
 ): DeterministicClusterResult {
   const fingerprints = new Map<number, DeterministicThreadFingerprint>();
-  const titleById = new Map<number, string>();
   for (const input of inputs) {
     const inferredRefs = extractDeterministicRefs(`${input.title}\n${input.body ?? ''}`);
     fingerprints.set(
@@ -92,9 +97,25 @@ export function buildDeterministicClusterGraph(
         linkedRefs: Array.from(new Set([...(input.linkedRefs ?? []), ...inferredRefs])).sort(),
       }),
     );
-    titleById.set(input.id, input.title);
   }
 
+  return buildDeterministicClusterGraphFromFingerprints(
+    inputs.map((input) => ({
+      id: input.id,
+      number: input.number,
+      title: input.title,
+    })),
+    fingerprints,
+    params,
+  );
+}
+
+export function buildDeterministicClusterGraphFromFingerprints(
+  nodes: DeterministicClusterNode[],
+  fingerprints: Map<number, DeterministicThreadFingerprint>,
+  params: { maxBucketSize?: number; topK?: number } = {},
+): DeterministicClusterResult {
+  const titleById = new Map(nodes.map((node) => [node.id, node.title]));
   const pairs = buildCandidatePairs(fingerprints, {
     maxBucketSize: params.maxBucketSize ?? 500,
     topK: params.topK ?? 64,
@@ -116,10 +137,10 @@ export function buildDeterministicClusterGraph(
   }
 
   const clusters = buildClusters(
-    inputs.map((input) => ({
-      threadId: input.id,
-      number: input.number,
-      title: titleById.get(input.id) ?? input.title,
+    nodes.map((node) => ({
+      threadId: node.id,
+      number: node.number,
+      title: titleById.get(node.id) ?? node.title,
     })),
     edges,
   );
