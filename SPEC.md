@@ -131,8 +131,16 @@ The product must keep these machine-facing surfaces working:
 - `ghcrawl close-cluster owner/repo --id <cluster-id> --json`
 - `ghcrawl embed owner/repo --json`
 - `ghcrawl cluster owner/repo --json`
+- `ghcrawl cluster owner/repo --number <thread-number> --json`
 - `ghcrawl clusters owner/repo --json`
+- `ghcrawl durable-clusters owner/repo --json`
 - `ghcrawl cluster-detail owner/repo --id <cluster-id> --json`
+- `ghcrawl cluster-explain owner/repo --id <cluster-id> --json`
+- `ghcrawl exclude-cluster-member owner/repo --id <cluster-id> --number <thread-number> --json`
+- `ghcrawl include-cluster-member owner/repo --id <cluster-id> --number <thread-number> --json`
+- `ghcrawl set-cluster-canonical owner/repo --id <cluster-id> --number <thread-number> --json`
+- `ghcrawl merge-clusters owner/repo --source <cluster-id> --target <cluster-id> --json`
+- `ghcrawl split-cluster owner/repo --source <cluster-id> --numbers <n,n,...> --json`
 - `ghcrawl search owner/repo --query <text> --json`
 - `ghcrawl neighbors owner/repo --number <thread-number> --json`
 
@@ -146,8 +154,14 @@ The product must keep these machine-facing surfaces working:
 - `GET /clusters`
 - `GET /cluster-summaries`
 - `GET /cluster-detail`
+- `GET /cluster-explain`
 - `POST /actions/rerun`
 - `POST /actions/refresh`
+- `POST /actions/exclude-cluster-member`
+- `POST /actions/include-cluster-member`
+- `POST /actions/set-cluster-canonical`
+- `POST /actions/merge-clusters`
+- `POST /actions/split-cluster`
 
 ### TUI
 
@@ -174,6 +188,11 @@ That means:
   - URL
   - body snippet
   - stored summary fields when present
+- expose durable cluster governance with:
+  - stable slug and aliases
+  - maintainer overrides
+  - pairwise evidence and event history
+  - explicit merge/split/include/exclude/canonical commands
 
 The installable skill lives in:
 
