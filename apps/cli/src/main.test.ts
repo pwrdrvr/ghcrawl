@@ -438,6 +438,37 @@ test('sync command forwards include-code hydration flag', async () => {
   assert.match(stdout.read(), /"codeFilesSynced": 1/);
 });
 
+test('refresh command forwards include-code hydration flag', async () => {
+  const stdout = createWritableCapture();
+  const context = makeRunContext();
+  const original = GHCrawlService.prototype.refreshRepository;
+  let received: unknown;
+
+  GHCrawlService.prototype.refreshRepository = async function refreshRepositoryStub(params: unknown) {
+    received = params;
+    return {
+      repository: { fullName: 'openclaw/openclaw' },
+      selected: { sync: true, embed: true, cluster: true },
+      sync: { codeFilesSynced: 1 },
+      embed: null,
+      cluster: null,
+    } as never;
+  };
+
+  try {
+    await run(['refresh', 'openclaw/openclaw', '--include-code'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+  } finally {
+    GHCrawlService.prototype.refreshRepository = original;
+    context.cleanup();
+  }
+
+  assert.equal((received as { includeCode?: boolean }).includeCode, true);
+  assert.match(stdout.read(), /"codeFilesSynced": 1/);
+});
+
 test('parseOwnerRepo accepts owner slash repo syntax', () => {
   assert.deepEqual(parseOwnerRepo('openclaw/openclaw'), { owner: 'openclaw', repo: 'openclaw' });
 });

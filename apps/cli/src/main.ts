@@ -140,10 +140,11 @@ const COMMAND_SPECS: readonly CommandSpec[] = [
   },
   {
     name: 'refresh',
-    synopsis: 'refresh <owner/repo> [--no-sync] [--no-embed] [--no-cluster] [--heap-snapshot-dir <dir>] [--heap-log-interval-ms <ms>] [--json]',
+    synopsis: 'refresh <owner/repo> [--include-code] [--no-sync] [--no-embed] [--no-cluster] [--heap-snapshot-dir <dir>] [--heap-log-interval-ms <ms>] [--json]',
     description: 'Run sync, embed, and cluster in one staged pipeline.',
     options: [
       '--no-sync  Skip the GitHub sync stage',
+      '--include-code  Hydrate pull request file metadata during sync',
       '--no-embed  Skip the embeddings stage',
       '--no-cluster  Skip the clustering stage',
       '--heap-snapshot-dir <dir>  Write heap snapshots during long-running work',
@@ -969,6 +970,7 @@ export async function run(
             sync: values['no-sync'] === true ? false : undefined,
             embed: values['no-embed'] === true ? false : undefined,
             cluster: values['no-cluster'] === true ? false : undefined,
+            includeCode: values['include-code'] === true,
             onProgress:
               heapDiagnostics?.wrapProgress((message: string) => writeProgress(message, stderr)) ??
               ((message: string) => writeProgress(message, stderr)),
