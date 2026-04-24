@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Run all clustering experiments sequentially.
- * Usage: node scripts/op-run.mjs run -- node scripts/run-cluster-experiments.mjs
+ * Usage: node scripts/run-cluster-experiments.mjs
  */
 import fs from 'node:fs';
 import path from 'node:path';

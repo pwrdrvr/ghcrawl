@@ -173,7 +173,6 @@ function buildSuggestedBaseline(result: PerfRunResult): SuggestedBaseline | null
 
 function createGitHubStub(): GHCrawlService['github'] {
   return {
-    checkAuth: async () => undefined,
     getRepo: async () => ({}),
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
@@ -197,7 +196,6 @@ function createService(dbPath: string): GHCrawlService {
       apiPort: 5179,
       githubToken: 'ghp_testtoken1234567890',
       githubTokenSource: 'config',
-      secretProvider: 'plaintext',
       tuiPreferences: {},
       openaiApiKeySource: 'none',
       summaryModel: 'gpt-5-mini',

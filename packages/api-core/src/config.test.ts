@@ -7,8 +7,6 @@ import path from 'node:path';
 import {
   getConfigPath,
   getTuiRepositoryPreference,
-  isLikelyGitHubToken,
-  isLikelyOpenAiApiKey,
   loadConfig,
   readPersistedConfig,
   writeTuiRepositoryPreference,
@@ -218,7 +216,7 @@ test('config path override redirects persisted config reads and writes', () => {
   assert.equal(loaded.configDir, path.dirname(overridePath));
 });
 
-test('loadConfig restores op metadata and repository tui preferences', () => {
+test('loadConfig restores repository tui preferences', () => {
   const home = makeTempHome();
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-workspace-'));
   fs.writeFileSync(path.join(workspace, 'pnpm-workspace.yaml'), 'packages:\n  - "packages/*"\n');
@@ -229,9 +227,6 @@ test('loadConfig restores op metadata and repository tui preferences', () => {
 
   writePersistedConfig(
     {
-      secretProvider: 'op',
-      opVaultName: 'PwrDrvr LLC',
-      opItemName: 'ghcrawl',
       tuiPreferences: {
         'openclaw/openclaw': {
           minClusterSize: 1,
@@ -244,9 +239,6 @@ test('loadConfig restores op metadata and repository tui preferences', () => {
   );
 
   const config = loadConfig({ cwd: workspace, env });
-  assert.equal(config.secretProvider, 'op');
-  assert.equal(config.opVaultName, 'PwrDrvr LLC');
-  assert.equal(config.opItemName, 'ghcrawl');
   assert.deepEqual(getTuiRepositoryPreference(config, 'openclaw', 'openclaw'), {
     minClusterSize: 1,
     sortMode: 'size',
@@ -315,14 +307,4 @@ test('loadConfig rejects invalid embed queue settings', () => {
       env: { ...makeTestEnv(), HOME: home, GHCRAWL_EMBED_CONCURRENCY: '0' },
     }),
   );
-});
-
-test('token format helpers match expected API key shapes', () => {
-  assert.equal(isLikelyGitHubToken('ghp_testtoken1234567890'), true);
-  assert.equal(isLikelyGitHubToken('github_pat_1234567890abcdefghijklmnopqrstuvwxyz'), true);
-  assert.equal(isLikelyGitHubToken('not-a-token'), false);
-
-  assert.equal(isLikelyOpenAiApiKey('sk-proj-testkey1234567890'), true);
-  assert.equal(isLikelyOpenAiApiKey('sk-testkey1234567890'), true);
-  assert.equal(isLikelyOpenAiApiKey('openai-key'), false);
 });

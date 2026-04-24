@@ -37,7 +37,6 @@ function makeRunContext(): { env: NodeJS.ProcessEnv; cwd: string; cleanup: () =>
 }
 
 const publicCommands = [
-  'init',
   'doctor',
   'configure',
   'version',
@@ -45,7 +44,6 @@ const publicCommands = [
   'refresh',
   'runs',
   'threads',
-  'author',
   'close-thread',
   'close-cluster',
   'exclude-cluster-member',
@@ -224,7 +222,6 @@ test('unknown command exits with code 2 and a top-level help hint', async () => 
 
 test('missing required flags exit with code 2 and command-specific hints', async () => {
   const cases = [
-    { argv: ['author', 'openclaw/openclaw'], message: /Missing --login/, hint: /Run 'ghcrawl author --help' for usage\./ },
     { argv: ['close-thread', 'openclaw/openclaw'], message: /Missing --number/, hint: /Run 'ghcrawl close-thread --help' for usage\./ },
     { argv: ['cluster-detail', 'openclaw/openclaw'], message: /Missing --id/, hint: /Run 'ghcrawl cluster-detail --help' for usage\./ },
   ];
@@ -236,70 +233,6 @@ test('missing required flags exit with code 2 and command-specific hints', async
     assert.match(stderr.read(), testCase.message);
     assert.match(stderr.read(), testCase.hint);
   }
-});
-
-test('author command returns actor profile stats and threads', async () => {
-  const stdout = createWritableCapture();
-  const context = makeRunContext();
-  const original = GHCrawlService.prototype.getAuthor;
-  let received: unknown;
-
-  GHCrawlService.prototype.getAuthor = function getAuthorStub(params: unknown) {
-    received = params;
-    return {
-      repository: {
-        id: 1,
-        owner: 'openclaw',
-        name: 'openclaw',
-        fullName: 'openclaw/openclaw',
-        githubRepoId: '1',
-        updatedAt: '2026-03-09T00:00:00Z',
-      },
-      authorLogin: 'alice',
-      actor: {
-        id: 1,
-        provider: 'github',
-        providerUserId: '501',
-        login: 'alice',
-        displayName: null,
-        actorType: 'User',
-        siteAdmin: false,
-        firstSeenAt: '2026-03-09T00:00:00Z',
-        lastSeenAt: '2026-03-09T00:00:00Z',
-        updatedAt: '2026-03-09T00:00:00Z',
-      },
-      stats: {
-        openedIssueCount: 1,
-        openedPullRequestCount: 0,
-        commentCount: 0,
-        mergedPullRequestCount: 0,
-        closedThreadCount: 0,
-        firstActivityAt: '2026-03-09T00:00:00Z',
-        lastActivityAt: '2026-03-09T00:00:00Z',
-        trustTier: 'unknown',
-      },
-      threads: [],
-    } as never;
-  };
-
-  try {
-    await run(['author', 'openclaw/openclaw', '--login', 'alice', '--include-closed'], stdout.stream, {
-      env: context.env,
-      cwd: context.cwd,
-    });
-  } finally {
-    GHCrawlService.prototype.getAuthor = original;
-    context.cleanup();
-  }
-
-  assert.deepEqual(received, {
-    owner: 'openclaw',
-    repo: 'openclaw',
-    login: 'alice',
-    includeClosed: true,
-  });
-  assert.match(stdout.read(), /"providerUserId": "501"/);
-  assert.match(stdout.read(), /"openedIssueCount": 1/);
 });
 
 test('runs command returns pipeline history', async () => {
@@ -390,7 +323,6 @@ test('agent-facing command help advertises explicit --json', async () => {
     'sync',
     'refresh',
     'threads',
-    'author',
     'close-thread',
     'close-cluster',
     'exclude-cluster-member',
@@ -959,15 +891,13 @@ test('formatDoctorReport renders a human-readable health summary', () => {
     github: {
       configured: true,
       source: 'config',
-      formatOk: true,
-      authOk: true,
+      tokenPresent: true,
       error: null,
     },
     openai: {
       configured: false,
       source: 'none',
-      formatOk: false,
-      authOk: false,
+      tokenPresent: false,
       error: 'missing',
     },
     vectorlite: {

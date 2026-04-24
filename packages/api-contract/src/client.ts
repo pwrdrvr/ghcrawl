@@ -4,7 +4,6 @@ import {
   closeClusterRequestSchema,
   closeResponseSchema,
   closeThreadRequestSchema,
-  authorThreadsResponseSchema,
   clusterDetailResponseSchema,
   clusterExplainResponseSchema,
   clusterMergeResponseSchema,
@@ -29,7 +28,6 @@ import {
   type ClusterMergeResponse,
   type ClusterOverrideResponse,
   type ClusterSplitResponse,
-  type AuthorThreadsResponse,
   type ClusterDetailResponse,
   type ClusterExplainResponse,
   type ClusterSummariesResponse,
@@ -47,7 +45,6 @@ export type GitcrawlClient = {
   health: () => Promise<HealthResponse>;
   listRepositories: () => Promise<RepositoriesResponse>;
   listThreads: (params: { owner: string; repo: string; kind?: 'issue' | 'pull_request'; numbers?: number[]; includeClosed?: boolean }) => Promise<ThreadsResponse>;
-  listAuthorThreads: (params: { owner: string; repo: string; login: string; includeClosed?: boolean }) => Promise<AuthorThreadsResponse>;
   search: (params: { owner: string; repo: string; query: string; mode?: SearchMode }) => Promise<SearchResponse>;
   listClusters: (params: { owner: string; repo: string; includeClosed?: boolean }) => Promise<ClustersResponse>;
   listClusterSummaries: (params: {
@@ -109,12 +106,6 @@ export function createGitcrawlClient(baseUrl: string, fetchImpl: FetchLike = fet
       if (params.includeClosed) search.set('includeClosed', 'true');
       const res = await fetchImpl(`${normalized}/threads?${search.toString()}`);
       return readJson(res, threadsResponseSchema);
-    },
-    async listAuthorThreads(params) {
-      const search = new URLSearchParams({ owner: params.owner, repo: params.repo, login: params.login });
-      if (params.includeClosed) search.set('includeClosed', 'true');
-      const res = await fetchImpl(`${normalized}/author-threads?${search.toString()}`);
-      return readJson(res, authorThreadsResponseSchema);
     },
     async search(params) {
       const search = new URLSearchParams({

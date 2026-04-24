@@ -3,7 +3,6 @@ import { throttling } from '@octokit/plugin-throttling';
 import { Octokit } from 'octokit';
 
 export type GitHubClient = {
-  checkAuth: (reporter?: GitHubReporter) => Promise<void>;
   getRepo: (owner: string, repo: string, reporter?: GitHubReporter) => Promise<Record<string, unknown>>;
   listRepositoryIssues: (
     owner: string,
@@ -157,11 +156,6 @@ export function makeGitHubClient(options: RequestOptions): GitHubClient {
   }
 
   return {
-    async checkAuth(reporter) {
-      await request('GET /rate_limit', reporter, async (octokit) => {
-        await octokit.request('GET /rate_limit');
-      });
-    },
     async getRepo(owner, repo, reporter) {
       return request(`GET /repos/${owner}/${repo}`, reporter, async (octokit) => {
         const response = await octokit.rest.repos.get({ owner, repo });

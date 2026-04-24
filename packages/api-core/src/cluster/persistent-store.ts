@@ -55,102 +55,6 @@ function upsertTextBlob(
 
 export type PipelineRunKind = 'sync' | 'fingerprint' | 'enrich' | 'edge' | 'cluster' | 'cluster_incremental';
 
-export function upsertActor(
-  db: SqliteDatabase,
-  params: {
-    provider?: 'github';
-    providerUserId: string;
-    login: string;
-    displayName?: string | null;
-    actorType?: string | null;
-    siteAdmin?: boolean;
-    rawJson?: string | null;
-  },
-): number {
-  const timestamp = nowIso();
-  const rawJsonBlobId =
-    params.rawJson && params.rawJson !== '{}'
-      ? upsertInlineBlob(db, {
-          text: params.rawJson,
-          mediaType: 'application/vnd.ghcrawl.actor.raw+json',
-        })
-      : null;
-  db.prepare(
-    `insert into actors (
-       provider, provider_user_id, login, display_name, actor_type, site_admin,
-       raw_json_blob_id, first_seen_at, last_seen_at, updated_at
-     ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     on conflict(provider, provider_user_id) do update set
-       login = excluded.login,
-       display_name = excluded.display_name,
-       actor_type = excluded.actor_type,
-       site_admin = excluded.site_admin,
-       raw_json_blob_id = excluded.raw_json_blob_id,
-       last_seen_at = excluded.last_seen_at,
-       updated_at = excluded.updated_at`,
-  ).run(
-    params.provider ?? 'github',
-    params.providerUserId,
-    params.login,
-    params.displayName ?? null,
-    params.actorType ?? null,
-    params.siteAdmin ? 1 : 0,
-    rawJsonBlobId,
-    timestamp,
-    timestamp,
-    timestamp,
-  );
-  const row = db
-    .prepare('select id from actors where provider = ? and provider_user_id = ? limit 1')
-    .get(params.provider ?? 'github', params.providerUserId) as { id: number };
-  return row.id;
-}
-
-export function refreshActorRepoStats(db: SqliteDatabase, repoId: number): void {
-  db.prepare('delete from actor_repo_stats where repo_id = ?').run(repoId);
-  db.prepare(
-    `insert into actor_repo_stats (
-       repo_id, actor_id, opened_issues, opened_prs, comments, merged_prs, closed_threads, first_activity_at, last_activity_at, trust_tier
-     )
-     select
-       ?,
-       a.id,
-       (select count(*) from threads t where t.repo_id = ? and t.kind = 'issue' and lower(t.author_login) = lower(a.login)),
-       (select count(*) from threads t where t.repo_id = ? and t.kind = 'pull_request' and lower(t.author_login) = lower(a.login)),
-       (select count(*)
-        from comments c
-        join threads t on t.id = c.thread_id
-        where t.repo_id = ? and lower(c.author_login) = lower(a.login)),
-       (select count(*) from threads t where t.repo_id = ? and t.kind = 'pull_request' and t.merged_at_gh is not null and lower(t.author_login) = lower(a.login)),
-       (select count(*) from threads t where t.repo_id = ? and t.closed_at_gh is not null and lower(t.author_login) = lower(a.login)),
-       (select min(activity_at)
-        from (
-          select created_at_gh as activity_at from threads t where t.repo_id = ? and lower(t.author_login) = lower(a.login)
-          union all
-          select c.created_at_gh as activity_at from comments c join threads t on t.id = c.thread_id where t.repo_id = ? and lower(c.author_login) = lower(a.login)
-        )
-        where activity_at is not null),
-       (select max(activity_at)
-        from (
-          select updated_at_gh as activity_at from threads t where t.repo_id = ? and lower(t.author_login) = lower(a.login)
-          union all
-          select c.updated_at_gh as activity_at from comments c join threads t on t.id = c.thread_id where t.repo_id = ? and lower(c.author_login) = lower(a.login)
-        )
-        where activity_at is not null),
-       case
-         when a.actor_type = 'Bot' then 'bot'
-         when (select count(*) from threads t where t.repo_id = ? and lower(t.author_login) = lower(a.login)) >= 3 then 'repeat_contributor'
-         else 'unknown'
-       end
-     from actors a
-     where exists (select 1 from threads t where t.repo_id = ? and lower(t.author_login) = lower(a.login))
-        or exists (
-          select 1 from comments c join threads t on t.id = c.thread_id
-          where t.repo_id = ? and lower(c.author_login) = lower(a.login)
-        )`,
-  ).run(repoId, repoId, repoId, repoId, repoId, repoId, repoId, repoId, repoId, repoId, repoId, repoId, repoId);
-}
-
 export function upsertThreadRevision(
   db: SqliteDatabase,
   params: {
@@ -570,12 +474,11 @@ export function recordClusterEvent(
     runId?: number | null;
     eventType: string;
     actorKind: 'algo' | 'user' | 'import';
-    actorId?: number | null;
     payload: unknown;
   },
 ): void {
   db.prepare(
-    `insert into cluster_events (cluster_id, run_id, event_type, actor_kind, actor_id, payload_json, created_at)
-     values (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(params.clusterId, params.runId ?? null, params.eventType, params.actorKind, params.actorId ?? null, JSON.stringify(params.payload), nowIso());
+    `insert into cluster_events (cluster_id, run_id, event_type, actor_kind, payload_json, created_at)
+     values (?, ?, ?, ?, ?, ?)`,
+  ).run(params.clusterId, params.runId ?? null, params.eventType, params.actorKind, JSON.stringify(params.payload), nowIso());
 }

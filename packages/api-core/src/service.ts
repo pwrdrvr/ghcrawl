@@ -11,8 +11,6 @@ import { Worker } from 'node:worker_threads';
 import { IterableMapper } from '@shutterstock/p-map-iterable';
 import {
   actionResponseSchema,
-  authorResponseSchema,
-  authorThreadsResponseSchema,
   closeResponseSchema,
   clusterOverrideResponseSchema,
   clusterMergeResponseSchema,
@@ -34,9 +32,6 @@ import {
   threadsResponseSchema,
   type ActionRequest,
   type ActionResponse,
-  type AuthorResponse,
-  type AuthorStatsDto,
-  type AuthorThreadsResponse,
   type CloseResponse,
   type ClusterMergeResponse,
   type ClusterOverrideResponse,
@@ -78,9 +73,7 @@ import { LLM_KEY_SUMMARY_PROMPT_VERSION, llmKeyInputHash } from './cluster/llm-k
 import {
   createPipelineRun,
   finishPipelineRun,
-  refreshActorRepoStats,
   recordClusterEvent,
-  upsertActor,
   upsertClusterGroup,
   upsertClusterMembership,
   upsertSimilarityEdgeEvidence,
@@ -96,8 +89,6 @@ import {
 } from './cluster/thread-fingerprint.js';
 import {
   ensureRuntimeDirs,
-  isLikelyGitHubToken,
-  isLikelyOpenAiApiKey,
   loadConfig,
   requireGithubToken,
   requireOpenAiKey,
@@ -369,15 +360,13 @@ export type DoctorResult = {
   github: {
     configured: boolean;
     source: ConfigValueSource;
-    formatOk: boolean;
-    authOk: boolean;
+    tokenPresent: boolean;
     error: string | null;
   };
   openai: {
     configured: boolean;
     source: ConfigValueSource;
-    formatOk: boolean;
-    authOk: boolean;
+    tokenPresent: boolean;
     error: string | null;
   };
   vectorlite: {
@@ -616,19 +605,6 @@ function threadToDto(row: ThreadRow, clusterId?: number | null): ThreadDto {
   };
 }
 
-function emptyAuthorStats(): AuthorStatsDto {
-  return {
-    openedIssueCount: 0,
-    openedPullRequestCount: 0,
-    commentCount: 0,
-    mergedPullRequestCount: 0,
-    closedThreadCount: 0,
-    firstActivityAt: null,
-    lastActivityAt: null,
-    trustTier: null,
-  };
-}
-
 export class GHCrawlService {
   readonly config: GitcrawlConfig;
   readonly db: SqliteDatabase;
@@ -677,47 +653,20 @@ export class GHCrawlService {
     const github = {
       configured: Boolean(this.config.githubToken),
       source: this.config.githubTokenSource,
-      formatOk: this.config.githubToken ? isLikelyGitHubToken(this.config.githubToken) : false,
-      authOk: false,
+      tokenPresent: Boolean(this.config.githubToken),
       error: null as string | null,
     };
     const openai = {
       configured: Boolean(this.config.openaiApiKey),
       source: this.config.openaiApiKeySource,
-      formatOk: this.config.openaiApiKey ? isLikelyOpenAiApiKey(this.config.openaiApiKey) : false,
-      authOk: false,
+      tokenPresent: Boolean(this.config.openaiApiKey),
       error: null as string | null,
     };
-    if (!github.configured && this.config.secretProvider === 'op' && this.config.opVaultName && this.config.opItemName) {
-      github.error = `Configured for 1Password CLI via ${this.config.opVaultName}/${this.config.opItemName}; run ghcrawl through your op wrapper so GITHUB_TOKEN is present in the environment.`;
+    if (!github.configured) {
+      github.error = 'Set GITHUB_TOKEN to crawl GitHub data.';
     }
-    if (!openai.configured && this.config.secretProvider === 'op' && this.config.opVaultName && this.config.opItemName) {
-      openai.error = `Configured for 1Password CLI via ${this.config.opVaultName}/${this.config.opItemName}; run ghcrawl through your op wrapper so OPENAI_API_KEY is present in the environment.`;
-    }
-    if (github.configured) {
-      if (!github.formatOk) {
-        github.error = 'Token format does not look like a GitHub personal access token.';
-      } else {
-        try {
-          await this.requireGithub().checkAuth();
-          github.authOk = true;
-        } catch (error) {
-          github.error = error instanceof Error ? error.message : String(error);
-        }
-      }
-    }
-
-    if (openai.configured) {
-      if (!openai.formatOk) {
-        openai.error = 'Key format does not look like an OpenAI API key.';
-      } else {
-        try {
-          await this.requireAi().checkAuth();
-          openai.authOk = true;
-        } catch (error) {
-          openai.error = error instanceof Error ? error.message : String(error);
-        }
-      }
+    if (!openai.configured) {
+      openai.error = 'Set OPENAI_API_KEY only for summary or embedding commands.';
     }
 
     const vectorliteHealth = this.vectorStore.checkRuntime();
@@ -832,275 +781,6 @@ export class GHCrawlService {
       repository,
       threads: orderedRows.map((row) => threadToDto(row, clusterIds.get(row.id) ?? null)),
     });
-  }
-
-  listAuthorThreads(params: { owner: string; repo: string; login: string; includeClosed?: boolean }): AuthorThreadsResponse {
-    const repository = this.requireRepository(params.owner, params.repo);
-    const normalizedLogin = params.login.trim();
-    if (!normalizedLogin) {
-      return authorThreadsResponseSchema.parse({
-        repository,
-        authorLogin: '',
-        threads: [],
-      });
-    }
-
-    const clusterIds = new Map<number, number>();
-    const clusterRows = this.db
-      .prepare(
-        `select cm.thread_id, cm.cluster_id
-         from cluster_members cm
-         join clusters c on c.id = cm.cluster_id
-         where c.repo_id = ? and c.cluster_run_id = (
-           select id from cluster_runs where repo_id = ? and status = 'completed' order by id desc limit 1
-         )`,
-      )
-      .all(repository.id, repository.id) as Array<{ thread_id: number; cluster_id: number }>;
-    for (const row of clusterRows) clusterIds.set(row.thread_id, row.cluster_id);
-
-    const rows = this.db
-      .prepare(
-        `select *
-         from threads
-         where repo_id = ? and lower(author_login) = lower(?)
-           ${params.includeClosed ? '' : "and state = 'open' and closed_at_local is null"}
-         order by updated_at_gh desc, number desc`,
-      )
-      .all(repository.id, normalizedLogin) as ThreadRow[];
-
-    const latestRun = this.getLatestClusterRun(repository.id);
-    const strongestByThread = new Map<number, NonNullable<ReturnType<typeof authorThreadsResponseSchema.parse>['threads'][number]['strongestSameAuthorMatch']>>();
-    if (latestRun && rows.length > 1) {
-      const edges = this.db
-        .prepare(
-          `select
-              se.left_thread_id,
-              se.right_thread_id,
-              se.score,
-              t1.number as left_number,
-              t1.kind as left_kind,
-              t1.title as left_title,
-              t2.number as right_number,
-              t2.kind as right_kind,
-              t2.title as right_title
-           from similarity_edges se
-           join threads t1 on t1.id = se.left_thread_id
-           join threads t2 on t2.id = se.right_thread_id
-           where se.repo_id = ?
-             and se.cluster_run_id = ?
-             and lower(t1.author_login) = lower(?)
-             and lower(t2.author_login) = lower(?)
-             ${params.includeClosed ? '' : "and t1.state = 'open' and t1.closed_at_local is null and t2.state = 'open' and t2.closed_at_local is null"}`,
-        )
-        .all(repository.id, latestRun.id, normalizedLogin, normalizedLogin) as Array<{
-        left_thread_id: number;
-        right_thread_id: number;
-        score: number;
-        left_number: number;
-        left_kind: 'issue' | 'pull_request';
-        left_title: string;
-        right_number: number;
-        right_kind: 'issue' | 'pull_request';
-        right_title: string;
-      }>;
-
-      const updateStrongest = (
-        sourceThreadId: number,
-        match: { threadId: number; number: number; kind: 'issue' | 'pull_request'; title: string; score: number },
-      ): void => {
-        const previous = strongestByThread.get(sourceThreadId);
-        if (!previous || match.score > previous.score) {
-          strongestByThread.set(sourceThreadId, match);
-        }
-      };
-
-      for (const edge of edges) {
-        updateStrongest(edge.left_thread_id, {
-          threadId: edge.right_thread_id,
-          number: edge.right_number,
-          kind: edge.right_kind,
-          title: edge.right_title,
-          score: edge.score,
-        });
-        updateStrongest(edge.right_thread_id, {
-          threadId: edge.left_thread_id,
-          number: edge.left_number,
-          kind: edge.left_kind,
-          title: edge.left_title,
-          score: edge.score,
-        });
-      }
-    }
-
-    return authorThreadsResponseSchema.parse({
-      repository,
-      authorLogin: normalizedLogin,
-      threads: rows.map((row) => ({
-        thread: threadToDto(row, clusterIds.get(row.id) ?? null),
-        strongestSameAuthorMatch: strongestByThread.get(row.id) ?? null,
-      })),
-    });
-  }
-
-  getAuthor(params: { owner: string; repo: string; login: string; includeClosed?: boolean }): AuthorResponse {
-    const repository = this.requireRepository(params.owner, params.repo);
-    const normalizedLogin = params.login.trim();
-    if (!normalizedLogin) {
-      return authorResponseSchema.parse({
-        repository,
-        authorLogin: '',
-        actor: null,
-        stats: emptyAuthorStats(),
-        threads: [],
-      });
-    }
-
-    const threads = this.listAuthorThreads(params).threads;
-    const actorRow = this.db
-      .prepare(
-        `select
-           a.id,
-           a.provider,
-           a.provider_user_id,
-           a.login,
-           a.display_name,
-           a.actor_type,
-           a.site_admin,
-           a.first_seen_at,
-           a.last_seen_at,
-           a.updated_at,
-           s.opened_issues,
-           s.opened_prs,
-           s.comments,
-           s.merged_prs,
-           s.closed_threads,
-           s.first_activity_at,
-           s.last_activity_at,
-           s.trust_tier
-         from actors a
-         left join actor_repo_stats s on s.actor_id = a.id and s.repo_id = ?
-         where lower(a.login) = lower(?)
-         order by s.last_activity_at desc nulls last, a.last_seen_at desc
-         limit 1`,
-      )
-      .get(repository.id, normalizedLogin) as
-      | {
-          id: number;
-          provider: string;
-          provider_user_id: string;
-          login: string;
-          display_name: string | null;
-          actor_type: string | null;
-          site_admin: number;
-          first_seen_at: string;
-          last_seen_at: string;
-          updated_at: string;
-          opened_issues: number | null;
-          opened_prs: number | null;
-          comments: number | null;
-          merged_prs: number | null;
-          closed_threads: number | null;
-          first_activity_at: string | null;
-          last_activity_at: string | null;
-          trust_tier: string | null;
-        }
-      | undefined;
-    const fallbackStats = this.computeAuthorStats(repository.id, normalizedLogin);
-
-    return authorResponseSchema.parse({
-      repository,
-      authorLogin: actorRow?.login ?? normalizedLogin,
-      actor: actorRow
-        ? {
-            id: actorRow.id,
-            provider: actorRow.provider,
-            providerUserId: actorRow.provider_user_id,
-            login: actorRow.login,
-            displayName: actorRow.display_name,
-            actorType: actorRow.actor_type,
-            siteAdmin: actorRow.site_admin === 1,
-            firstSeenAt: actorRow.first_seen_at,
-            lastSeenAt: actorRow.last_seen_at,
-            updatedAt: actorRow.updated_at,
-          }
-        : null,
-      stats: {
-        openedIssueCount: actorRow?.opened_issues ?? fallbackStats.openedIssueCount,
-        openedPullRequestCount: actorRow?.opened_prs ?? fallbackStats.openedPullRequestCount,
-        commentCount: actorRow?.comments ?? fallbackStats.commentCount,
-        mergedPullRequestCount: actorRow?.merged_prs ?? fallbackStats.mergedPullRequestCount,
-        closedThreadCount: actorRow?.closed_threads ?? fallbackStats.closedThreadCount,
-        firstActivityAt: actorRow?.first_activity_at ?? fallbackStats.firstActivityAt,
-        lastActivityAt: actorRow?.last_activity_at ?? fallbackStats.lastActivityAt,
-        trustTier: actorRow?.trust_tier ?? fallbackStats.trustTier,
-      },
-      threads,
-    });
-  }
-
-  private computeAuthorStats(repoId: number, login: string): ReturnType<typeof emptyAuthorStats> {
-    const row = this.db
-      .prepare(
-        `select
-           (select count(*) from threads where repo_id = ? and kind = 'issue' and lower(author_login) = lower(?)) as opened_issues,
-           (select count(*) from threads where repo_id = ? and kind = 'pull_request' and lower(author_login) = lower(?)) as opened_prs,
-           (select count(*) from comments c join threads t on t.id = c.thread_id where t.repo_id = ? and lower(c.author_login) = lower(?)) as comments,
-           (select count(*) from threads where repo_id = ? and kind = 'pull_request' and merged_at_gh is not null and lower(author_login) = lower(?)) as merged_prs,
-           (select count(*) from threads where repo_id = ? and closed_at_gh is not null and lower(author_login) = lower(?)) as closed_threads,
-           (select min(activity_at)
-            from (
-              select created_at_gh as activity_at from threads where repo_id = ? and lower(author_login) = lower(?)
-              union all
-              select c.created_at_gh as activity_at from comments c join threads t on t.id = c.thread_id where t.repo_id = ? and lower(c.author_login) = lower(?)
-            )
-            where activity_at is not null) as first_activity_at,
-           (select max(activity_at)
-            from (
-              select updated_at_gh as activity_at from threads where repo_id = ? and lower(author_login) = lower(?)
-              union all
-              select c.updated_at_gh as activity_at from comments c join threads t on t.id = c.thread_id where t.repo_id = ? and lower(c.author_login) = lower(?)
-            )
-            where activity_at is not null) as last_activity_at`,
-      )
-      .get(
-        repoId,
-        login,
-        repoId,
-        login,
-        repoId,
-        login,
-        repoId,
-        login,
-        repoId,
-        login,
-        repoId,
-        login,
-        repoId,
-        login,
-        repoId,
-        login,
-        repoId,
-        login,
-      ) as {
-      opened_issues: number;
-      opened_prs: number;
-      comments: number;
-      merged_prs: number;
-      closed_threads: number;
-      first_activity_at: string | null;
-      last_activity_at: string | null;
-    };
-
-    return {
-      openedIssueCount: row.opened_issues,
-      openedPullRequestCount: row.opened_prs,
-      commentCount: row.comments,
-      mergedPullRequestCount: row.merged_prs,
-      closedThreadCount: row.closed_threads,
-      firstActivityAt: row.first_activity_at,
-      lastActivityAt: row.last_activity_at,
-      trustTier: row.opened_issues + row.opened_prs >= 3 ? 'repeat_contributor' : null,
-    };
   }
 
   closeThreadLocally(params: { owner: string; repo: string; threadNumber: number }): CloseResponse {
@@ -1820,8 +1500,6 @@ export class GHCrawlService {
         lastReconciledOpenCloseAt: reconciledOpenCloseAt ?? syncCursor.lastReconciledOpenCloseAt,
       };
       this.writeSyncCursorState(repoId, nextSyncCursor);
-      refreshActorRepoStats(this.db, repoId);
-
       this.finishRun('sync_runs', runId, 'completed', {
         threadsSynced,
         commentsSynced,
@@ -4326,7 +4004,6 @@ export class GHCrawlService {
     const issueComments = await github.listIssueComments(owner, repo, number, reporter);
     comments.push(
       ...issueComments.map((comment) => {
-        this.upsertActorFromPayload(comment);
         const authorLogin = userLogin(comment);
         const authorType = userType(comment);
         return {
@@ -4347,7 +4024,6 @@ export class GHCrawlService {
       const reviews = await github.listPullReviews(owner, repo, number, reporter);
       comments.push(
         ...reviews.map((review) => {
-          this.upsertActorFromPayload(review);
           const authorLogin = userLogin(review);
           const authorType = userType(review);
           return {
@@ -4367,7 +4043,6 @@ export class GHCrawlService {
       const reviewComments = await github.listPullReviewComments(owner, repo, number, reporter);
       comments.push(
         ...reviewComments.map((comment) => {
-          this.upsertActorFromPayload(comment);
           const authorLogin = userLogin(comment);
           const authorType = userType(comment);
           return {
@@ -4427,21 +4102,6 @@ export class GHCrawlService {
     return row.id;
   }
 
-  private upsertActorFromPayload(payload: Record<string, unknown>): number | null {
-    const user = payload.user as Record<string, unknown> | undefined;
-    const login = userLogin(payload);
-    if (!user || !login) return null;
-    const providerUserId = user.id === undefined || user.id === null ? login : String(user.id);
-    return upsertActor(this.db, {
-      providerUserId,
-      login,
-      displayName: typeof user.name === 'string' ? user.name : null,
-      actorType: userType(payload),
-      siteAdmin: user.site_admin === true,
-      rawJson: asJson(user),
-    });
-  }
-
   private upsertThread(
     repoId: number,
     kind: 'issue' | 'pull_request',
@@ -4453,7 +4113,6 @@ export class GHCrawlService {
     const labels = parseLabels(payload);
     const assignees = parseAssignees(payload);
     const contentHash = stableContentHash(`${title}\n${body ?? ''}`);
-    this.upsertActorFromPayload(payload);
     this.db
       .prepare(
         `insert into threads (

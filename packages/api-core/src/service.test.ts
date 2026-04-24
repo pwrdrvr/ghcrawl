@@ -19,7 +19,6 @@ function makeTestConfig(overrides: Partial<GHCrawlService['config']> = {}): GHCr
     apiPort: 5179,
     githubToken: 'ghp_testtoken1234567890',
     githubTokenSource: 'config',
-    secretProvider: 'plaintext',
     tuiPreferences: {},
     openaiApiKeySource: 'none',
     summaryModel: 'gpt-5-mini',
@@ -53,18 +52,13 @@ function makeEmbedding(seed: number, variant = 0): number[] {
   });
 }
 
-test('doctor reports config path and successful auth smoke checks', async () => {
-  let githubChecked = 0;
-  let openAiChecked = 0;
+test('doctor reports config path and token presence without network auth checks', async () => {
   const service = new GHCrawlService({
     config: makeTestConfig({
       openaiApiKey: 'sk-proj-testkey1234567890',
       openaiApiKeySource: 'config',
     }),
     github: {
-      checkAuth: async () => {
-        githubChecked += 1;
-      },
       getRepo: async () => ({}),
       listRepositoryIssues: async () => [],
       getIssue: async () => ({}),
@@ -75,9 +69,6 @@ test('doctor reports config path and successful auth smoke checks', async () => 
       listPullFiles: async () => [],
     },
     ai: {
-      checkAuth: async () => {
-        openAiChecked += 1;
-      },
       summarizeThread: async () => {
         throw new Error('not expected');
       },
@@ -88,29 +79,22 @@ test('doctor reports config path and successful auth smoke checks', async () => 
   try {
     const result = await service.doctor();
     assert.equal(result.health.configPath, service.config.configPath);
-    assert.equal(result.github.formatOk, true);
-    assert.equal(result.github.authOk, true);
-    assert.equal(result.openai.formatOk, true);
-    assert.equal(result.openai.authOk, true);
+    assert.equal(result.github.tokenPresent, true);
+    assert.equal(result.openai.tokenPresent, true);
     assert.equal(result.vectorlite.configured, true);
     assert.equal(result.vectorlite.runtimeOk, true);
-    assert.equal(githubChecked, 1);
-    assert.equal(openAiChecked, 1);
   } finally {
     service.close();
   }
 });
 
-test('doctor reports invalid token format without attempting auth', async () => {
-  let githubChecked = 0;
+test('doctor reports missing GitHub token without attempting network auth', async () => {
   const service = new GHCrawlService({
     config: makeTestConfig({
-      githubToken: 'not-a-token',
+      githubToken: undefined,
+      githubTokenSource: 'none',
     }),
     github: {
-      checkAuth: async () => {
-        githubChecked += 1;
-      },
       getRepo: async () => ({}),
       listRepositoryIssues: async () => [],
       getIssue: async () => ({}),
@@ -124,34 +108,9 @@ test('doctor reports invalid token format without attempting auth', async () => 
 
   try {
     const result = await service.doctor();
-    assert.equal(result.github.formatOk, false);
-    assert.equal(result.github.authOk, false);
-    assert.match(result.github.error ?? '', /does not look like a GitHub personal access token/);
-    assert.equal(githubChecked, 0);
-  } finally {
-    service.close();
-  }
-});
-
-test('doctor explains when secrets are expected from 1Password CLI env injection', async () => {
-  const service = new GHCrawlService({
-    config: makeTestConfig({
-      githubToken: undefined,
-      githubTokenSource: 'none',
-      openaiApiKey: undefined,
-      openaiApiKeySource: 'none',
-      secretProvider: 'op',
-      opVaultName: 'PwrDrvr LLC',
-      opItemName: 'ghcrawl',
-    }),
-  });
-
-  try {
-    const result = await service.doctor();
     assert.equal(result.github.configured, false);
-    assert.match(result.github.error ?? '', /1Password CLI/);
-    assert.equal(result.openai.configured, false);
-    assert.match(result.openai.error ?? '', /OPENAI_API_KEY/);
+    assert.equal(result.github.tokenPresent, false);
+    assert.match(result.github.error ?? '', /GITHUB_TOKEN/);
   } finally {
     service.close();
   }
@@ -159,7 +118,6 @@ test('doctor explains when secrets are expected from 1Password CLI env injection
 
 test('listRunHistory returns recent runs across pipeline tables', () => {
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({}),
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
@@ -208,7 +166,6 @@ test('syncRepository defaults to metadata-only mode, preserves thread kind, and 
   let listPullReviewCommentCalls = 0;
   let listPullFileCalls = 0;
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
     listRepositoryIssues: async (_owner, _repo, _since, limit) =>
       [
@@ -309,9 +266,6 @@ test('syncRepository defaults to metadata-only mode, preserves thread kind, and 
       service.listThreads({ owner: 'openclaw', repo: 'openclaw', numbers: [43, 42, 999] }).threads.map((thread) => thread.number),
       [43, 42],
     );
-    const authorThreads = service.listAuthorThreads({ owner: 'openclaw', repo: 'openclaw', login: 'alice' });
-    assert.equal(authorThreads.authorLogin, 'alice');
-    assert.deepEqual(authorThreads.threads.map((item) => item.thread.number), [43, 42]);
     assert.equal(listIssueCommentCalls, 0);
     assert.equal(listPullReviewCalls, 0);
     assert.equal(listPullReviewCommentCalls, 0);
@@ -351,7 +305,6 @@ test('syncRepository fetches comments, reviews, and review comments when include
   let listPullReviewCommentCalls = 0;
 
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
     listRepositoryIssues: async () => [
       {
@@ -453,7 +406,6 @@ test('syncRepository fetches comments, reviews, and review comments when include
 test('syncRepository hydrates pull request code snapshots when includeCode is enabled', async () => {
   let listPullFileCalls = 0;
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
     listRepositoryIssues: async () => [
       {
@@ -535,7 +487,6 @@ test('summarizeRepository excludes hydrated comments by default and reports toke
   const summaryInputs: string[] = [];
   const service = makeTestService(
     {
-      checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
       listRepositoryIssues: async () => [],
       getIssue: async () => {
@@ -550,7 +501,6 @@ test('summarizeRepository excludes hydrated comments by default and reports toke
     listPullFiles: async () => [],
     },
     {
-      checkAuth: async () => undefined,
       summarizeThread: async ({ text }) => {
         summaryInputs.push(text);
         return {
@@ -644,7 +594,6 @@ test('summarizeRepository includes hydrated human comments when includeComments 
   const summaryInputs: string[] = [];
   const service = makeTestService(
     {
-      checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
       listRepositoryIssues: async () => [],
       getIssue: async () => {
@@ -659,7 +608,6 @@ test('summarizeRepository includes hydrated human comments when includeComments 
     listPullFiles: async () => [],
     },
     {
-      checkAuth: async () => undefined,
       summarizeThread: async ({ text }) => {
         summaryInputs.push(text);
         return {
@@ -752,7 +700,6 @@ test('summarizeRepository prices progress output using the configured summary mo
   const progress: string[] = [];
   const service = makeTestService(
     {
-      checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
       listRepositoryIssues: async () => [],
       getIssue: async () => {
@@ -767,7 +714,6 @@ test('summarizeRepository prices progress output using the configured summary mo
     listPullFiles: async () => [],
     },
     {
-      checkAuth: async () => undefined,
       summarizeThread: async () => ({
         summary: {
           problemSummary: 'Problem',
@@ -846,7 +792,6 @@ test('generateKeySummaries stores cached 3-line key summaries', async () => {
   let calls = 0;
   const service = makeTestService(
     {
-      checkAuth: async () => undefined,
       getRepo: async () => ({}),
       listRepositoryIssues: async () => [],
       getIssue: async () => ({}),
@@ -858,7 +803,6 @@ test('generateKeySummaries stores cached 3-line key summaries', async () => {
     },
     {
       providerName: 'test-agent',
-      checkAuth: async () => undefined,
       summarizeThread: async () => {
         throw new Error('not expected');
       },
@@ -918,7 +862,6 @@ test('generateKeySummaries stores cached 3-line key summaries', async () => {
 
 test('purgeComments removes hydrated comments and refreshes canonical documents', () => {
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
     listRepositoryIssues: async () => [],
     getIssue: async () => {
@@ -1016,7 +959,6 @@ test('embedRepository batches multi-source embeddings and skips unchanged inputs
   const embedCalls: string[][] = [];
   const service = makeTestService(
     {
-      checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
       listRepositoryIssues: async () => [],
       getIssue: async () => {
@@ -1031,7 +973,6 @@ test('embedRepository batches multi-source embeddings and skips unchanged inputs
     listPullFiles: async () => [],
     },
     {
-      checkAuth: async () => undefined,
       summarizeThread: async () => {
         throw new Error('not expected');
       },
@@ -1125,7 +1066,6 @@ test('embedRepository can use stored 3-line key summaries as active vector input
   const service = new GHCrawlService({
     config: makeTestConfig({ embeddingBasis: 'llm_key_summary' }),
     github: {
-      checkAuth: async () => undefined,
       getRepo: async () => ({}),
       listRepositoryIssues: async () => [],
       getIssue: async () => ({}),
@@ -1136,7 +1076,6 @@ test('embedRepository can use stored 3-line key summaries as active vector input
       listPullFiles: async () => [],
     },
     ai: {
-      checkAuth: async () => undefined,
       summarizeThread: async () => {
         throw new Error('not expected');
       },
@@ -1203,7 +1142,6 @@ test('listNeighbors uses the vectorlite sidecar for current active vectors', asy
   const service = new GHCrawlService({
     config: makeTestConfig(),
     github: {
-      checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
       listRepositoryIssues: async () => [],
       getIssue: async () => {
@@ -1218,7 +1156,6 @@ test('listNeighbors uses the vectorlite sidecar for current active vectors', asy
     listPullFiles: async () => [],
     },
     ai: {
-      checkAuth: async () => undefined,
       summarizeThread: async () => {
         throw new Error('not expected');
       },
@@ -1264,7 +1201,6 @@ test('embedRepository prunes closed vectors before reusing current active vector
   const service = new GHCrawlService({
     config: makeTestConfig(),
     github: {
-      checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
       listRepositoryIssues: async () => [],
       getIssue: async () => {
@@ -1279,7 +1215,6 @@ test('embedRepository prunes closed vectors before reusing current active vector
     listPullFiles: async () => [],
     },
     ai: {
-      checkAuth: async () => undefined,
       summarizeThread: async () => {
         throw new Error('not expected');
       },
@@ -1348,7 +1283,6 @@ test('embedRepository truncates oversized inputs before submission', async () =>
       embedMaxUnread: 2,
     }),
     github: {
-      checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
       listRepositoryIssues: async () => [],
       getIssue: async () => {
@@ -1363,7 +1297,6 @@ test('embedRepository truncates oversized inputs before submission', async () =>
     listPullFiles: async () => [],
     },
     ai: {
-      checkAuth: async () => undefined,
       summarizeThread: async () => {
         throw new Error('not expected');
       },
@@ -1473,7 +1406,6 @@ test('embedRepository isolates a failing oversized item from a mixed batch and r
       embedMaxUnread: 2,
     }),
     github: {
-      checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
       listRepositoryIssues: async () => [],
       getIssue: async () => {
@@ -1488,7 +1420,6 @@ test('embedRepository isolates a failing oversized item from a mixed batch and r
     listPullFiles: async () => [],
     },
     ai: {
-      checkAuth: async () => undefined,
       summarizeThread: async () => {
         throw new Error('not expected');
       },
@@ -1601,7 +1532,6 @@ test('embedRepository recovers from wrapped maximum input length errors by shrin
       embedMaxUnread: 2,
     }),
     github: {
-      checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
       listRepositoryIssues: async () => [],
       getIssue: async () => {
@@ -1616,7 +1546,6 @@ test('embedRepository recovers from wrapped maximum input length errors by shrin
     listPullFiles: async () => [],
     },
     ai: {
-      checkAuth: async () => undefined,
       summarizeThread: async () => {
         throw new Error('not expected');
       },
@@ -1730,7 +1659,6 @@ test('embedRepository recovers from wrapped maximum input length errors by shrin
 
 test('listNeighbors returns exact nearest neighbors for an embedded thread', () => {
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({}),
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
@@ -1812,72 +1740,6 @@ test('listNeighbors returns exact nearest neighbors for an embedded thread', () 
   }
 });
 
-test('listAuthorThreads returns one author view with strongest same-author match from stored cluster edges', () => {
-  const service = makeTestService({
-    checkAuth: async () => undefined,
-    getRepo: async () => ({}),
-    listRepositoryIssues: async () => [],
-    getIssue: async () => ({}),
-    getPull: async () => ({}),
-    listIssueComments: async () => [],
-    listPullReviews: async () => [],
-    listPullReviewComments: async () => [],
-    listPullFiles: async () => [],
-  });
-
-  try {
-    const now = '2026-03-09T00:00:00Z';
-    service.db
-      .prepare(
-        `insert into repositories (id, owner, name, full_name, github_repo_id, raw_json, updated_at)
-         values (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '1', '{}', now);
-
-    const insertThread = service.db.prepare(
-      `insert into threads (
-        id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
-        labels_json, assignees_json, raw_json, content_hash, is_draft, created_at_gh, updated_at_gh, closed_at_gh,
-        merged_at_gh, first_pulled_at, last_pulled_at, updated_at
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    );
-    insertThread.run(10, 1, '100', 42, 'issue', 'open', 'Downloader hangs', 'The transfer never finishes.', 'lqquan', 'User', 'https://github.com/openclaw/openclaw/issues/42', '[]', '[]', '{}', 'hash-42', 0, now, now, null, null, now, now, now);
-    insertThread.run(11, 1, '101', 43, 'pull_request', 'open', 'Fix downloader hang', 'Implements a fix.', 'lqquan', 'User', 'https://github.com/openclaw/openclaw/pull/43', '[]', '[]', '{}', 'hash-43', 0, now, now, null, null, now, now, now);
-    insertThread.run(12, 1, '102', 44, 'issue', 'open', 'Retry issue', 'Retries are broken.', 'other', 'User', 'https://github.com/openclaw/openclaw/issues/44', '[]', '[]', '{}', 'hash-44', 0, now, now, null, null, now, now, now);
-
-    service.db
-      .prepare(`insert into cluster_runs (id, repo_id, scope, status, started_at, finished_at) values (?, ?, ?, ?, ?, ?)`)
-      .run(1, 1, 'openclaw/openclaw', 'completed', now, now);
-    service.db
-      .prepare(
-        `insert into clusters (id, repo_id, cluster_run_id, representative_thread_id, member_count, created_at)
-         values (?, ?, ?, ?, ?, ?)`,
-      )
-      .run(100, 1, 1, 10, 2, now);
-    service.db
-      .prepare(`insert into cluster_members (cluster_id, thread_id, score_to_representative, created_at) values (?, ?, ?, ?)`)
-      .run(100, 10, null, now);
-    service.db
-      .prepare(`insert into cluster_members (cluster_id, thread_id, score_to_representative, created_at) values (?, ?, ?, ?)`)
-      .run(100, 11, 0.91, now);
-    service.db
-      .prepare(
-        `insert into similarity_edges (repo_id, cluster_run_id, left_thread_id, right_thread_id, method, score, explanation_json, created_at)
-         values (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(1, 1, 10, 11, 'exact_cosine', 0.91, '{}', now);
-
-    const result = service.listAuthorThreads({ owner: 'openclaw', repo: 'openclaw', login: 'lqquan' });
-
-    assert.deepEqual(result.threads.map((item) => item.thread.number), [43, 42]);
-    assert.equal(result.threads[0]?.strongestSameAuthorMatch?.number, 42);
-    assert.equal(result.threads[0]?.strongestSameAuthorMatch?.score, 0.91);
-    assert.equal(result.threads[1]?.strongestSameAuthorMatch?.number, 43);
-  } finally {
-    service.close();
-  }
-});
-
 test('clusterRepository emits timed progress updates while identifying similarities', async () => {
   const messages: string[] = [];
   const originalDateNow = Date.now;
@@ -1888,7 +1750,6 @@ test('clusterRepository emits timed progress updates while identifying similarit
   };
 
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({}),
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
@@ -1945,7 +1806,6 @@ test('clusterRepository emits timed progress updates while identifying similarit
 
 test('clusterRepository merges source kinds into one edge without directional duplicates', async () => {
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({}),
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
@@ -2008,7 +1868,6 @@ test('clusterRepository merges source kinds into one edge without directional du
 
 test('clusterRepository prunes older cluster runs for the repo after a successful rebuild', async () => {
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({}),
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
@@ -2071,7 +1930,6 @@ test('clusterRepository purges legacy embeddings and inline vector payloads afte
   const service = new GHCrawlService({
     config: makeTestConfig(),
     github: {
-      checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
       listRepositoryIssues: async () => [],
       getIssue: async () => {
@@ -2086,7 +1944,6 @@ test('clusterRepository purges legacy embeddings and inline vector payloads afte
     listPullFiles: async () => [],
     },
     ai: {
-      checkAuth: async () => undefined,
       summarizeThread: async () => {
         throw new Error('not expected');
       },
@@ -2177,7 +2034,6 @@ test('clusterRepository rebuilds a corrupted active vector store and retries', a
     config: makeTestConfig(),
     vectorStore,
     github: {
-      checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
       listRepositoryIssues: async () => [],
       getIssue: async () => {
@@ -2192,7 +2048,6 @@ test('clusterRepository rebuilds a corrupted active vector store and retries', a
     listPullFiles: async () => [],
     },
     ai: {
-      checkAuth: async () => undefined,
       summarizeThread: async () => {
         throw new Error('not expected');
       },
@@ -2266,7 +2121,6 @@ test('clusterRepository falls back to deterministic fingerprints when vectors ar
   const service = new GHCrawlService({
     config: makeTestConfig(),
     github: {
-      checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
       listRepositoryIssues: async () => [],
       getIssue: async () => {
@@ -2323,7 +2177,6 @@ test('clusterRepository preserves a forced canonical representative on rebuild',
   const service = new GHCrawlService({
     config: makeTestConfig(),
     github: {
-      checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
       listRepositoryIssues: async () => [],
       getIssue: async () => {
@@ -2392,7 +2245,6 @@ test('clusterRepository preserves a forced include on rebuild', async () => {
   const service = new GHCrawlService({
     config: makeTestConfig(),
     github: {
-      checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
       listRepositoryIssues: async () => [],
       getIssue: async () => {
@@ -2455,7 +2307,6 @@ test('mergeDurableClusters preserves source slug and force-includes active sourc
   const service = new GHCrawlService({
     config: makeTestConfig(),
     github: {
-      checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
       listRepositoryIssues: async () => [],
       getIssue: async () => {
@@ -2538,7 +2389,6 @@ test('splitDurableCluster creates a governed cluster and blocks source re-entry'
   const service = new GHCrawlService({
     config: makeTestConfig(),
     github: {
-      checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
       listRepositoryIssues: async () => [],
       getIssue: async () => {
@@ -2637,7 +2487,6 @@ test('clusterRepository materializes only changed deterministic fingerprints', a
   const service = new GHCrawlService({
     config: makeTestConfig(),
     github: {
-      checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
       listRepositoryIssues: async () => [],
       getIssue: async () => {
@@ -2711,7 +2560,6 @@ test('clusterRepository can refresh one durable neighborhood without replacing t
   const service = new GHCrawlService({
     config: makeTestConfig(),
     github: {
-      checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
       listRepositoryIssues: async () => [],
       getIssue: async () => {
@@ -2785,7 +2633,6 @@ test('clusterRepository uses hydrated code hunk signatures without embeddings', 
   const service = new GHCrawlService({
     config: makeTestConfig(),
     github: {
-      checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
       listRepositoryIssues: async () => [
         {
@@ -2868,7 +2715,6 @@ test('clusterRepository keeps deterministic hunk edges when active vectors are c
   const service = new GHCrawlService({
     config: makeTestConfig(),
     github: {
-      checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
       listRepositoryIssues: async () => [
         {
@@ -2926,7 +2772,6 @@ test('clusterRepository keeps deterministic hunk edges when active vectors are c
       ],
     },
     ai: {
-      checkAuth: async () => undefined,
       summarizeThread: async () => {
         throw new Error('not expected');
       },
@@ -2987,7 +2832,6 @@ test('embedRepository rebuilds a corrupted active vector store during upsert', a
     config: makeTestConfig(),
     vectorStore,
     github: {
-      checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
       listRepositoryIssues: async () => [],
       getIssue: async () => {
@@ -3002,7 +2846,6 @@ test('embedRepository rebuilds a corrupted active vector store during upsert', a
     listPullFiles: async () => [],
     },
     ai: {
-      checkAuth: async () => undefined,
       summarizeThread: async () => {
         throw new Error('not expected');
       },
@@ -3042,7 +2885,6 @@ test('clusterExperiment falls back to active vectors when legacy embeddings are 
   const service = new GHCrawlService({
     config: makeTestConfig(),
     github: {
-      checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
       listRepositoryIssues: async () => [],
       getIssue: async () => {
@@ -3057,7 +2899,6 @@ test('clusterExperiment falls back to active vectors when legacy embeddings are 
     listPullFiles: async () => [],
     },
     ai: {
-      checkAuth: async () => undefined,
       summarizeThread: async () => {
         throw new Error('not expected');
       },
@@ -3112,7 +2953,6 @@ test('clusterExperiment falls back to active vectors when legacy embeddings are 
 
 test('clusterRepository does not retain a parsed embedding cache in-process', async () => {
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({}),
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
@@ -3166,7 +3006,6 @@ test('clusterRepository does not retain a parsed embedding cache in-process', as
 
 test('tui snapshot returns mixed issue and pull request counts with default recent sort and filters', () => {
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({}),
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
@@ -3267,7 +3106,6 @@ test('tui snapshot returns mixed issue and pull request counts with default rece
 
 test('tui cluster detail and thread detail expose members, summaries, and neighbors', () => {
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({}),
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
@@ -3371,7 +3209,6 @@ test('tui cluster detail and thread detail expose members, summaries, and neighb
 
 test('getTuiThreadDetail prefers stored cluster neighbors over exact embedding search', () => {
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({}),
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
@@ -3436,7 +3273,6 @@ test('refreshRepository runs sync, embed, and cluster in order and returns the c
   const messages: string[] = [];
   const service = makeTestService(
     {
-      checkAuth: async () => undefined,
       getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
       listRepositoryIssues: async () => [
         {
@@ -3473,7 +3309,6 @@ test('refreshRepository runs sync, embed, and cluster in order and returns the c
     listPullFiles: async () => [],
     },
     {
-      checkAuth: async () => undefined,
       summarizeThread: async () => {
         throw new Error('not expected');
       },
@@ -3508,7 +3343,6 @@ test('refreshRepository runs sync, embed, and cluster in order and returns the c
 
 test('refreshRepository forwards includeCode to sync stage', async () => {
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({}),
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
@@ -3549,7 +3383,6 @@ test('refreshRepository forwards includeCode to sync stage', async () => {
 
 test('agent cluster summary and detail dumps expose repo stats, snippets, and summaries', () => {
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({}),
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
@@ -3696,7 +3529,6 @@ test('agent cluster summary and detail dumps expose repo stats, snippets, and su
 
 test('getTuiThreadDetail can skip neighbor loading for fast browse paths', () => {
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
     listRepositoryIssues: async () => [],
     getIssue: async () => {
@@ -3777,7 +3609,6 @@ test('getTuiThreadDetail can skip neighbor loading for fast browse paths', () =>
 
 test('local thread closure updates default thread filters and auto-closes fully closed clusters', () => {
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({}),
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
@@ -3863,7 +3694,6 @@ test('local thread closure updates default thread filters and auto-closes fully 
 
 test('manual cluster closure is hidden from JSON summaries by default but remains visible in the tui snapshot', () => {
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({}),
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
@@ -3929,7 +3759,6 @@ test('manual cluster closure is hidden from JSON summaries by default but remain
 
 test('excludeThreadFromCluster records a durable manual exclusion', () => {
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({}),
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
@@ -4005,7 +3834,6 @@ test('excludeThreadFromCluster records a durable manual exclusion', () => {
 
 test('listDurableClusters returns stable slugs and governed member states', () => {
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({}),
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
@@ -4062,7 +3890,6 @@ test('listDurableClusters returns stable slugs and governed member states', () =
 
 test('explainDurableCluster returns evidence and governance records', () => {
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({}),
     listRepositoryIssues: async () => [],
     getIssue: async () => ({}),
@@ -4136,9 +3963,8 @@ test('explainDurableCluster returns evidence and governance records', () => {
   }
 });
 
-test('syncRepository records actors and repo stats from thread and comment authors', async () => {
+test('syncRepository keeps source author fields without building actor profiles', async () => {
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
     listRepositoryIssues: async () => [
       {
@@ -4182,33 +4008,17 @@ test('syncRepository records actors and repo stats from thread and comment autho
       limit: 1,
     });
 
-    const actors = service.db.prepare('select login, actor_type from actors order by login').all() as Array<{
-      login: string;
-      actor_type: string;
-    }>;
-    const stats = service.db
-      .prepare(
-        `select a.login, s.opened_issues, s.comments
-         from actor_repo_stats s
-         join actors a on a.id = s.actor_id
-         order by a.login`,
-      )
-      .all() as Array<{ login: string; opened_issues: number; comments: number }>;
+    const thread = service.db.prepare('select author_login, author_type from threads where number = 42').get() as {
+      author_login: string;
+      author_type: string;
+    };
+    const comment = service.db.prepare('select author_login, author_type from comments where github_id = ?').get('900') as {
+      author_login: string;
+      author_type: string;
+    };
 
-    assert.deepEqual(actors, [
-      { login: 'alice', actor_type: 'User' },
-      { login: 'bob', actor_type: 'User' },
-    ]);
-    assert.deepEqual(stats, [
-      { login: 'alice', opened_issues: 1, comments: 0 },
-      { login: 'bob', opened_issues: 0, comments: 1 },
-    ]);
-
-    const author = service.getAuthor({ owner: 'openclaw', repo: 'openclaw', login: 'alice' });
-    assert.equal(author.actor?.providerUserId, '501');
-    assert.equal(author.stats.openedIssueCount, 1);
-    assert.equal(author.stats.commentCount, 0);
-    assert.deepEqual(author.threads.map((item) => item.thread.number), [42]);
+    assert.deepEqual(thread, { author_login: 'alice', author_type: 'User' });
+    assert.deepEqual(comment, { author_login: 'bob', author_type: 'User' });
   } finally {
     service.close();
   }
@@ -4221,7 +4031,6 @@ test('syncRepository reconciles stale open threads and marks confirmed closures 
   let closedListCalls = 0;
 
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
     listRepositoryIssues: async (_owner, _repo, _since, _limit, _reporter, state = 'open') => {
       if (state === 'closed') {
@@ -4329,7 +4138,6 @@ test('syncRepository treats missing stale pull requests as closed and continues'
   const messages: string[] = [];
 
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
     listRepositoryIssues: async () => {
       listRepositoryIssuesCalls += 1;
@@ -4416,7 +4224,6 @@ test('syncRepository skips stale-open reconciliation for filtered crawls', async
   let getIssueCalls = 0;
 
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
     listRepositoryIssues: async (_owner, _repo, _since, limit) => {
       listRepositoryIssuesCalls += 1;
@@ -4481,7 +4288,6 @@ test('syncRepository leaves unseen stale open items alone by default when closed
   let getIssueCalls = 0;
 
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
     listRepositoryIssues: async (_owner, _repo, _since, _limit, _reporter, state = 'open') => {
       if (state === 'closed') {
@@ -4547,7 +4353,6 @@ test('syncRepository performs direct stale-open reconciliation when fullReconcil
   let openListCalls = 0;
 
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
     listRepositoryIssues: async (_owner, _repo, _since, _limit, _reporter, state = 'open') => {
       if (state === 'closed') {
@@ -4625,7 +4430,6 @@ test('syncRepository derives the default overlapping since window from the last 
   const closedSinceValues: Array<string | undefined> = [];
 
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
     listRepositoryIssues: async (_owner, _repo, since, _limit, _reporter, state = 'open') => {
       if (state === 'closed') {
@@ -4727,7 +4531,6 @@ test('syncRepository uses an explicit since window for both open and closed over
   let openListCalls = 0;
 
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
     listRepositoryIssues: async (_owner, _repo, since, _limit, _reporter, state = 'open') => {
       if (state === 'closed') {
@@ -4800,7 +4603,6 @@ test('syncRepository skips the closed overlap sweep on the first full scan with 
   const closedSinceValues: Array<string | undefined> = [];
 
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
     listRepositoryIssues: async (_owner, _repo, since, _limit, _reporter, state = 'open') => {
       if (state === 'closed') {
@@ -4860,7 +4662,6 @@ test('syncRepository skips the closed overlap sweep on the first full scan with 
 
 test('repository-scoped reads and neighbors do not leak across repos in the same database', () => {
   const service = makeTestService({
-    checkAuth: async () => undefined,
     getRepo: async () => ({ id: 1, full_name: 'owner-one/repo-one' }),
     listRepositoryIssues: async () => [],
     getIssue: async () => {

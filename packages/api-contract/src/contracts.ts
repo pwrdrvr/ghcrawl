@@ -88,54 +88,6 @@ export const neighborSchema = z.object({
 });
 export type NeighborDto = z.infer<typeof neighborSchema>;
 
-export const authorThreadSchema = z.object({
-  thread: threadSchema,
-  strongestSameAuthorMatch: neighborSchema.nullable(),
-});
-export type AuthorThreadDto = z.infer<typeof authorThreadSchema>;
-
-export const authorThreadsResponseSchema = z.object({
-  repository: repositorySchema,
-  authorLogin: z.string(),
-  threads: z.array(authorThreadSchema),
-});
-export type AuthorThreadsResponse = z.infer<typeof authorThreadsResponseSchema>;
-
-export const actorSchema = z.object({
-  id: z.number().int().positive(),
-  provider: z.string(),
-  providerUserId: z.string(),
-  login: z.string(),
-  displayName: z.string().nullable(),
-  actorType: z.string().nullable(),
-  siteAdmin: z.boolean(),
-  firstSeenAt: z.string(),
-  lastSeenAt: z.string(),
-  updatedAt: z.string(),
-});
-export type ActorDto = z.infer<typeof actorSchema>;
-
-export const authorStatsSchema = z.object({
-  openedIssueCount: z.number().int().nonnegative(),
-  openedPullRequestCount: z.number().int().nonnegative(),
-  commentCount: z.number().int().nonnegative(),
-  mergedPullRequestCount: z.number().int().nonnegative(),
-  closedThreadCount: z.number().int().nonnegative(),
-  firstActivityAt: z.string().nullable(),
-  lastActivityAt: z.string().nullable(),
-  trustTier: z.string().nullable(),
-});
-export type AuthorStatsDto = z.infer<typeof authorStatsSchema>;
-
-export const authorResponseSchema = z.object({
-  repository: repositorySchema,
-  authorLogin: z.string(),
-  actor: actorSchema.nullable(),
-  stats: authorStatsSchema,
-  threads: z.array(authorThreadSchema),
-});
-export type AuthorResponse = z.infer<typeof authorResponseSchema>;
-
 export const searchHitSchema = z.object({
   thread: threadSchema,
   keywordScore: z.number().nullable(),

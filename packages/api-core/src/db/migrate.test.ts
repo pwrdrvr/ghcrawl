@@ -19,7 +19,6 @@ test('migrate creates core tables', () => {
     assert.ok(names.includes('document_embeddings'));
     assert.ok(names.includes('thread_vectors'));
     assert.ok(names.includes('blobs'));
-    assert.ok(names.includes('actors'));
     assert.ok(names.includes('thread_revisions'));
     assert.ok(names.includes('thread_fingerprints'));
     assert.ok(names.includes('thread_key_summaries'));

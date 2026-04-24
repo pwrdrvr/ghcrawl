@@ -193,7 +193,6 @@ test('buildHelpContent includes the full key command list', () => {
   assert.match(content, /#\s+jump directly to an issue or PR number/);
   assert.match(content, /g\s+start the staged update pipeline in the background/);
   assert.match(content, /p\s+open the repository browser/);
-  assert.match(content, /u\s+show all open threads for the selected author/);
   assert.match(content, /l\s+toggle wide layout/);
   assert.match(content, /x\s+show or hide locally closed clusters and members/);
   assert.match(content, /h or \?\s+open this help popup/);

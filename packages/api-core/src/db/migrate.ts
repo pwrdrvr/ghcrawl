@@ -71,37 +71,6 @@ const migrationStatements = [
   )
   `,
   `
-  create table if not exists actors (
-    id integer primary key,
-    provider text not null,
-    provider_user_id text not null,
-    login text not null,
-    display_name text,
-    actor_type text,
-    site_admin integer not null default 0,
-    raw_json_blob_id integer references blobs(id) on delete set null,
-    first_seen_at text not null,
-    last_seen_at text not null,
-    updated_at text not null,
-    unique(provider, provider_user_id)
-  )
-  `,
-  `
-  create table if not exists actor_repo_stats (
-    repo_id integer not null references repositories(id) on delete cascade,
-    actor_id integer not null references actors(id) on delete cascade,
-    opened_issues integer not null default 0,
-    opened_prs integer not null default 0,
-    comments integer not null default 0,
-    merged_prs integer not null default 0,
-    closed_threads integer not null default 0,
-    first_activity_at text,
-    last_activity_at text,
-    trust_tier text,
-    primary key (repo_id, actor_id)
-  )
-  `,
-  `
   create table if not exists thread_revisions (
     id integer primary key,
     thread_id integer not null references threads(id) on delete cascade,
@@ -454,7 +423,6 @@ const migrationStatements = [
     cluster_id integer not null references cluster_groups(id) on delete cascade,
     thread_id integer not null references threads(id) on delete cascade,
     action text not null,
-    actor_id integer references actors(id) on delete set null,
     reason text,
     created_at text not null,
     expires_at text,
@@ -468,7 +436,6 @@ const migrationStatements = [
     run_id integer references pipeline_runs(id) on delete set null,
     event_type text not null,
     actor_kind text not null,
-    actor_id integer references actors(id) on delete set null,
     payload_json text not null,
     created_at text not null
   )
@@ -539,8 +506,6 @@ export function migrate(db: SqliteDatabase): void {
 
   db.exec('create index if not exists idx_threads_repo_number on threads(repo_id, number)');
   db.exec('create index if not exists idx_blobs_sha256 on blobs(sha256)');
-  db.exec('create index if not exists idx_actors_provider_login on actors(provider, login)');
-  db.exec('create index if not exists idx_actor_repo_stats_actor on actor_repo_stats(actor_id)');
   db.exec('create index if not exists idx_thread_revisions_thread_created on thread_revisions(thread_id, created_at)');
   db.exec('create index if not exists idx_thread_fingerprints_hash on thread_fingerprints(fingerprint_hash)');
   db.exec('create index if not exists idx_thread_fingerprints_slug on thread_fingerprints(fingerprint_slug)');

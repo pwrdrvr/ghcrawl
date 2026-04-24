@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 
 import {
   actionRequestSchema,
-  authorResponseSchema,
   clusterExplainResponseSchema,
   clusterMergeResponseSchema,
   clusterOverrideResponseSchema,
@@ -89,46 +88,6 @@ test('run history response accepts mixed pipeline records', () => {
 
   assert.equal(parsed.runs[0]?.runKind, 'sync');
   assert.equal(parsed.runs[0]?.stats?.threadsSynced, 2);
-});
-
-test('author response accepts actor identity and repo stats', () => {
-  const parsed = authorResponseSchema.parse({
-    repository: {
-      id: 1,
-      owner: 'openclaw',
-      name: 'openclaw',
-      fullName: 'openclaw/openclaw',
-      githubRepoId: null,
-      updatedAt: new Date().toISOString(),
-    },
-    authorLogin: 'alice',
-    actor: {
-      id: 1,
-      provider: 'github',
-      providerUserId: '501',
-      login: 'alice',
-      displayName: null,
-      actorType: 'User',
-      siteAdmin: false,
-      firstSeenAt: new Date().toISOString(),
-      lastSeenAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    },
-    stats: {
-      openedIssueCount: 1,
-      openedPullRequestCount: 0,
-      commentCount: 0,
-      mergedPullRequestCount: 0,
-      closedThreadCount: 0,
-      firstActivityAt: new Date().toISOString(),
-      lastActivityAt: new Date().toISOString(),
-      trustTier: 'unknown',
-    },
-    threads: [],
-  });
-
-  assert.equal(parsed.actor?.providerUserId, '501');
-  assert.equal(parsed.stats.openedIssueCount, 1);
 });
 
 test('exclude cluster member request trims optional reason', () => {

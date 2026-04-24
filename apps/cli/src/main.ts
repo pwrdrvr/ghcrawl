@@ -7,11 +7,9 @@ import { fileURLToPath } from 'node:url';
 
 import { createApiServer, GHCrawlService, loadConfig, readPersistedConfig, writePersistedConfig, type LoadConfigOptions } from '@ghcrawl/api-core';
 import { createHeapDiagnostics, type HeapDiagnostics } from './heap-diagnostics.js';
-import { runInitWizard } from './init-wizard.js';
 import { startTui } from './tui/app.js';
 
 type CommandName =
-  | 'init'
   | 'doctor'
   | 'configure'
   | 'version'
@@ -19,7 +17,6 @@ type CommandName =
   | 'refresh'
   | 'runs'
   | 'threads'
-  | 'author'
   | 'close-thread'
   | 'close-cluster'
   | 'exclude-cluster-member'
@@ -96,13 +93,6 @@ type ParsedRepoFlags = { owner: string; repo: string; values: RepoCommandValues 
 const CLI_VERSION = loadCliVersion();
 
 const COMMAND_SPECS: readonly CommandSpec[] = [
-  {
-    name: 'init',
-    synopsis: 'init [--reconfigure]',
-    description: 'Configure secrets and local runtime paths.',
-    options: ['--reconfigure  Re-run setup even if config already exists'],
-    examples: ['ghcrawl init', 'ghcrawl init --reconfigure'],
-  },
   {
     name: 'doctor',
     synopsis: 'doctor [--json]',
@@ -184,18 +174,6 @@ const COMMAND_SPECS: readonly CommandSpec[] = [
       '--json  Emit machine-readable JSON output explicitly',
     ],
     examples: ['ghcrawl threads openclaw/openclaw --numbers 42,43,44 --json', 'ghcrawl threads openclaw/openclaw --numbers 42 --include-closed --json'],
-    agentJson: true,
-  },
-  {
-    name: 'author',
-    synopsis: 'author <owner/repo> --login <user> [--include-closed] [--json]',
-    description: 'Show actor identity, repo stats, and local threads for one author.',
-    options: [
-      '--login <user>  GitHub login to inspect',
-      '--include-closed  Include locally closed items',
-      '--json  Emit machine-readable JSON output explicitly',
-    ],
-    examples: ['ghcrawl author openclaw/openclaw --login lqquan --json'],
     agentJson: true,
   },
   {
@@ -777,8 +755,7 @@ export function formatDoctorReport(result: DoctorReport): string {
     'GitHub',
     `  configured: ${formatBooleanStatus(result.github.configured)}`,
     `  source: ${result.github.source}`,
-    `  format ok: ${formatBooleanStatus(result.github.formatOk)}`,
-    `  auth ok: ${formatBooleanStatus(result.github.authOk)}`,
+    `  token present: ${formatBooleanStatus(result.github.tokenPresent)}`,
   ];
   if (result.github.error) {
     lines.push(`  note: ${result.github.error}`);
@@ -788,8 +765,7 @@ export function formatDoctorReport(result: DoctorReport): string {
     'OpenAI',
     `  configured: ${formatBooleanStatus(result.openai.configured)}`,
     `  source: ${result.openai.source}`,
-    `  format ok: ${formatBooleanStatus(result.openai.formatOk)}`,
-    `  auth ok: ${formatBooleanStatus(result.openai.authOk)}`,
+    `  token present: ${formatBooleanStatus(result.openai.tokenPresent)}`,
   );
   if (result.openai.error) {
     lines.push(`  note: ${result.openai.error}`);
@@ -984,21 +960,6 @@ export async function run(
 
   try {
     switch (commandSpec.name) {
-      case 'init': {
-        const parsed = parseArgsForCommand('init', rest, {
-          reconfigure: { type: 'boolean' },
-        });
-        const values = parsed.values as RepoCommandValues;
-        await runInitWizard({
-          reconfigure: values.reconfigure === true,
-          cwd,
-          env,
-          configPathOverride: parsedGlobals.configPathOverride,
-          workspaceRootOverride: parsedGlobals.workspaceRootOverride,
-        });
-        writeJson(stdout, getService().init());
-        return;
-      }
       case 'doctor': {
         const parsed = parseArgsForCommand('doctor', rest, {
           json: { type: 'boolean' },
@@ -1111,20 +1072,6 @@ export async function run(
           repo,
           kind,
           numbers: typeof values.numbers === 'string' ? parsePositiveIntegerList('numbers', values.numbers, 'threads') : undefined,
-          includeClosed: values['include-closed'] === true,
-        });
-        writeJson(stdout, result);
-        return;
-      }
-      case 'author': {
-        const { owner, repo, values } = parseRepoFlags('author', rest);
-        if (typeof values.login !== 'string' || values.login.trim().length === 0) {
-          throw new CliUsageError('Missing --login', 'author');
-        }
-        const result = getService().getAuthor({
-          owner,
-          repo,
-          login: values.login,
           includeClosed: values['include-closed'] === true,
         });
         writeJson(stdout, result);

@@ -22,7 +22,6 @@ export type SummaryUsage = {
 
 export type AiProvider = {
   providerName?: string;
-  checkAuth: () => Promise<void>;
   summarizeThread: (params: { model: string; text: string }) => Promise<{ summary: SummaryResult; usage?: SummaryUsage }>;
   generateKeySummary?: (params: { model: string; text: string }) => Promise<{ summary: LlmKeySummary; usage?: SummaryUsage }>;
   embedTexts: (params: { model: string; texts: string[]; dimensions?: number }) => Promise<number[][]>;
@@ -42,10 +41,6 @@ export class OpenAiProvider implements AiProvider {
 
   constructor(apiKey: string) {
     this.client = new OpenAI({ apiKey });
-  }
-
-  async checkAuth(): Promise<void> {
-    await this.client.models.list();
   }
 
   async summarizeThread(params: { model: string; text: string }): Promise<{ summary: SummaryResult; usage?: SummaryUsage }> {
