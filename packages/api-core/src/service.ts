@@ -2252,6 +2252,7 @@ export class GHCrawlService {
     sync?: boolean;
     embed?: boolean;
     cluster?: boolean;
+    includeCode?: boolean;
     onProgress?: (message: string) => void;
   }): Promise<RefreshResponse> {
     const selected = {
@@ -2274,6 +2275,7 @@ export class GHCrawlService {
       sync = await this.syncRepository({
         owner: params.owner,
         repo: params.repo,
+        includeCode: params.includeCode,
         onProgress: params.onProgress,
       });
     }

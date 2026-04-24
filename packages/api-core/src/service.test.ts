@@ -72,7 +72,7 @@ test('doctor reports config path and successful auth smoke checks', async () => 
       listIssueComments: async () => [],
       listPullReviews: async () => [],
       listPullReviewComments: async () => [],
-    listPullFiles: async () => [],
+      listPullFiles: async () => [],
     },
     ai: {
       checkAuth: async () => {
@@ -2738,6 +2738,47 @@ test('refreshRepository runs sync, embed, and cluster in order and returns the c
     assert.ok(embedIndex > syncIndex);
     assert.ok(clusterIndex > embedIndex);
   } finally {
+    service.close();
+  }
+});
+
+test('refreshRepository forwards includeCode to sync stage', async () => {
+  const service = makeTestService({
+    checkAuth: async () => undefined,
+    getRepo: async () => ({}),
+    listRepositoryIssues: async () => [],
+    getIssue: async () => ({}),
+    getPull: async () => ({}),
+    listIssueComments: async () => [],
+    listPullReviews: async () => [],
+    listPullReviewComments: async () => [],
+    listPullFiles: async () => [],
+  });
+  let receivedIncludeCode: boolean | undefined;
+  const originalSyncRepository = service.syncRepository.bind(service);
+  service.syncRepository = (async (params: Parameters<typeof originalSyncRepository>[0]) => {
+    receivedIncludeCode = params.includeCode;
+    service.db
+      .prepare(
+        `insert into repositories (id, owner, name, full_name, github_repo_id, raw_json, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '1', '{}', '2026-03-09T00:00:00Z');
+    return { runId: 1, threadsSynced: 0, commentsSynced: 0, codeFilesSynced: 0, threadsClosed: 0 };
+  }) as typeof service.syncRepository;
+
+  try {
+    await service.refreshRepository({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      embed: false,
+      cluster: false,
+      includeCode: true,
+    });
+
+    assert.equal(receivedIncludeCode, true);
+  } finally {
+    service.syncRepository = originalSyncRepository;
     service.close();
   }
 });
