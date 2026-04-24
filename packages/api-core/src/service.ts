@@ -1772,6 +1772,7 @@ export class GHCrawlService {
     if (!ai.generateKeySummary) {
       throw new Error('Configured AI provider does not support key summary generation.');
     }
+    const providerName = ai.providerName ?? 'custom';
     const repository = this.requireRepository(params.owner, params.repo);
     const runId = this.startRun('summary_runs', repository.id, params.threadNumber ? `key-summary:${params.threadNumber}` : `key-summary:${repository.fullName}`);
 
@@ -1831,11 +1832,11 @@ export class GHCrawlService {
              where thread_revision_id = ?
                and summary_kind = 'llm_key_3line'
                and prompt_version = ?
-               and provider = 'openai'
+               and provider = ?
                and model = ?
              limit 1`,
           )
-          .get(revisionId, LLM_KEY_SUMMARY_PROMPT_VERSION, this.config.summaryModel) as { input_hash: string } | undefined;
+          .get(revisionId, LLM_KEY_SUMMARY_PROMPT_VERSION, providerName, this.config.summaryModel) as { input_hash: string } | undefined;
         if (existing?.input_hash === inputHash) {
           skipped += 1;
           continue;
@@ -1849,7 +1850,7 @@ export class GHCrawlService {
           threadRevisionId: revisionId,
           summaryKind: 'llm_key_3line',
           promptVersion: LLM_KEY_SUMMARY_PROMPT_VERSION,
-          provider: 'openai',
+          provider: providerName,
           model: this.config.summaryModel,
           inputHash,
           summary: result.summary,

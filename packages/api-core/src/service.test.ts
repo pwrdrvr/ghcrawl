@@ -813,6 +813,7 @@ test('generateKeySummaries stores cached 3-line key summaries', async () => {
       listPullFiles: async () => [],
     },
     {
+      providerName: 'test-agent',
       checkAuth: async () => undefined,
       summarizeThread: async () => {
         throw new Error('not expected');
@@ -863,7 +864,8 @@ test('generateKeySummaries stores cached 3-line key summaries', async () => {
     assert.equal(first.totalTokens, 15);
     assert.equal(second.skipped, 1);
     assert.equal(calls, 1);
-    const row = service.db.prepare('select key_text from thread_key_summaries').get() as { key_text: string };
+    const row = service.db.prepare('select provider, key_text from thread_key_summaries').get() as { provider: string; key_text: string };
+    assert.equal(row.provider, 'test-agent');
     assert.match(row.key_text, /intent: Fix retry loop\./);
   } finally {
     service.close();

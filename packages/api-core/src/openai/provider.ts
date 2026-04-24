@@ -21,6 +21,7 @@ export type SummaryUsage = {
 };
 
 export type AiProvider = {
+  providerName?: string;
   checkAuth: () => Promise<void>;
   summarizeThread: (params: { model: string; text: string }) => Promise<{ summary: SummaryResult; usage?: SummaryUsage }>;
   generateKeySummary?: (params: { model: string; text: string }) => Promise<{ summary: LlmKeySummary; usage?: SummaryUsage }>;
@@ -35,6 +36,8 @@ const summarySchema = z.object({
 });
 
 export class OpenAiProvider implements AiProvider {
+  readonly providerName = 'openai';
+
   private readonly client: OpenAI;
 
   constructor(apiKey: string) {
