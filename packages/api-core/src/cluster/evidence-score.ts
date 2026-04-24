@@ -76,6 +76,7 @@ export function scoreSimilarityEvidence(
     tier = 'strong';
   } else if (
     score >= config.minScore ||
+    (base.titleOverlap >= 0.25 && base.tokenSimhash >= 0.55) ||
     (base.structure >= 0.5 && base.tokenSimhash >= 0.55) ||
     (base.linkedRefOverlap >= 0.5 && base.tokenMinhash >= 0.25)
   ) {
