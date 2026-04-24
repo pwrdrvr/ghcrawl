@@ -2661,6 +2661,80 @@ test('clusterRepository materializes only changed deterministic fingerprints', a
   }
 });
 
+test('clusterRepository can refresh one durable neighborhood without replacing the full snapshot', async () => {
+  const service = new GHCrawlService({
+    config: makeTestConfig(),
+    github: {
+      checkAuth: async () => undefined,
+      getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+      listRepositoryIssues: async () => [],
+      getIssue: async () => {
+        throw new Error('not expected');
+      },
+      getPull: async () => {
+        throw new Error('not expected');
+      },
+      listIssueComments: async () => [],
+      listPullReviews: async () => [],
+      listPullReviewComments: async () => [],
+      listPullFiles: async () => [],
+    },
+  });
+
+  try {
+    const now = '2026-03-09T00:00:00Z';
+    service.db
+      .prepare(
+        `insert into repositories (id, owner, name, full_name, github_repo_id, raw_json, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '1', '{}', now);
+    const insertThread = service.db.prepare(
+      `insert into threads (
+        id, repo_id, github_id, number, kind, state, title, body, author_login, author_type, html_url,
+        labels_json, assignees_json, raw_json, content_hash, is_draft, created_at_gh, updated_at_gh, closed_at_gh,
+        merged_at_gh, first_pulled_at, last_pulled_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insertThread.run(10, 1, '100', 42, 'issue', 'open', 'Download retry hangs forever', 'The transfer retry loop never exits after timeout.', 'alice', 'User', 'https://github.com/openclaw/openclaw/issues/42', '[]', '[]', '{}', 'hash-42', 0, now, now, null, null, now, now, now);
+    insertThread.run(11, 1, '101', 43, 'issue', 'open', 'Download retry loop never exits', 'Retry hangs forever after timeout.', 'bob', 'User', 'https://github.com/openclaw/openclaw/issues/43', '[]', '[]', '{}', 'hash-43', 0, now, now, null, null, now, now, now);
+    insertThread.run(12, 1, '102', 44, 'issue', 'open', 'Improve documentation typography', 'Docs heading sizes look inconsistent.', 'carol', 'User', 'https://github.com/openclaw/openclaw/issues/44', '[]', '[]', '{}', 'hash-44', 0, now, now, null, null, now, now, now);
+
+    const full = await service.clusterRepository({ owner: 'openclaw', repo: 'openclaw', k: 1, minScore: 0.1 });
+    service.db
+      .prepare('update threads set body = ?, content_hash = ?, updated_at_gh = ?, updated_at = ? where id = ?')
+      .run('The transfer retry loop never exits after a network timeout.', 'hash-42b', '2026-03-10T00:00:00Z', '2026-03-10T00:00:00Z', 10);
+
+    const messages: string[] = [];
+    const incremental = await service.clusterRepository({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      threadNumber: 42,
+      k: 1,
+      minScore: 0.1,
+      onProgress: (message) => messages.push(message),
+    });
+
+    const fullSnapshotClusters = service.db
+      .prepare('select count(*) as count from clusters where cluster_run_id = ?')
+      .get(full.runId) as { count: number };
+    const incrementalSnapshotClusters = service.db
+      .prepare('select count(*) as count from clusters where cluster_run_id = ?')
+      .get(incremental.runId) as { count: number };
+    const incrementalRun = service.db
+      .prepare("select run_kind from pipeline_runs where run_kind = 'cluster_incremental' order by id desc limit 1")
+      .get() as { run_kind: string } | undefined;
+
+    assert.ok(messages.some((message) => message.includes('[fingerprint] latest revisions computed=1 skipped=0')));
+    assert.ok(messages.some((message) => message.includes('without replacing the full cluster snapshot')));
+    assert.ok(fullSnapshotClusters.count > 0);
+    assert.equal(incrementalSnapshotClusters.count, 0);
+    assert.equal(incrementalRun?.run_kind, 'cluster_incremental');
+  } finally {
+    service.close();
+  }
+});
+
 test('clusterRepository uses hydrated code hunk signatures without embeddings', async () => {
   const service = new GHCrawlService({
     config: makeTestConfig(),

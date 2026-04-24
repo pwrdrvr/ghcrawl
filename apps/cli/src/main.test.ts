@@ -507,6 +507,37 @@ test('split-cluster command forwards durable split inputs', async () => {
   assert.match(stdout.read(), /"newClusterId": 9/);
 });
 
+test('cluster command forwards neighborhood refresh inputs', async () => {
+  const stdout = createWritableCapture();
+  const context = makeRunContext();
+  const original = GHCrawlService.prototype.clusterRepository;
+  let received: unknown;
+
+  GHCrawlService.prototype.clusterRepository = async function clusterRepositoryStub(params: unknown) {
+    received = params;
+    return { runId: 12, edges: 3, clusters: 1 } as never;
+  };
+
+  try {
+    await run(['cluster', 'openclaw/openclaw', '--number', '42', '--k', '4', '--threshold', '0.82'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+  } finally {
+    GHCrawlService.prototype.clusterRepository = original;
+    context.cleanup();
+  }
+
+  const params = received as { owner: string; repo: string; threadNumber: number; k: number; minScore: number; onProgress?: unknown };
+  assert.equal(params.owner, 'openclaw');
+  assert.equal(params.repo, 'openclaw');
+  assert.equal(params.threadNumber, 42);
+  assert.equal(params.k, 4);
+  assert.equal(params.minScore, 0.82);
+  assert.equal(typeof params.onProgress, 'function');
+  assert.match(stdout.read(), /"edges": 3/);
+});
+
 test('durable-clusters command forwards stable cluster list options', async () => {
   const stdout = createWritableCapture();
   const context = makeRunContext();

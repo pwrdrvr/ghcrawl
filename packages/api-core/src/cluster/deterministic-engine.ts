@@ -50,7 +50,7 @@ function bump(index: Map<string, Set<number>>, key: string, id: number): void {
 
 function buildCandidatePairs(
   fingerprints: Map<number, DeterministicThreadFingerprint>,
-  params: { maxBucketSize: number; topK: number },
+  params: { maxBucketSize: number; topK: number; seedThreadIds?: Set<number> },
 ): Array<[number, number]> {
   const index = new Map<string, Set<number>>();
   for (const [id, fingerprint] of fingerprints.entries()) {
@@ -67,6 +67,9 @@ function buildCandidatePairs(
     const ids = Array.from(bucket).sort((left, right) => left - right);
     for (let leftIndex = 0; leftIndex < ids.length; leftIndex += 1) {
       for (let rightIndex = leftIndex + 1; rightIndex < ids.length; rightIndex += 1) {
+        if (params.seedThreadIds && !params.seedThreadIds.has(ids[leftIndex]) && !params.seedThreadIds.has(ids[rightIndex])) {
+          continue;
+        }
         const key = `${ids[leftIndex]}:${ids[rightIndex]}`;
         votes.set(key, (votes.get(key) ?? 0) + 1);
       }
@@ -84,7 +87,7 @@ function buildCandidatePairs(
 
 export function buildDeterministicClusterGraph(
   inputs: DeterministicClusterInput[],
-  params: { maxBucketSize?: number; topK?: number } = {},
+  params: { maxBucketSize?: number; topK?: number; seedThreadIds?: number[] } = {},
 ): DeterministicClusterResult {
   const fingerprints = new Map<number, DeterministicThreadFingerprint>();
   for (const input of inputs) {
@@ -113,12 +116,14 @@ export function buildDeterministicClusterGraph(
 export function buildDeterministicClusterGraphFromFingerprints(
   nodes: DeterministicClusterNode[],
   fingerprints: Map<number, DeterministicThreadFingerprint>,
-  params: { maxBucketSize?: number; topK?: number } = {},
+  params: { maxBucketSize?: number; topK?: number; seedThreadIds?: number[] } = {},
 ): DeterministicClusterResult {
   const titleById = new Map(nodes.map((node) => [node.id, node.title]));
+  const seedThreadIds = params.seedThreadIds ? new Set(params.seedThreadIds) : undefined;
   const pairs = buildCandidatePairs(fingerprints, {
     maxBucketSize: params.maxBucketSize ?? 500,
     topK: params.topK ?? 64,
+    seedThreadIds,
   });
   const edges: DeterministicClusterEdge[] = [];
   for (const [leftThreadId, rightThreadId] of pairs) {
@@ -136,8 +141,17 @@ export function buildDeterministicClusterGraphFromFingerprints(
     });
   }
 
+  const clusterNodeIds = new Set<number>();
+  if (seedThreadIds) {
+    for (const id of seedThreadIds) clusterNodeIds.add(id);
+    for (const edge of edges) {
+      clusterNodeIds.add(edge.leftThreadId);
+      clusterNodeIds.add(edge.rightThreadId);
+    }
+  }
+  const clusterNodes = seedThreadIds ? nodes.filter((node) => clusterNodeIds.has(node.id)) : nodes;
   const clusters = buildClusters(
-    nodes.map((node) => ({
+    clusterNodes.map((node) => ({
       threadId: node.id,
       number: node.number,
       title: titleById.get(node.id) ?? node.title,

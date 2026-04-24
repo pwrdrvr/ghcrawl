@@ -287,16 +287,17 @@ const COMMAND_SPECS: readonly CommandSpec[] = [
   },
   {
     name: 'cluster',
-    synopsis: 'cluster <owner/repo> [--k <count>] [--threshold <score>] [--heap-snapshot-dir <dir>] [--heap-log-interval-ms <ms>] [--json]',
+    synopsis: 'cluster <owner/repo> [--number <thread>] [--k <count>] [--threshold <score>] [--heap-snapshot-dir <dir>] [--heap-log-interval-ms <ms>] [--json]',
     description: 'Build or refresh local similarity clusters.',
     options: [
+      '--number <thread>  Refresh only one durable cluster neighborhood',
       '--k <count>  Limit nearest-neighbor fanout',
       '--threshold <score>  Minimum similarity score',
       '--heap-snapshot-dir <dir>  Write heap snapshots during long-running work',
       '--heap-log-interval-ms <ms>  Emit periodic heap diagnostics',
       '--json  Emit machine-readable JSON output explicitly',
     ],
-    examples: ['ghcrawl cluster openclaw/openclaw --json', 'ghcrawl cluster openclaw/openclaw --threshold 0.82 --json'],
+    examples: ['ghcrawl cluster openclaw/openclaw --json', 'ghcrawl cluster openclaw/openclaw --number 42 --threshold 0.82 --json'],
     agentJson: true,
   },
   {
@@ -1258,6 +1259,7 @@ export async function run(
           const result = await getService().clusterRepository({
             owner,
             repo,
+            threadNumber: typeof values.number === 'string' ? parsePositiveInteger('number', values.number, 'cluster') : undefined,
             k: typeof values.k === 'string' ? parsePositiveInteger('k', values.k, 'cluster') : undefined,
             minScore: typeof values.threshold === 'string' ? parseFiniteNumber('threshold', values.threshold, 'cluster') : undefined,
             onProgress:

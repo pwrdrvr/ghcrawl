@@ -53,7 +53,7 @@ function upsertTextBlob(
   return upsertInlineBlob(db, params);
 }
 
-export type PipelineRunKind = 'sync' | 'fingerprint' | 'enrich' | 'edge' | 'cluster';
+export type PipelineRunKind = 'sync' | 'fingerprint' | 'enrich' | 'edge' | 'cluster' | 'cluster_incremental';
 
 export function upsertActor(
   db: SqliteDatabase,

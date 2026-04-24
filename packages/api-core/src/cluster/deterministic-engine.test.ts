@@ -62,3 +62,39 @@ test('buildDeterministicClusterGraph infers hard refs from text', () => {
 
   assert.equal(result.edges[0]?.tier, 'strong');
 });
+
+test('buildDeterministicClusterGraph can limit candidates to a seed neighborhood', () => {
+  const result = buildDeterministicClusterGraph(
+    [
+      {
+        id: 10,
+        number: 10,
+        kind: 'issue',
+        title: 'Retry loop hangs',
+        body: 'Transfer retry loop never exits.',
+        labels: ['bug'],
+      },
+      {
+        id: 11,
+        number: 11,
+        kind: 'issue',
+        title: 'Retry loop hangs again',
+        body: 'Transfer retry loop never exits.',
+        labels: ['bug'],
+      },
+      {
+        id: 12,
+        number: 12,
+        kind: 'issue',
+        title: 'Retry loop hangs on timeout',
+        body: 'Transfer retry loop never exits.',
+        labels: ['bug'],
+      },
+    ],
+    { seedThreadIds: [10] },
+  );
+
+  assert.ok(result.edges.length >= 1);
+  assert.ok(result.edges.every((edge) => edge.leftThreadId === 10 || edge.rightThreadId === 10));
+  assert.ok(result.clusters.every((cluster) => cluster.members.includes(10)));
+});

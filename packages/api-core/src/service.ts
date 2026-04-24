@@ -1991,18 +1991,21 @@ export class GHCrawlService {
   async clusterRepository(params: {
     owner: string;
     repo: string;
+    threadNumber?: number;
     minScore?: number;
     k?: number;
     onProgress?: (message: string) => void;
   }): Promise<ClusterResultDto> {
     const repository = this.requireRepository(params.owner, params.repo);
-    const runId = this.startRun('cluster_runs', repository.id, repository.fullName);
+    const runSubject = params.threadNumber ? `${repository.fullName}#${params.threadNumber}` : repository.fullName;
+    const runId = this.startRun('cluster_runs', repository.id, runSubject);
     const pipelineRunId = createPipelineRun(this.db, {
       repoId: repository.id,
-      runKind: 'cluster',
+      runKind: params.threadNumber ? 'cluster_incremental' : 'cluster',
       algorithmVersion: 'persistent-cluster-v1',
       configHash: stableContentHash(
         JSON.stringify({
+          threadNumber: params.threadNumber ?? null,
           minScore: params.minScore ?? DEFAULT_CLUSTER_MIN_SCORE,
           k: params.k ?? 6,
           embedModel: this.config.embedModel,
@@ -2014,15 +2017,32 @@ export class GHCrawlService {
     const k = params.k ?? 6;
 
     try {
+      const seedThread = params.threadNumber
+        ? (this.db
+            .prepare(
+              `select id, number
+               from threads
+               where repo_id = ?
+                 and number = ?
+                 and state = 'open'
+                 and closed_at_local is null
+               limit 1`,
+            )
+            .get(repository.id, params.threadNumber) as { id: number; number: number } | undefined)
+        : undefined;
+      if (params.threadNumber && !seedThread) {
+        throw new Error(`Open thread #${params.threadNumber} was not found for ${repository.fullName}.`);
+      }
+      const seedThreadIds = seedThread ? [seedThread.id] : undefined;
       const deterministicItems = this.loadDeterministicClusterableThreadMeta(repository.id);
-      this.materializeLatestDeterministicFingerprints(deterministicItems, params.onProgress);
+      const fingerprintItems = seedThreadIds ? deterministicItems.filter((item) => seedThreadIds.includes(item.id)) : deterministicItems;
+      this.materializeLatestDeterministicFingerprints(fingerprintItems, params.onProgress);
       const persistedFingerprints = this.loadLatestDeterministicFingerprints(deterministicItems.map((item) => item.id));
       const deterministic = buildDeterministicClusterGraphFromFingerprints(
         deterministicItems.map((item) => ({ id: item.id, number: item.number, title: item.title })),
         persistedFingerprints,
-        { topK: Math.max(k * 8, 64) },
+        { topK: Math.max(k * 8, 64), seedThreadIds },
       );
-      const items = deterministicItems.map((item) => ({ id: item.id, number: item.number, title: item.title }));
       const aggregatedEdges = new Map<string, { leftThreadId: number; rightThreadId: number; score: number; sourceKinds: Set<SimilaritySourceKind> }>();
       this.mergeSourceKindEdges(
         aggregatedEdges,
@@ -2030,11 +2050,12 @@ export class GHCrawlService {
         'deterministic_fingerprint',
       );
       params.onProgress?.(
-        `[cluster] built ${aggregatedEdges.size} deterministic similarity edge(s) for ${repository.fullName}`,
+        `[cluster] built ${aggregatedEdges.size} deterministic similarity edge(s) for ${runSubject}`,
       );
 
       if (this.isRepoVectorStateCurrent(repository.id)) {
         const vectorItems = this.loadClusterableActiveVectorMeta(repository.id, repository.fullName);
+        const queryVectorItems = seedThreadIds ? vectorItems.filter((item) => seedThreadIds.includes(item.id)) : vectorItems;
         const activeSourceKind = this.activeVectorSourceKind();
         const activeIds = new Set(vectorItems.map((item) => item.id));
         const annQuery = this.getVectorliteClusterQuery(vectorItems.length, k);
@@ -2042,9 +2063,9 @@ export class GHCrawlService {
         let lastProgressAt = Date.now();
 
         params.onProgress?.(
-          `[cluster] loaded ${vectorItems.length} active vector(s) for ${repository.fullName} backend=${this.config.vectorBackend} k=${k} query_limit=${annQuery.limit} candidateK=${annQuery.candidateK} efSearch=${annQuery.efSearch ?? 'default'} minScore=${minScore}`,
+          `[cluster] loaded ${vectorItems.length} active vector(s), querying ${queryVectorItems.length} for ${runSubject} backend=${this.config.vectorBackend} k=${k} query_limit=${annQuery.limit} candidateK=${annQuery.candidateK} efSearch=${annQuery.efSearch ?? 'default'} minScore=${minScore}`,
         );
-        for (const item of vectorItems) {
+        for (const item of queryVectorItems) {
           const neighbors = this.queryNearestWithRecovery(repository.id, repository.fullName, {
             vector: item.embedding,
             limit: annQuery.limit,
@@ -2070,11 +2091,11 @@ export class GHCrawlService {
           processed += 1;
           const now = Date.now();
           if (params.onProgress && now - lastProgressAt >= CLUSTER_PROGRESS_INTERVAL_MS) {
-            params.onProgress(`[cluster] queried ${processed}/${vectorItems.length} vectors current_edges=${aggregatedEdges.size}`);
+            params.onProgress(`[cluster] queried ${processed}/${queryVectorItems.length} vectors current_edges=${aggregatedEdges.size}`);
             lastProgressAt = now;
           }
         }
-      } else if (this.hasLegacyEmbeddings(repository.id)) {
+      } else if (!seedThreadIds && this.hasLegacyEmbeddings(repository.id)) {
         const legacy = this.loadClusterableThreadMeta(repository.id);
         params.onProgress?.(
           `[cluster] loaded ${legacy.items.length} legacy embedded thread(s) across ${legacy.sourceKinds.length} source kind(s) for ${repository.fullName} k=${k} minScore=${minScore}`,
@@ -2103,22 +2124,40 @@ export class GHCrawlService {
 
       params.onProgress?.(`[cluster] built ${edges.length} similarity edge(s)`);
 
+      const involvedIds = new Set<number>();
+      if (seedThreadIds) {
+        for (const id of seedThreadIds) involvedIds.add(id);
+        for (const edge of aggregatedEdges.values()) {
+          involvedIds.add(edge.leftThreadId);
+          involvedIds.add(edge.rightThreadId);
+        }
+      }
+      const clusterItems = seedThreadIds ? deterministicItems.filter((item) => involvedIds.has(item.id)) : deterministicItems;
       const clusters = buildClusters(
-        items.map((item) => ({ threadId: item.id, number: item.number, title: item.title })),
+        clusterItems.map((item) => ({ threadId: item.id, number: item.number, title: item.title })),
         edges,
       );
-      this.persistClusterRun(repository.id, runId, aggregatedEdges, clusters);
+      if (!seedThreadIds) {
+        this.persistClusterRun(repository.id, runId, aggregatedEdges, clusters);
+      }
       this.persistDurableClusterState(repository.id, pipelineRunId, aggregatedEdges, clusters);
-      this.pruneOldClusterRuns(repository.id, runId);
-      if (this.isRepoVectorStateCurrent(repository.id)) {
+      if (!seedThreadIds) {
+        this.pruneOldClusterRuns(repository.id, runId);
+      }
+      if (!seedThreadIds && this.isRepoVectorStateCurrent(repository.id)) {
         this.markRepoClustersCurrent(repository.id);
         this.cleanupMigratedRepositoryArtifacts(repository.id, repository.fullName, params.onProgress);
       }
 
-      params.onProgress?.(`[cluster] persisted ${clusters.length} cluster(s) and pruned older cluster runs`);
+      params.onProgress?.(
+        seedThreadIds
+          ? `[cluster] persisted ${clusters.length} durable neighborhood cluster(s) without replacing the full cluster snapshot`
+          : `[cluster] persisted ${clusters.length} cluster(s) and pruned older cluster runs`,
+      );
 
-      this.finishRun('cluster_runs', runId, 'completed', { edges: edges.length, clusters: clusters.length });
-      finishPipelineRun(this.db, pipelineRunId, { status: 'completed', stats: { edges: edges.length, clusters: clusters.length } });
+      const stats = { edges: edges.length, clusters: clusters.length, threadNumber: params.threadNumber ?? null };
+      this.finishRun('cluster_runs', runId, 'completed', stats);
+      finishPipelineRun(this.db, pipelineRunId, { status: 'completed', stats });
       return clusterResultSchema.parse({ runId, edges: edges.length, clusters: clusters.length });
     } catch (error) {
       this.finishRun('cluster_runs', runId, 'failed', null, error);
