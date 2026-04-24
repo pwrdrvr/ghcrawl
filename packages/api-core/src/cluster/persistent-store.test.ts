@@ -17,6 +17,7 @@ import {
   upsertThreadFingerprint,
   upsertThreadRevision,
   upsertThreadCodeSnapshot,
+  upsertThreadKeySummary,
 } from './persistent-store.js';
 import { buildDeterministicThreadFingerprint } from './thread-fingerprint.js';
 
@@ -275,6 +276,46 @@ test('persistent cluster store records code snapshots, changed files, and hunk s
     assert.equal(file.path, 'packages/api-core/src/cache.ts');
     assert.ok(file.patch_blob_id > 0);
     assert.equal(hunkCount.count, 1);
+  } finally {
+    db.close();
+  }
+});
+
+test('persistent cluster store records structured key summaries', () => {
+  const db = openDb(':memory:');
+  try {
+    migrate(db);
+    seedRepoAndThreads(db);
+    const revisionId = upsertThreadRevision(db, {
+      threadId: 10,
+      sourceUpdatedAt: '2026-01-01T00:00:00Z',
+      title: 'Fix cache collision',
+      body: '',
+      labels: [],
+      rawJson: '{}',
+    });
+
+    upsertThreadKeySummary(db, {
+      threadRevisionId: revisionId,
+      summaryKind: 'llm_key_3line',
+      promptVersion: 'llm-key-summary-v1',
+      provider: 'openai',
+      model: 'gpt-5-mini',
+      inputHash: 'input-hash',
+      summary: {
+        intent: 'Fix cache collision.',
+        surface: 'API core cache.',
+        mechanism: 'Changes cache key derivation.',
+      },
+    });
+
+    const row = db.prepare('select input_hash, key_text from thread_key_summaries where thread_revision_id = ?').get(revisionId) as {
+      input_hash: string;
+      key_text: string;
+    };
+    assert.equal(row.input_hash, 'input-hash');
+    assert.match(row.key_text, /intent: Fix cache collision\./);
+    assert.match(row.key_text, /surface: API core cache\./);
   } finally {
     db.close();
   }

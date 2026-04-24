@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import type { SqliteDatabase } from '../db/sqlite.js';
 import type { CodeSnapshotSignature } from './code-signature.js';
 import type { EvidenceTier, SimilarityEvidenceBreakdown } from './evidence-score.js';
+import { llmKeyEmbeddingText, type LlmKeySummary } from './llm-key-summary.js';
 import type { DeterministicThreadFingerprint } from './thread-fingerprint.js';
 
 function nowIso(): string {
@@ -312,6 +313,47 @@ export function upsertThreadCodeSnapshot(
   }
 
   return snapshot.id;
+}
+
+export function upsertThreadKeySummary(
+  db: SqliteDatabase,
+  params: {
+    threadRevisionId: number;
+    summaryKind: string;
+    promptVersion: string;
+    provider: string;
+    model: string;
+    inputHash: string;
+    summary: LlmKeySummary;
+  },
+): void {
+  const outputJson = JSON.stringify(params.summary);
+  const outputBlobId = upsertInlineBlob(db, {
+    text: outputJson,
+    mediaType: 'application/vnd.ghcrawl.key-summary+json',
+  });
+  db.prepare(
+    `insert into thread_key_summaries (
+       thread_revision_id, summary_kind, prompt_version, provider, model,
+       input_hash, output_hash, output_json_blob_id, key_text, created_at
+     ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     on conflict(thread_revision_id, summary_kind, prompt_version, provider, model) do update set
+       input_hash = excluded.input_hash,
+       output_hash = excluded.output_hash,
+       output_json_blob_id = excluded.output_json_blob_id,
+       key_text = excluded.key_text`,
+  ).run(
+    params.threadRevisionId,
+    params.summaryKind,
+    params.promptVersion,
+    params.provider,
+    params.model,
+    params.inputHash,
+    stableHash(outputJson),
+    outputBlobId,
+    llmKeyEmbeddingText(params.summary),
+    nowIso(),
+  );
 }
 
 export function createPipelineRun(
