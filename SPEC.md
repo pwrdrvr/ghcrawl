@@ -126,7 +126,7 @@ The product must keep these machine-facing surfaces working:
 - `ghcrawl sync owner/repo --json`
 - `ghcrawl refresh owner/repo --json`
 - `ghcrawl threads owner/repo --numbers <n,n,...> --json`
-- `ghcrawl author owner/repo --login <user> --json`
+- `ghcrawl author owner/repo --login <user> --json` for actor identity, repo stats, and authored threads
 - `ghcrawl close-thread owner/repo --number <thread-number> --json`
 - `ghcrawl close-cluster owner/repo --id <cluster-id> --json`
 - `ghcrawl embed owner/repo --json`
@@ -149,6 +149,8 @@ The product must keep these machine-facing surfaces working:
 - `GET /health`
 - `GET /repositories`
 - `GET /threads`
+- `GET /author`
+- `GET /author-threads`
 - `GET /search`
 - `GET /neighbors`
 - `GET /clusters`

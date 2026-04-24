@@ -61,13 +61,19 @@ Useful flags:
 
 ### `ghcrawl author owner/repo --login <user> --json`
 
-Bulk read path for all open issue/PR records from one author in the local DB.
+Read path for one local GitHub actor.
 
-Use this when you want to inspect a user's open items together and see the strongest stored same-author similarity match for each item.
+Use this when you want to inspect a user's identity, repo-local activity stats, open authored items, and strongest stored same-author similarity match for each item.
 
 Useful flags:
 
 - `--include-closed`
+
+Returns:
+
+- `actor`
+- `stats`
+- `threads[]`
 
 ### `ghcrawl refresh owner/repo`
 

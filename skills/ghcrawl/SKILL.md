@@ -85,6 +85,8 @@ If the user explicitly wants to inspect those records, add `--include-closed`.
 
 Use `threads --numbers 12345` when you need to find the cluster for one specific issue/PR number. The returned thread record includes `clusterId`. If it is non-null, follow with `cluster-detail --id <clusterId>` for snapshot details or `cluster-explain --id <clusterId>` for durable evidence and governance.
 
+Use `author --login <user>` when the user asks about a contributor or maintainer. It returns actor identity, repo-local activity stats, authored threads, and the strongest same-author similarity match for each thread.
+
 Use `configure --json` when you need to confirm the currently selected summary model or embedding basis before suggesting an expensive refresh.
 
 Use `threads --numbers ...` when you need a batch of specific issue/PR records. Do not pay the CLI startup cost 10 times for 10 separate single-thread lookups.
