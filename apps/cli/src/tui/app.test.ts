@@ -1,14 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import type { TuiClusterDetail, TuiRepoStats, TuiThreadDetail } from '@ghcrawl/api-core';
+import type { TuiClusterDetail, TuiThreadDetail } from '@ghcrawl/api-core';
 
 import {
-  buildRefreshCliArgs,
   buildHelpContent,
-  buildUpdatePipelineHelpContent,
-  buildUpdatePipelineLabels,
-  describeUpdateTask,
   escapeBlessedText,
   formatClusterDateColumn,
   getRepositoryChoices,
@@ -131,59 +127,6 @@ test('getRepositoryChoices sorts by most recent update and includes the new-repo
   assert.equal(choices.at(-1)?.kind, 'new');
 });
 
-test('describeUpdateTask reports stale embeddings relative to GitHub sync', () => {
-  const stats: TuiRepoStats = {
-    openIssueCount: 10,
-    openPullRequestCount: 5,
-    lastGithubReconciliationAt: '2026-03-09T14:00:00Z',
-    lastEmbedRefreshAt: '2026-03-09T12:00:00Z',
-    staleEmbedThreadCount: 0,
-    staleEmbedSourceCount: 0,
-    latestClusterRunId: 7,
-    latestClusterRunFinishedAt: '2026-03-09T14:30:00Z',
-  };
-
-  assert.equal(describeUpdateTask('embed', stats, new Date('2026-03-09T15:00:00Z')), 'outdated: GitHub is newer by 2h');
-});
-
-test('describeUpdateTask reports stale clusters relative to embed refresh', () => {
-  const stats: TuiRepoStats = {
-    openIssueCount: 10,
-    openPullRequestCount: 5,
-    lastGithubReconciliationAt: '2026-03-09T14:00:00Z',
-    lastEmbedRefreshAt: '2026-03-09T15:00:00Z',
-    staleEmbedThreadCount: 0,
-    staleEmbedSourceCount: 0,
-    latestClusterRunId: 7,
-    latestClusterRunFinishedAt: '2026-03-09T12:00:00Z',
-  };
-
-  assert.equal(describeUpdateTask('cluster', stats, new Date('2026-03-09T16:00:00Z')), 'outdated: embeddings are newer by 3h');
-});
-
-test('buildUpdatePipelineLabels marks the selected tasks and includes task guidance', () => {
-  const stats: TuiRepoStats = {
-    openIssueCount: 10,
-    openPullRequestCount: 5,
-    lastGithubReconciliationAt: '2026-03-09T14:00:00Z',
-    lastEmbedRefreshAt: '2026-03-09T15:00:00Z',
-    staleEmbedThreadCount: 2,
-    staleEmbedSourceCount: 4,
-    latestClusterRunId: 7,
-    latestClusterRunFinishedAt: '2026-03-09T12:00:00Z',
-  };
-
-  const labels = buildUpdatePipelineLabels(
-    stats,
-    { sync: true, embed: true, cluster: false },
-    new Date('2026-03-09T16:00:00Z'),
-  );
-
-  assert.match(labels[0] ?? '', /^\[x\] GitHub sync\/reconcile  up to date, last 2h ago$/);
-  assert.match(labels[1] ?? '', /^\[x\] Embed refresh  outdated: 2 stale, last 1h ago$/);
-  assert.match(labels[2] ?? '', /^\[ \] Cluster rebuild  outdated: embeddings are newer by 3h$/);
-});
-
 test('buildHelpContent includes the full key command list', () => {
   const content = buildHelpContent();
 
@@ -191,7 +134,8 @@ test('buildHelpContent includes the full key command list', () => {
   assert.match(content, /Left \/ Right\s+cycle focus backward or forward across panes/);
   assert.match(content, /Up \/ Down\s+move selection, or scroll detail when detail is focused/);
   assert.match(content, /#\s+jump directly to an issue or PR number/);
-  assert.match(content, /g\s+start the staged update pipeline in the background/);
+  assert.match(content, /TUI only reads local SQLite/);
+  assert.match(content, /default cluster filter is 1\+/);
   assert.match(content, /p\s+open the repository browser/);
   assert.match(content, /l\s+toggle wide layout/);
   assert.match(content, /x\s+show or hide locally closed clusters and members/);
@@ -199,32 +143,4 @@ test('buildHelpContent includes the full key command list', () => {
   assert.match(content, /q\s+quit the TUI/);
   assert.doesNotMatch(content, /j \/ k/);
   assert.match(content, /This popup scrolls\./);
-});
-
-test('buildUpdatePipelineHelpContent explains the LLM summary tradeoff for both modes', () => {
-  const disabled = buildUpdatePipelineHelpContent('title_original');
-  assert.match(disabled, /LLM summaries: disabled/);
-  assert.match(disabled, /configure --embedding-basis title_summary/);
-  assert.match(disabled, /\$15-\$30/);
-
-  const enabled = buildUpdatePipelineHelpContent('title_summary');
-  assert.match(enabled, /LLM summaries: enabled/);
-  assert.match(enabled, /about 50%/);
-
-  const keySummary = buildUpdatePipelineHelpContent('llm_key_summary');
-  assert.match(keySummary, /3-line key summaries/);
-  assert.match(keySummary, /key-summaries/);
-});
-
-test('buildRefreshCliArgs maps the staged selection to refresh skip flags', () => {
-  assert.deepEqual(buildRefreshCliArgs({ owner: 'openclaw', repo: 'openclaw' }, { sync: true, embed: true, cluster: true }), [
-    'refresh',
-    'openclaw/openclaw',
-  ]);
-  assert.deepEqual(buildRefreshCliArgs({ owner: 'openclaw', repo: 'openclaw' }, { sync: false, embed: true, cluster: false }), [
-    'refresh',
-    'openclaw/openclaw',
-    '--no-sync',
-    '--no-cluster',
-  ]);
 });

@@ -271,7 +271,7 @@ test('writeTuiRepositoryPreference persists sort and min cluster size by reposit
     wideLayout: 'right-stack',
   });
   assert.deepEqual(getTuiRepositoryPreference(reloaded, 'other', 'repo'), {
-    minClusterSize: 10,
+    minClusterSize: 1,
     sortMode: 'recent',
     wideLayout: 'columns',
   });

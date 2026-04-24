@@ -1,18 +1,11 @@
-import { spawn, type ChildProcessByStdio } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import path from 'node:path';
-import type { Readable } from 'node:stream';
-import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
 
 import blessed from 'neo-blessed';
 
 import type {
-  EmbeddingBasis,
   GHCrawlService,
   TuiClusterDetail,
   TuiClusterSortMode,
-  TuiRepoStats,
   TuiSnapshot,
   TuiThreadDetail,
   TuiWideLayoutPreference,
@@ -69,28 +62,6 @@ type ThreadDetailCacheEntry = {
   hasNeighbors: boolean;
 };
 
-type UpdateTaskSelection = {
-  sync: boolean;
-  embed: boolean;
-  cluster: boolean;
-};
-
-type BackgroundJobResult = {
-  code: number | null;
-  signal: NodeJS.Signals | null;
-  stdout: string;
-  error: Error | null;
-};
-
-type BackgroundRefreshJob = {
-  child: ChildProcessByStdio<null, Readable, Readable>;
-  repo: RepositoryTarget;
-  selection: UpdateTaskSelection;
-  stdoutBuffer: string;
-  terminatedByUser: boolean;
-  exitPromise: Promise<BackgroundJobResult>;
-};
-
 export function resolveBlessedTerminal(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const term = env.TERM;
   if (!term) {
@@ -111,31 +82,6 @@ function createScreen(options: Parameters<typeof blessed.screen>[0]): blessed.Wi
 
 const ACTIVITY_LOG_LIMIT = 200;
 const FOOTER_LOG_LINES = 3;
-const UPDATE_TASK_ORDER: Array<keyof UpdateTaskSelection> = ['sync', 'embed', 'cluster'];
-
-export function buildRefreshCliArgs(target: RepositoryTarget, selection: UpdateTaskSelection): string[] {
-  const args = ['refresh', `${target.owner}/${target.repo}`];
-  if (!selection.sync) args.push('--no-sync');
-  if (!selection.embed) args.push('--no-embed');
-  if (!selection.cluster) args.push('--no-cluster');
-  return args;
-}
-
-function createCliLaunch(args: string[]): { command: string; args: string[] } {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const distEntrypoint = path.resolve(here, '..', 'main.js');
-  if (existsSync(distEntrypoint)) {
-    return { command: process.execPath, args: [distEntrypoint, ...args] };
-  }
-
-  const sourceEntrypoint = path.resolve(here, '..', 'main.ts');
-  const require = createRequire(import.meta.url);
-  const tsxLoader = require.resolve('tsx');
-  return {
-    command: process.execPath,
-    args: ['--conditions=development', '--import', tsxLoader, sourceEntrypoint, ...args],
-  };
-}
 
 export async function startTui(params: StartTuiParams): Promise<void> {
   const selectedRepository = params.owner && params.repo ? { owner: params.owner, repo: params.repo } : null;
@@ -145,7 +91,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   let focusPane: TuiFocusPane = 'clusters';
   const initialPreference = selectedRepository
     ? getTuiRepositoryPreference(params.service.config, currentRepository.owner, currentRepository.repo)
-    : { sortMode: 'recent' as TuiClusterSortMode, minClusterSize: 10 as TuiMinSizeFilter, wideLayout: 'columns' as TuiWideLayoutPreference };
+    : { sortMode: 'recent' as TuiClusterSortMode, minClusterSize: 1 as TuiMinSizeFilter, wideLayout: 'columns' as TuiWideLayoutPreference };
   let sortMode: TuiClusterSortMode = initialPreference.sortMode;
   let minSize: TuiMinSizeFilter = initialPreference.minClusterSize;
   let wideLayout: TuiWideLayoutPreference = initialPreference.wideLayout;
@@ -164,12 +110,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   const activityLines: string[] = [];
   const clusterDetailCache = new Map<number, TuiClusterDetail>();
   const threadDetailCache = new Map<number, ThreadDetailCacheEntry>();
-  let syncJobRunning = false;
-  let embedJobRunning = false;
-  let clusterJobRunning = false;
-  let activeJob: BackgroundRefreshJob | null = null;
   let modalOpen = false;
-  let exitRequested = false;
 
   const clearCaches = (): void => {
     clusterDetailCache.clear();
@@ -190,7 +131,8 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     clusterItems = snapshot.clusters.map((cluster, index) => {
       clusterIndexById.set(cluster.clusterId, index);
       const updated = formatClusterDateColumn(cluster.latestUpdatedAt);
-      const label = `${String(cluster.totalCount).padStart(3, ' ')}  C${String(cluster.clusterId).padStart(5, ' ')}  ${String(cluster.pullRequestCount).padStart(2, ' ')}P/${String(cluster.issueCount).padStart(2, ' ')}I  ${updated}  ${cluster.displayTitle}`;
+      const meta = `${cluster.totalCount} items  C${cluster.clusterId}  ${cluster.pullRequestCount}P/${cluster.issueCount}I  ${updated}`;
+      const label = `${cluster.displayTitle}  ${meta}`;
       return cluster.isClosed ? `{gray-fg}${escapeBlessedText(label)}{/gray-fg}` : escapeBlessedText(label);
     });
     widgets.clusters.setItems(clusterItems);
@@ -202,12 +144,6 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       activityLines.splice(0, activityLines.length - ACTIVITY_LOG_LIMIT);
     }
     render();
-  };
-
-  const setActiveJobFlags = (selection: UpdateTaskSelection | null): void => {
-    syncJobRunning = selection?.sync === true;
-    embedJobRunning = selection?.embed === true;
-    clusterJobRunning = selection?.cluster === true;
   };
 
   const loadClusterDetail = (clusterId: number): TuiClusterDetail => {
@@ -389,16 +325,13 @@ export async function startTui(params: StartTuiParams): Promise<void> {
 
     widgets.detail.setContent(renderDetailPane(threadDetail, clusterDetail, focusPane));
     updatePaneStyles(widgets, focusPane);
-    const activeJobs = [syncJobRunning ? 'sync' : null, embedJobRunning ? 'embed' : null, clusterJobRunning ? 'cluster' : null]
-      .filter(Boolean)
-      .join(', ') || 'idle';
     const logLines = activityLines.slice(-FOOTER_LOG_LINES);
     const footerLines = [...logLines];
     while (footerLines.length < FOOTER_LOG_LINES) {
       footerLines.unshift('');
     }
     footerLines.push(
-      `${status}  |  jobs:${activeJobs}  |  h/? help  # jump  g update  p repos  / filter  s sort  f min  l layout  x closed`,
+      `${status}  |  h/? help  # jump  p repos  / filter  s sort  f min  l layout  x closed`,
     );
     footerLines.push(
       `Tab focus  arrows move-or-scroll  PgUp/PgDn page  r refresh  o open  q quit`,
@@ -415,133 +348,6 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     if (focusPane !== 'detail') return;
     widgets.detail.scroll(offset);
     widgets.screen.render();
-  };
-
-  const consumeStreamLines = (
-    stream: NodeJS.ReadableStream,
-    onLine: (line: string) => void,
-  ): void => {
-    let buffer = '';
-    stream.setEncoding('utf8');
-    stream.on('data', (chunk: string) => {
-      buffer += chunk;
-      while (true) {
-        const newlineIndex = buffer.indexOf('\n');
-        if (newlineIndex === -1) break;
-        const line = buffer.slice(0, newlineIndex).replace(/\r$/, '').trimEnd();
-        buffer = buffer.slice(newlineIndex + 1);
-        if (line.length > 0) onLine(line);
-      }
-    });
-    stream.on('end', () => {
-      const line = buffer.replace(/\r$/, '').trim();
-      if (line.length > 0) onLine(line);
-    });
-  };
-
-  const finalizeBackgroundJob = (job: BackgroundRefreshJob): void => {
-    void (async () => {
-      const result = await job.exitPromise;
-      if (activeJob === job) {
-        activeJob = null;
-      }
-      setActiveJobFlags(null);
-
-      if (job.terminatedByUser) {
-        pushActivity(`[jobs] update pipeline terminated for ${job.repo.owner}/${job.repo.repo}`);
-      } else if (result.error) {
-        pushActivity(`[jobs] update pipeline failed for ${job.repo.owner}/${job.repo.repo}: ${result.error.message}`);
-      } else if (result.code === 0) {
-        pushActivity(`[jobs] update pipeline complete for ${job.repo.owner}/${job.repo.repo}`);
-        try {
-          const parsed = JSON.parse(result.stdout.trim()) as {
-            sync?: { threadsSynced?: number; threadsClosed?: number } | null;
-            embed?: { embedded?: number } | null;
-            cluster?: { clusters?: number; edges?: number } | null;
-          };
-          const summaryParts = [
-            parsed.sync ? `sync:${parsed.sync.threadsSynced ?? 0} threads` : null,
-            parsed.sync ? `closed:${parsed.sync.threadsClosed ?? 0}` : null,
-            parsed.embed ? `embed:${parsed.embed.embedded ?? 0}` : null,
-            parsed.cluster ? `cluster:${parsed.cluster.clusters ?? 0}` : null,
-            parsed.cluster ? `edges:${parsed.cluster.edges ?? 0}` : null,
-          ].filter((value): value is string => value !== null);
-          if (summaryParts.length > 0) {
-            pushActivity(`[jobs] result ${summaryParts.join('  ')}`);
-          }
-        } catch {
-          // Ignore malformed stdout; progress is already visible in the activity log.
-        }
-        if (currentRepository.owner === job.repo.owner && currentRepository.repo === job.repo.repo) {
-          refreshAll(true);
-        }
-      } else {
-        const exitSuffix =
-          result.signal !== null ? `signal=${result.signal}` : `code=${result.code ?? 1}`;
-        pushActivity(`[jobs] update pipeline failed for ${job.repo.owner}/${job.repo.repo}: exited ${exitSuffix}`);
-      }
-
-      status = 'Ready';
-      if (!exitRequested) {
-        render();
-      }
-    })();
-  };
-
-  const startBackgroundUpdatePipeline = (target: RepositoryTarget, selection: UpdateTaskSelection): boolean => {
-    if (activeJob !== null) {
-      pushActivity('[jobs] another update pipeline is already running');
-      return false;
-    }
-    if (!selection.sync && !selection.embed && !selection.cluster) {
-      pushActivity('[jobs] select at least one update step');
-      return false;
-    }
-
-    const cliArgs = buildRefreshCliArgs(target, selection);
-    const launch = createCliLaunch(cliArgs);
-    const child = spawn(launch.command, launch.args, {
-      env: process.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    const job: BackgroundRefreshJob = {
-      child,
-      repo: target,
-      selection,
-      stdoutBuffer: '',
-      terminatedByUser: false,
-      exitPromise: new Promise<BackgroundJobResult>((resolve) => {
-        let resolved = false;
-        const finish = (result: BackgroundJobResult): void => {
-          if (resolved) return;
-          resolved = true;
-          resolve(result);
-        };
-        child.on('error', (error) => {
-          finish({ code: null, signal: null, stdout: job.stdoutBuffer, error });
-        });
-        child.on('close', (code, signal) => {
-          finish({ code, signal, stdout: job.stdoutBuffer, error: null });
-        });
-      }),
-    };
-
-    child.stdout.setEncoding('utf8');
-    child.stdout.on('data', (chunk: string) => {
-      job.stdoutBuffer += chunk;
-    });
-    consumeStreamLines(child.stderr, (line) => pushActivity(line, { raw: true }));
-
-    activeJob = job;
-    setActiveJobFlags(selection);
-    status = `Running update pipeline for ${target.owner}/${target.repo}`;
-    pushActivity(
-      `[jobs] starting update pipeline for ${target.owner}/${target.repo}: ${UPDATE_TASK_ORDER.filter((task) => selection[task]).join(' -> ')}`,
-    );
-    render();
-    finalizeBackgroundJob(job);
-    return true;
   };
 
   const moveSelection = (delta: -1 | 1, options?: { steps?: number; wrap?: boolean }): void => {
@@ -714,115 +520,10 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     })();
   };
 
-  const promptConfirm = async (label: string, message: string): Promise<boolean> => {
-    const box = blessed.box({
-      parent: widgets.screen,
-      border: 'line',
-      label: ` ${label} `,
-      tags: true,
-      top: 'center',
-      left: 'center',
-      width: '68%',
-      height: 9,
-      padding: {
-        left: 1,
-        right: 1,
-      },
-      style: {
-        border: { fg: '#fde74c' },
-        fg: 'white',
-        bg: '#101522',
-      },
-      content: `${message}\n\nPress y or Enter to confirm. Press n or Esc to cancel.`,
-    });
-
-    widgets.screen.render();
-
-    return await new Promise<boolean>((resolve) => {
-      const finish = (value: boolean): void => {
-        widgets.screen.off('keypress', handleKeypress);
-        box.destroy();
-        widgets.screen.render();
-        resolve(value);
-      };
-      const handleKeypress = (char: string, key: blessed.Widgets.Events.IKeyEventArg): void => {
-        if (key.name === 'enter' || char.toLowerCase() === 'y') {
-          finish(true);
-          return;
-        }
-        if (key.name === 'escape' || char.toLowerCase() === 'n' || key.name === 'q') {
-          finish(false);
-        }
-      };
-
-      widgets.screen.on('keypress', handleKeypress);
-    });
-  };
-
   const requestQuit = (): void => {
     if (modalOpen) return;
-    void (async () => {
-      if (activeJob === null) {
-        widgets.screen.destroy();
-        return;
-      }
-
-      modalOpen = true;
-      try {
-        const confirmed = await promptConfirm(
-          'Stop Update Pipeline',
-          `A background update pipeline is still running for ${activeJob.repo.owner}/${activeJob.repo.repo}.\nQuitting now will send SIGTERM to that refresh process and wait for it to exit.`,
-        );
-        if (!confirmed) {
-          render();
-          return;
-        }
-
-        exitRequested = true;
-        status = 'Stopping background update pipeline';
-        pushActivity(`[jobs] stopping update pipeline for ${activeJob.repo.owner}/${activeJob.repo.repo}`);
-        render();
-        activeJob.terminatedByUser = true;
-        activeJob.child.kill('SIGTERM');
-        await activeJob.exitPromise;
-        widgets.screen.destroy();
-      } finally {
-        modalOpen = false;
-      }
-    })();
+    widgets.screen.destroy();
   };
-
-  const promptUpdatePipeline = (): void => {
-    if (modalOpen || hasActiveJobs()) {
-      if (hasActiveJobs()) {
-        pushActivity('[jobs] update pipeline is unavailable while another job is running');
-      }
-      return;
-    }
-
-    void (async () => {
-      modalOpen = true;
-      try {
-        const selection = await promptUpdatePipelineSelection(
-          widgets.screen,
-          snapshot?.stats ?? null,
-          params.service.config.embeddingBasis,
-        );
-        if (!selection) {
-          render();
-          return;
-        }
-        const selectedTasks = UPDATE_TASK_ORDER.filter((task) => selection[task]).join(' -> ');
-        pushActivity(`[jobs] queued update pipeline: ${selectedTasks}`);
-        startBackgroundUpdatePipeline(currentRepository, selection);
-        updateFocus('clusters');
-      } finally {
-        modalOpen = false;
-      }
-    })();
-  };
-
-  const hasActiveJobs = (): boolean => activeJob !== null;
 
   const persistRepositoryPreference = (): void => {
     writeTuiRepositoryPreference(params.service.config, {
@@ -902,26 +603,8 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     refreshAll(false);
   };
 
-  const runRepositoryBootstrap = (target: RepositoryTarget): boolean => {
-    if (hasActiveJobs()) {
-      pushActivity('[repo] repository setup is blocked while jobs are already running');
-      return false;
-    }
-
-    setRepositoryPending(target, {
-      minClusterSize: 1,
-      status: `Preparing ${target.owner}/${target.repo}`,
-    });
-    pushActivity(`[repo] opened ${target.owner}/${target.repo}; starting initial update pipeline in the background`);
-    return startBackgroundUpdatePipeline(target, { sync: true, embed: true, cluster: true });
-  };
-
   const browseRepositories = (): void => {
     if (modalOpen) return;
-    if (hasActiveJobs()) {
-      pushActivity('[repo] repository switching is disabled while jobs are running');
-      return;
-    }
 
     void (async () => {
       modalOpen = true;
@@ -946,7 +629,11 @@ export async function startTui(params: StartTuiParams): Promise<void> {
           render();
           return;
         }
-        runRepositoryBootstrap(target);
+        setRepositoryPending(target, {
+          minClusterSize: 1,
+          status: `No local data for ${target.owner}/${target.repo}; run sync/embed/cluster in the CLI, then press r`,
+        });
+        pushActivity(`[repo] selected ${target.owner}/${target.repo}; run ghcrawl sync/embed/cluster from the shell`);
         updateFocus('clusters');
       } catch (error) {
         status = 'Repository action failed';
@@ -982,10 +669,11 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       if (!target) {
         return false;
       }
-      const ready = runRepositoryBootstrap(target);
-      if (!ready) {
-        return false;
-      }
+      setRepositoryPending(target, {
+        minClusterSize: 1,
+        status: `No local data for ${target.owner}/${target.repo}; run sync/embed/cluster in the CLI, then press r`,
+      });
+      pushActivity(`[repo] selected ${target.owner}/${target.repo}; run ghcrawl sync/embed/cluster from the shell`);
       updateFocus('clusters');
       return true;
     } catch (error) {
@@ -1099,10 +787,6 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     openHelp();
   });
   widgets.screen.key(['p'], () => browseRepositories());
-  widgets.screen.key(['g'], () => {
-    if (modalOpen) return;
-    promptUpdatePipeline();
-  });
   widgets.screen.key(['r'], () => {
     if (modalOpen) return;
     status = 'Refreshing';
@@ -1130,7 +814,6 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       return;
     }
   }
-  pushActivity('[jobs] press g to run the staged update pipeline: GitHub sync, embeddings, then clusters');
   updateFocus('clusters');
 
   await new Promise<void>((resolve) => widgets.screen.once('destroy', () => resolve()));
@@ -1289,79 +972,6 @@ function openUrl(url: string): void {
   child.unref();
 }
 
-export function describeUpdateTask(
-  task: keyof UpdateTaskSelection,
-  stats: TuiRepoStats | null,
-  now: Date = new Date(),
-): string {
-  if (!stats) {
-    if (task === 'sync') return 'recommended';
-    if (task === 'embed') return 'recommended after sync';
-    return 'recommended after embeddings';
-  }
-
-  if (task === 'sync') {
-    return stats.lastGithubReconciliationAt
-      ? `up to date, last ${formatRelativeTime(stats.lastGithubReconciliationAt, now)}`
-      : 'never run';
-  }
-
-  if (task === 'embed') {
-    if (!stats.lastEmbedRefreshAt) return 'never run';
-    if (stats.staleEmbedThreadCount > 0) {
-      return `outdated: ${stats.staleEmbedThreadCount} stale, last ${formatRelativeTime(stats.lastEmbedRefreshAt, now)}`;
-    }
-    const syncMs = parseDateOrNull(stats.lastGithubReconciliationAt);
-    const embedMs = parseDateOrNull(stats.lastEmbedRefreshAt);
-    if (syncMs !== null && embedMs !== null && embedMs < syncMs) {
-      return `outdated: GitHub is newer by ${formatAge(syncMs - embedMs)}`;
-    }
-    return `up to date, last ${formatRelativeTime(stats.lastEmbedRefreshAt, now)}`;
-  }
-
-  if (!stats.latestClusterRunFinishedAt) return 'never run';
-  const embedMs = parseDateOrNull(stats.lastEmbedRefreshAt);
-  const clusterMs = parseDateOrNull(stats.latestClusterRunFinishedAt);
-  if (embedMs !== null && clusterMs !== null && clusterMs < embedMs) {
-    return `outdated: embeddings are newer by ${formatAge(embedMs - clusterMs)}`;
-  }
-  return `up to date, last ${formatRelativeTime(stats.latestClusterRunFinishedAt, now)}`;
-}
-
-export function buildUpdatePipelineLabels(
-  stats: TuiRepoStats | null,
-  selection: UpdateTaskSelection,
-  now: Date = new Date(),
-): string[] {
-  return UPDATE_TASK_ORDER.map((task) => {
-    const mark = selection[task] ? '[x]' : '[ ]';
-    const title = task === 'sync' ? 'GitHub sync/reconcile' : task === 'embed' ? 'Embed refresh' : 'Cluster rebuild';
-    return `${mark} ${title}  ${describeUpdateTask(task, stats, now)}`;
-  });
-}
-
-export function buildUpdatePipelineHelpContent(embeddingBasis: EmbeddingBasis): string {
-  const summaryStatus =
-    embeddingBasis === 'title_summary'
-      ? 'LLM summaries: enabled via title_summary.'
-      : embeddingBasis === 'llm_key_summary'
-        ? '3-line key summaries: active embedding basis.'
-        : 'LLM summaries: disabled; current basis is title_original.';
-  const summaryAction =
-    embeddingBasis === 'title_summary'
-      ? 'On openclaw/openclaw this improved non-solo cluster membership by about 50% versus title_original.'
-      : embeddingBasis === 'llm_key_summary'
-        ? 'Run `ghcrawl key-summaries` before embedding so the active vectors have deterministic key text.'
-        : 'Enable with `ghcrawl configure --embedding-basis title_summary` if you want richer clustering; on openclaw/openclaw that improved non-solo cluster membership by about 50%.';
-  return [
-    'Usually you want all three. Run order is fixed: GitHub sync/reconcile -> embeddings -> clusters.',
-    `${summaryStatus} ${summaryAction}`,
-    'A first summarize of ~18k open issues/PRs in openclaw/openclaw typically costs about $15-$30 with gpt-5-mini.',
-    'Later refreshes are usually much cheaper because only changed items need summaries.',
-    'Toggle with space, move with arrows, Enter to start, Esc to cancel.',
-  ].join('\n');
-}
-
 export function buildHelpContent(): string {
   return [
     '{bold}ghcrawl TUI Help{/bold}',
@@ -1384,16 +994,17 @@ export function buildHelpContent(): string {
     'r                 refresh the current local view from SQLite',
     '',
     '{bold}Actions{/bold}',
-    'g                 start the staged update pipeline in the background (GitHub, embeddings, clusters)',
-    'p                 open the repository browser / sync a new repository',
+    'p                 open the repository browser / select another local repository',
     'o                 open the selected thread URL in your browser',
     '',
     '{bold}Help And Exit{/bold}',
     'h or ?            open this help popup',
-    'q                 quit the TUI (or close this popup); warns if a background update is running',
+    'q                 quit the TUI or close this popup',
     'Esc               close this popup',
     '',
     '{bold}Notes{/bold}',
+    'The TUI only reads local SQLite. Run ghcrawl sync, ghcrawl embed, and ghcrawl cluster from the shell to update data.',
+    'The default cluster filter is 1+, so solo clusters are visible unless you raise it with f.',
     'Clusters show C<clusterId> so the cluster id is easy to copy into CLI or skill flows.',
     'The footer only shows the short command list. Open help to see the full list.',
     'This popup scrolls. Use arrows, PgUp/PgDn, Home, and End if it does not fit.',
@@ -1484,85 +1095,6 @@ async function promptHelp(screen: blessed.Widgets.Screen): Promise<void> {
   });
 }
 
-async function promptUpdatePipelineSelection(
-  screen: blessed.Widgets.Screen,
-  stats: TuiRepoStats | null,
-  embeddingBasis: EmbeddingBasis,
-): Promise<UpdateTaskSelection | null> {
-  const selection: UpdateTaskSelection = { sync: true, embed: true, cluster: true };
-  const modalWidth = '76%';
-  const box = blessed.list({
-    parent: screen,
-    border: 'line',
-    label: ' Update Pipeline ',
-    keys: true,
-    vi: true,
-    mouse: false,
-    top: 'center',
-    left: 'center',
-    width: modalWidth,
-    height: 14,
-    style: {
-      border: { fg: '#5bc0eb' },
-      item: { fg: 'white' },
-      selected: { bg: '#5bc0eb', fg: 'black', bold: true },
-    },
-    items: buildUpdatePipelineLabels(stats, selection),
-  });
-  const help = blessed.box({
-    parent: screen,
-    top: 'center-5',
-    left: 'center',
-    width: modalWidth,
-    height: 7,
-    style: { fg: 'white', bg: '#101522' },
-    content: buildUpdatePipelineHelpContent(embeddingBasis),
-  });
-
-  box.focus();
-  box.select(0);
-  screen.render();
-
-  return await new Promise<UpdateTaskSelection | null>((resolve) => {
-    const getSelectedIndex = (): number => {
-      const selectedIndex = (box as blessed.Widgets.ListElement & { selected?: number }).selected;
-      return typeof selectedIndex === 'number' && selectedIndex >= 0 ? selectedIndex : 0;
-    };
-    const refreshItems = (): void => {
-      const selectedIndex = getSelectedIndex();
-      box.setItems(buildUpdatePipelineLabels(stats, selection));
-      box.select(selectedIndex);
-      screen.render();
-    };
-    const finish = (value: UpdateTaskSelection | null): void => {
-      screen.off('keypress', handleKeypress);
-      box.destroy();
-      help.destroy();
-      screen.render();
-      resolve(value);
-    };
-    const handleKeypress = (_char: string, key: blessed.Widgets.Events.IKeyEventArg): void => {
-      if (key.name === 'escape' || key.name === 'q') {
-        finish(null);
-        return;
-      }
-      if (key.name === 'space') {
-        const index = getSelectedIndex();
-        const task = UPDATE_TASK_ORDER[index];
-        if (!task) return;
-        selection[task] = !selection[task];
-        if (!selection.sync && !selection.embed && !selection.cluster) {
-          selection[task] = true;
-        }
-        refreshItems();
-      }
-    };
-
-    screen.on('keypress', handleKeypress);
-    box.on('select', () => finish({ ...selection }));
-  });
-}
-
 export function getRepositoryChoices(service: Pick<GHCrawlService, 'listRepositories'>, now: Date = new Date()): RepositoryChoice[] {
   const repositories = service.listRepositories().repositories
     .slice()
@@ -1574,7 +1106,7 @@ export function getRepositoryChoices(service: Pick<GHCrawlService, 'listReposito
       target: { owner: repository.owner, repo: repository.name },
       label: `${repository.fullName}  ${formatRelativeTime(repository.updatedAt, now)}`,
     })),
-    { kind: 'new' as const, label: '+ Sync a new repository' },
+    { kind: 'new' as const, label: '+ Select another repository path' },
   ];
 }
 
@@ -1664,58 +1196,12 @@ async function promptRepositoryInput(screen: blessed.Widgets.Screen): Promise<Re
   });
 
   return await new Promise<RepositoryTarget | null>((resolve) => {
-    prompt.input('Repository to sync (owner/repo)', '', (_error, value) => {
+    prompt.input('Repository to open (owner/repo)', '', (_error, value) => {
       prompt.destroy();
       const parsed = parseOwnerRepoValue((value ?? '').trim());
       resolve(parsed);
     });
   });
-}
-
-async function runColdStartSetup(
-  service: GHCrawlService,
-  screen: blessed.Widgets.Screen,
-  target: RepositoryTarget,
-  log?: blessed.Widgets.Log,
-  footer?: blessed.Widgets.BoxElement,
-): Promise<boolean> {
-  log?.log(`[setup] starting initial setup for ${target.owner}/${target.repo}`);
-  footer?.setContent('Running initial sync, embed, and cluster. This can take a while.');
-  screen.render();
-
-  try {
-    const reporter = (message: string): void => {
-      log?.log(message);
-      screen.render();
-    };
-    await service.syncRepository({
-      owner: target.owner,
-      repo: target.repo,
-      onProgress: reporter,
-    });
-    await service.embedRepository({
-      owner: target.owner,
-      repo: target.repo,
-      onProgress: reporter,
-    });
-    await service.clusterRepository({
-      owner: target.owner,
-      repo: target.repo,
-      onProgress: reporter,
-    });
-    writeTuiRepositoryPreference(service.config, {
-      owner: target.owner,
-      repo: target.repo,
-      minClusterSize: 1,
-      sortMode: 'recent',
-      wideLayout: 'columns',
-    });
-    log?.log('[setup] initial setup complete');
-    return true;
-  } catch (error) {
-    log?.log(`[setup] failed: ${error instanceof Error ? error.message : String(error)}`);
-    return false;
-  }
 }
 
 export function parseOwnerRepoValue(value: string): { owner: string; repo: string } | null {
@@ -1728,12 +1214,6 @@ export function parseOwnerRepoValue(value: string): { owner: string; repo: strin
 
 function formatActivityTimestamp(now: Date = new Date()): string {
   return now.toISOString().slice(11, 19);
-}
-
-function parseDateOrNull(value: string | null | undefined): number | null {
-  if (!value) return null;
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? null : parsed;
 }
 
 export function formatClusterDateColumn(value: string | null, locales?: Intl.LocalesArgument): string {
@@ -1755,24 +1235,6 @@ export function formatClusterDateColumn(value: string | null, locales?: Intl.Loc
   const date = ordering[0] === 'day' ? `${day}-${month}` : `${month}-${day}`;
 
   return `${date} ${hour}:${minute}`;
-}
-
-function formatAge(diffMs: number): string {
-  const safeDiffMs = Math.max(0, diffMs);
-  const minuteMs = 60_000;
-  const hourMs = 60 * minuteMs;
-  const dayMs = 24 * hourMs;
-
-  if (safeDiffMs < hourMs) {
-    return `${Math.max(1, Math.floor(safeDiffMs / minuteMs))}m`;
-  }
-  if (safeDiffMs < dayMs) {
-    return `${Math.floor(safeDiffMs / hourMs)}h`;
-  }
-  if (safeDiffMs < 14 * dayMs) {
-    return `${Math.floor(safeDiffMs / dayMs)}d`;
-  }
-  return `${Math.floor(safeDiffMs / dayMs)}d`;
 }
 
 function formatRelativeTime(value: string | null, now: Date = new Date()): string {

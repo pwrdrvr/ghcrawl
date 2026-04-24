@@ -3183,7 +3183,7 @@ export class GHCrawlService {
     const includeClosedClusters = params.includeClosedClusters ?? true;
     const clusters = this.listRawTuiClusters(repository.id, latestRun.id)
       .filter((cluster) => (includeClosedClusters ? true : !cluster.isClosed))
-      .filter((cluster) => cluster.totalCount >= (params.minSize ?? 10))
+      .filter((cluster) => cluster.totalCount >= (params.minSize ?? 1))
       .filter((cluster) => {
         const search = params.search?.trim().toLowerCase();
         if (!search) return true;

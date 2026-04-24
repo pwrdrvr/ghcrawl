@@ -3004,7 +3004,7 @@ test('clusterRepository does not retain a parsed embedding cache in-process', as
   }
 });
 
-test('tui snapshot returns mixed issue and pull request counts with default recent sort and filters', () => {
+test('tui snapshot returns mixed issue and pull request counts with default visible cluster filter', () => {
   const service = makeTestService({
     getRepo: async () => ({}),
     listRepositoryIssues: async () => [],
@@ -3077,7 +3077,10 @@ test('tui snapshot returns mixed issue and pull request counts with default rece
     assert.equal(snapshot.stats.staleEmbedThreadCount, 5);
     assert.equal(snapshot.stats.staleEmbedSourceCount, 5);
     assert.equal(snapshot.stats.latestClusterRunId, 1);
-    assert.equal(snapshot.clusters.length, 0);
+    assert.deepEqual(
+      snapshot.clusters.map((cluster) => cluster.clusterId),
+      [101, 100],
+    );
 
     const allSnapshot = service.getTuiSnapshot({ owner: 'openclaw', repo: 'openclaw', minSize: 0 });
     assert.deepEqual(
