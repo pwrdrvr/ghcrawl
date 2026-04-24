@@ -125,12 +125,13 @@ const COMMAND_SPECS: readonly CommandSpec[] = [
   },
   {
     name: 'sync',
-    synopsis: 'sync <owner/repo> [--since <iso|duration>] [--limit <count>] [--include-comments] [--full-reconcile] [--json]',
+    synopsis: 'sync <owner/repo> [--since <iso|duration>] [--limit <count>] [--include-comments] [--include-code] [--full-reconcile] [--json]',
     description: 'Sync open GitHub issues and PRs into the local database.',
     options: [
       '--since <iso|duration>  Limit sync window using ISO time or 15m/2h/7d/1mo',
       '--limit <count>  Limit the number of synced items',
       '--include-comments  Hydrate issue comments, PR reviews, and review comments',
+      '--include-code  Hydrate pull request file metadata and patch signatures',
       '--full-reconcile  Reconcile stale open items instead of metadata-only incrementals',
       '--json  Emit machine-readable JSON output explicitly',
     ],
@@ -483,6 +484,7 @@ export function parseRepoFlags(command: CommandName, args: string[]): ParsedRepo
       limit: { type: 'string' },
       json: { type: 'boolean' },
       'include-comments': { type: 'boolean' },
+      'include-code': { type: 'boolean' },
       'full-reconcile': { type: 'boolean' },
       'include-closed': { type: 'boolean' },
       'include-inactive': { type: 'boolean' },
@@ -950,6 +952,7 @@ export async function run(
           since: typeof values.since === 'string' ? resolveSinceValue(values.since) : undefined,
           limit: typeof values.limit === 'string' ? parsePositiveInteger('limit', values.limit, 'sync') : undefined,
           includeComments: values['include-comments'] === true,
+          includeCode: values['include-code'] === true,
           fullReconcile: values['full-reconcile'] === true,
           onProgress: (message: string) => writeProgress(message, stderr),
         });

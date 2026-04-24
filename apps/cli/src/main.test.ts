@@ -413,6 +413,31 @@ test('long-running command progress stays on stderr and payload stays on stdout'
   assert.doesNotMatch(stdout.read(), /\[sync] started/);
 });
 
+test('sync command forwards include-code hydration flag', async () => {
+  const stdout = createWritableCapture();
+  const context = makeRunContext();
+  const original = GHCrawlService.prototype.syncRepository;
+  let received: unknown;
+
+  GHCrawlService.prototype.syncRepository = async function syncRepositoryStub(params: unknown) {
+    received = params;
+    return { runId: 1, threadsSynced: 1, commentsSynced: 0, codeFilesSynced: 1, threadsClosed: 0 } as never;
+  };
+
+  try {
+    await run(['sync', 'openclaw/openclaw', '--include-code'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+  } finally {
+    GHCrawlService.prototype.syncRepository = original;
+    context.cleanup();
+  }
+
+  assert.equal((received as { includeCode?: boolean }).includeCode, true);
+  assert.match(stdout.read(), /"codeFilesSynced": 1/);
+});
+
 test('parseOwnerRepo accepts owner slash repo syntax', () => {
   assert.deepEqual(parseOwnerRepo('openclaw/openclaw'), { owner: 'openclaw', repo: 'openclaw' });
 });
@@ -436,6 +461,13 @@ test('parseRepoFlags accepts include-comments boolean flag', () => {
   assert.equal(parsed.owner, 'openclaw');
   assert.equal(parsed.repo, 'openclaw');
   assert.equal(parsed.values['include-comments'], true);
+});
+
+test('parseRepoFlags accepts include-code boolean flag', () => {
+  const parsed = parseRepoFlags('sync', ['openclaw/openclaw', '--include-code']);
+  assert.equal(parsed.owner, 'openclaw');
+  assert.equal(parsed.repo, 'openclaw');
+  assert.equal(parsed.values['include-code'], true);
 });
 
 test('parseRepoFlags accepts full-reconcile boolean flag', () => {
