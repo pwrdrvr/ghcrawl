@@ -1,8 +1,8 @@
-import type { TuiClusterDetail, TuiClusterSortMode, TuiClusterSummary } from '@ghcrawl/api-core';
+import type { TuiClusterDetail, TuiClusterSortMode, TuiClusterSummary, TuiMemberSortPreference } from '@ghcrawl/api-core';
 
 export type TuiFocusPane = 'clusters' | 'members' | 'detail';
 export type TuiMinSizeFilter = 0 | 1 | 2 | 10 | 20 | 50;
-export type TuiMemberSortMode = 'kind' | 'recent' | 'number' | 'state' | 'title';
+export type TuiMemberSortMode = TuiMemberSortPreference;
 
 export type MemberListRow =
   | { key: string; label: string; selectable: false }

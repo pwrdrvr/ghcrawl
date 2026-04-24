@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 
 export type ConfigValueSource = 'env' | 'config' | 'dotenv' | 'default' | 'none';
 export type TuiSortPreference = 'recent' | 'size';
+export type TuiMemberSortPreference = 'kind' | 'recent' | 'number' | 'state' | 'title';
 export type TuiMinClusterSize = 0 | 1 | 2 | 10 | 20 | 50;
 export type TuiWideLayoutPreference = 'columns' | 'right-stack';
 export type EmbeddingBasis = 'title_original' | 'title_summary' | 'llm_key_summary';
@@ -14,6 +15,7 @@ export type VectorBackend = 'vectorlite';
 export type TuiRepositoryPreference = {
   minClusterSize: TuiMinClusterSize;
   sortMode: TuiSortPreference;
+  memberSortMode: TuiMemberSortPreference;
   wideLayout: TuiWideLayoutPreference;
 };
 
@@ -161,6 +163,10 @@ function getTuiSortPreference(value: unknown): TuiSortPreference | undefined {
   return value === 'recent' || value === 'size' ? value : undefined;
 }
 
+function getTuiMemberSortPreference(value: unknown): TuiMemberSortPreference | undefined {
+  return value === 'kind' || value === 'recent' || value === 'number' || value === 'state' || value === 'title' ? value : undefined;
+}
+
 function getTuiMinClusterSize(value: unknown): TuiMinClusterSize | undefined {
   return value === 0 || value === 1 || value === 2 || value === 10 || value === 20 || value === 50 ? value : undefined;
 }
@@ -190,11 +196,12 @@ function getTuiPreferences(value: unknown): Record<string, TuiRepositoryPreferen
     const record = preference as Record<string, unknown>;
     const minClusterSize = getTuiMinClusterSize(record.minClusterSize);
     const sortMode = getTuiSortPreference(record.sortMode);
+    const memberSortMode = getTuiMemberSortPreference(record.memberSortMode) ?? 'kind';
     const wideLayout = getTuiWideLayoutPreference(record.wideLayout) ?? 'columns';
     if (minClusterSize === undefined || sortMode === undefined) {
       continue;
     }
-    preferences[fullName] = { minClusterSize, sortMode, wideLayout };
+    preferences[fullName] = { minClusterSize, sortMode, memberSortMode, wideLayout };
   }
 
   return preferences;
@@ -396,19 +403,28 @@ export function ensureRuntimeDirs(config: GitcrawlConfig): void {
 }
 
 export function getTuiRepositoryPreference(config: GitcrawlConfig, owner: string, repo: string): TuiRepositoryPreference {
-  return config.tuiPreferences[`${owner}/${repo}`] ?? { minClusterSize: 1, sortMode: 'size', wideLayout: 'columns' };
+  return config.tuiPreferences[`${owner}/${repo}`] ?? { minClusterSize: 1, sortMode: 'size', memberSortMode: 'kind', wideLayout: 'columns' };
 }
 
 export function writeTuiRepositoryPreference(
   config: GitcrawlConfig,
-  params: { owner: string; repo: string; minClusterSize: TuiMinClusterSize; sortMode: TuiSortPreference; wideLayout: TuiWideLayoutPreference },
+  params: {
+    owner: string;
+    repo: string;
+    minClusterSize: TuiMinClusterSize;
+    sortMode: TuiSortPreference;
+    memberSortMode?: TuiMemberSortPreference;
+    wideLayout: TuiWideLayoutPreference;
+  },
 ): { configPath: string } {
   const fullName = `${params.owner}/${params.repo}`;
+  const previousPreference = config.tuiPreferences[fullName];
   const nextPreferences = {
     ...config.tuiPreferences,
     [fullName]: {
       minClusterSize: params.minClusterSize,
       sortMode: params.sortMode,
+      memberSortMode: params.memberSortMode ?? previousPreference?.memberSortMode ?? 'kind',
       wideLayout: params.wideLayout,
     },
   };

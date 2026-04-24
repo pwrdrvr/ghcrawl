@@ -132,9 +132,14 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   let isRendering = false;
   const initialPreference = selectedRepository
     ? getTuiRepositoryPreference(params.service.config, currentRepository.owner, currentRepository.repo)
-    : { sortMode: 'size' as TuiClusterSortMode, minClusterSize: 1 as TuiMinSizeFilter, wideLayout: 'columns' as TuiWideLayoutPreference };
+    : {
+        sortMode: 'size' as TuiClusterSortMode,
+        memberSortMode: 'kind' as TuiMemberSortMode,
+        minClusterSize: 1 as TuiMinSizeFilter,
+        wideLayout: 'columns' as TuiWideLayoutPreference,
+      };
   let sortMode: TuiClusterSortMode = initialPreference.sortMode;
-  let memberSortMode: TuiMemberSortMode = 'kind';
+  let memberSortMode: TuiMemberSortMode = initialPreference.memberSortMode;
   let minSize: TuiMinSizeFilter = initialPreference.minClusterSize;
   let wideLayout: TuiWideLayoutPreference = initialPreference.wideLayout;
   let showClosed = true;
@@ -466,6 +471,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     }
     const previousMemberId = selectedMemberThreadId;
     memberSortMode = nextMemberSortMode;
+    persistRepositoryPreference();
     if (clusterDetail) {
       memberRows = buildMemberRows(clusterDetail, { includeClosedMembers: showClosed, sortMode: memberSortMode });
       selectedMemberThreadId = preserveSelectedId(
@@ -798,6 +804,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       repo: currentRepository.repo,
       minClusterSize: minSize,
       sortMode,
+      memberSortMode,
       wideLayout,
     });
   };
@@ -841,6 +848,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     const preference = getTuiRepositoryPreference(params.service.config, target.owner, target.repo);
     minSize = overrides?.minClusterSize ?? preference.minClusterSize;
     sortMode = overrides?.sortMode ?? preference.sortMode;
+    memberSortMode = preference.memberSortMode;
     wideLayout = preference.wideLayout;
     persistRepositoryPreference();
     clearCaches();
