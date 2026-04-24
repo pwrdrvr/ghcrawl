@@ -3887,10 +3887,6 @@ export class GHCrawlService {
   }
 
   private getLatestClusterRun(repoId: number): { id: number; finished_at: string | null } | null {
-    const state = this.getRepoPipelineState(repoId);
-    if (state && !this.isRepoClusterStateCurrent(repoId)) {
-      return null;
-    }
     return (
       (this.db
         .prepare("select id, finished_at from cluster_runs where repo_id = ? and status = 'completed' order by id desc limit 1")

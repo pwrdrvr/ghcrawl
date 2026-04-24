@@ -3110,6 +3110,26 @@ test('tui snapshot returns mixed issue and pull request counts with default visi
       .run(1, 1, 'openclaw/openclaw', 'completed', now, '2026-03-09T13:00:00Z');
     service.db
       .prepare(
+        `insert into repo_pipeline_state (
+          repo_id, summary_model, summary_prompt_version, embedding_basis, embed_model, embed_dimensions,
+          embed_pipeline_version, vector_backend, vectors_current_at, clusters_current_at, updated_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        1,
+        'previous-summary-model',
+        'previous-summary-prompt',
+        'title_original',
+        'text-embedding-3-large',
+        1024,
+        'previous-embed-pipeline',
+        'vectorlite',
+        '2026-03-09T13:00:00Z',
+        '2026-03-09T14:30:00Z',
+        now,
+      );
+    service.db
+      .prepare(
         `insert into clusters (id, repo_id, cluster_run_id, representative_thread_id, member_count, created_at)
          values (?, ?, ?, ?, ?, ?)`,
       )
