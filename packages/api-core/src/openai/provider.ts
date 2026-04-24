@@ -83,10 +83,16 @@ export class OpenAiProvider implements AiProvider {
             format,
             verbosity: 'low',
           },
+          reasoning: {
+            effort: 'minimal',
+          },
           max_output_tokens: maxOutputTokens,
         });
 
         const raw = response.output_text ?? '';
+        if (!raw.trim()) {
+          throw new Error(`empty structured output${response.incomplete_details?.reason ? ` (${response.incomplete_details.reason})` : ''}`);
+        }
         const parsed = summarySchema.parse(JSON.parse(raw));
 
         return {
@@ -139,10 +145,16 @@ export class OpenAiProvider implements AiProvider {
             format,
             verbosity: 'low',
           },
+          reasoning: {
+            effort: 'minimal',
+          },
           max_output_tokens: maxOutputTokens,
         });
 
         const raw = response.output_text ?? '';
+        if (!raw.trim()) {
+          throw new Error(`empty structured output${response.incomplete_details?.reason ? ` (${response.incomplete_details.reason})` : ''}`);
+        }
         return {
           summary: llmKeySummarySchema.parse(JSON.parse(raw)),
           usage: response.usage
