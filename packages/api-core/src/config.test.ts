@@ -272,7 +272,7 @@ test('writeTuiRepositoryPreference persists sort and min cluster size by reposit
   });
   assert.deepEqual(getTuiRepositoryPreference(reloaded, 'other', 'repo'), {
     minClusterSize: 1,
-    sortMode: 'recent',
+    sortMode: 'size',
     wideLayout: 'columns',
   });
 });

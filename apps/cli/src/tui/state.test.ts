@@ -4,9 +4,9 @@ import assert from 'node:assert/strict';
 import { buildMemberRows, cycleFocusPane, cycleMinSizeFilter, cycleSortMode, findSelectableIndex, moveSelectableIndex, preserveSelectedId, applyClusterFilters } from './state.js';
 import type { TuiClusterDetail, TuiClusterSummary } from '@ghcrawl/api-core';
 
-test('cycleSortMode toggles recent and size', () => {
-  assert.equal(cycleSortMode('recent'), 'size');
+test('cycleSortMode toggles size and recent', () => {
   assert.equal(cycleSortMode('size'), 'recent');
+  assert.equal(cycleSortMode('recent'), 'size');
 });
 
 test('cycleMinSizeFilter rotates through presets', () => {

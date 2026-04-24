@@ -7,13 +7,13 @@ export type MemberListRow =
   | { key: string; label: string; selectable: false }
   | { key: string; label: string; selectable: true; threadId: number };
 
-export const SORT_MODE_ORDER: TuiClusterSortMode[] = ['recent', 'size'];
+export const SORT_MODE_ORDER: TuiClusterSortMode[] = ['size', 'recent'];
 export const MIN_SIZE_FILTER_ORDER: TuiMinSizeFilter[] = [1, 2, 10, 20, 50, 0];
 export const FOCUS_PANE_ORDER: TuiFocusPane[] = ['clusters', 'members', 'detail'];
 
 export function cycleSortMode(current: TuiClusterSortMode): TuiClusterSortMode {
   const index = SORT_MODE_ORDER.indexOf(current);
-  return SORT_MODE_ORDER[(index + 1) % SORT_MODE_ORDER.length] ?? 'recent';
+  return SORT_MODE_ORDER[(index + 1) % SORT_MODE_ORDER.length] ?? 'size';
 }
 
 export function cycleMinSizeFilter(current: TuiMinSizeFilter): TuiMinSizeFilter {
@@ -101,11 +101,6 @@ export function moveSelectableIndex(rows: MemberListRow[], currentIndex: number,
     }
   }
   return currentIndex;
-}
-
-export function selectedThreadIdFromRow(rows: MemberListRow[], index: number): number | null {
-  const row = rows[index];
-  return row && row.selectable ? row.threadId : null;
 }
 
 function compareClusters(left: TuiClusterSummary, right: TuiClusterSummary, sortMode: TuiClusterSortMode): number {

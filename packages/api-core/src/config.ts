@@ -396,7 +396,7 @@ export function ensureRuntimeDirs(config: GitcrawlConfig): void {
 }
 
 export function getTuiRepositoryPreference(config: GitcrawlConfig, owner: string, repo: string): TuiRepositoryPreference {
-  return config.tuiPreferences[`${owner}/${repo}`] ?? { minClusterSize: 1, sortMode: 'recent', wideLayout: 'columns' };
+  return config.tuiPreferences[`${owner}/${repo}`] ?? { minClusterSize: 1, sortMode: 'size', wideLayout: 'columns' };
 }
 
 export function writeTuiRepositoryPreference(

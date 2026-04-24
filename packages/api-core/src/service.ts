@@ -3189,7 +3189,7 @@ export class GHCrawlService {
         if (!search) return true;
         return cluster.searchText.includes(search);
       })
-      .sort((left, right) => this.compareTuiClusterSummary(left, right, params.sort ?? 'recent'));
+      .sort((left, right) => this.compareTuiClusterSummary(left, right, params.sort ?? 'size'));
 
     return {
       repository,

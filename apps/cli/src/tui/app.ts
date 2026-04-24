@@ -5,6 +5,7 @@ import blessed from 'neo-blessed';
 import type {
   GHCrawlService,
   TuiClusterDetail,
+  TuiClusterSummary,
   TuiClusterSortMode,
   TuiSnapshot,
   TuiThreadDetail,
@@ -19,7 +20,6 @@ import {
   findSelectableIndex,
   moveSelectableIndex,
   preserveSelectedId,
-  selectedThreadIdFromRow,
   type MemberListRow,
   type TuiFocusPane,
   type TuiMinSizeFilter,
@@ -89,9 +89,10 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   const widgets = createWidgets(currentRepository.owner, currentRepository.repo);
 
   let focusPane: TuiFocusPane = 'clusters';
+  let isRendering = false;
   const initialPreference = selectedRepository
     ? getTuiRepositoryPreference(params.service.config, currentRepository.owner, currentRepository.repo)
-    : { sortMode: 'recent' as TuiClusterSortMode, minClusterSize: 1 as TuiMinSizeFilter, wideLayout: 'columns' as TuiWideLayoutPreference };
+    : { sortMode: 'size' as TuiClusterSortMode, minClusterSize: 1 as TuiMinSizeFilter, wideLayout: 'columns' as TuiWideLayoutPreference };
   let sortMode: TuiClusterSortMode = initialPreference.sortMode;
   let minSize: TuiMinSizeFilter = initialPreference.minClusterSize;
   let wideLayout: TuiWideLayoutPreference = initialPreference.wideLayout;
@@ -130,9 +131,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     clusterIndexById = new Map();
     clusterItems = snapshot.clusters.map((cluster, index) => {
       clusterIndexById.set(cluster.clusterId, index);
-      const updated = formatClusterDateColumn(cluster.latestUpdatedAt);
-      const meta = `${cluster.totalCount} items  C${cluster.clusterId}  ${cluster.pullRequestCount}P/${cluster.issueCount}I  ${updated}`;
-      const label = `${cluster.displayTitle}  ${meta}`;
+      const label = formatClusterListLabel(cluster);
       return cluster.isClosed ? `{gray-fg}${escapeBlessedText(label)}{/gray-fg}` : escapeBlessedText(label);
     });
     widgets.clusters.setItems(clusterItems);
@@ -315,12 +314,17 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       `{bold}${repoLabel}{/bold}  {cyan-fg}${snapshot?.stats.openPullRequestCount ?? 0} PR{/cyan-fg}  {green-fg}${snapshot?.stats.openIssueCount ?? 0} issues{/green-fg}  GH:${ghStatus}  Emb:${embedStatus}  Cl:${clusterStatus}  sort:${sortMode}  min:${minSize === 0 ? 'all' : `${minSize}+`}  layout:${wideLayout === 'columns' ? 'cols' : 'stack'}  closed:${showClosed ? 'shown' : 'hidden'}  filter:${search || 'none'}`,
     );
 
-    const clusterIndex = snapshot && selectedClusterId !== null ? Math.max(0, clusterIndexById.get(selectedClusterId) ?? -1) : 0;
-    widgets.clusters.select(clusterIndex);
+    isRendering = true;
+    try {
+      const clusterIndex = snapshot && selectedClusterId !== null ? Math.max(0, clusterIndexById.get(selectedClusterId) ?? -1) : 0;
+      widgets.clusters.select(clusterIndex);
 
-    widgets.members.setItems(memberRows.length > 0 ? memberRows.map((row) => row.label) : ['No members']);
-    if (memberIndex >= 0) {
-      widgets.members.select(memberIndex);
+      widgets.members.setItems(memberRows.length > 0 ? memberRows.map((row) => row.label) : ['No members']);
+      if (memberIndex >= 0) {
+        widgets.members.select(memberIndex);
+      }
+    } finally {
+      isRendering = false;
     }
 
     widgets.detail.setContent(renderDetailPane(threadDetail, clusterDetail, focusPane));
@@ -331,10 +335,10 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       footerLines.unshift('');
     }
     footerLines.push(
-      `${status}  |  h/? help  # jump  p repos  / filter  s sort  f min  l layout  x closed`,
+      `${status}  |  focus:${focusPane}  sort:${sortMode}  h/? help  # jump  p repos  / filter  s sort  f min`,
     );
     footerLines.push(
-      `Tab focus  arrows move-or-scroll  PgUp/PgDn page  r refresh  o open  q quit`,
+      `Tab focus  mouse click/select/scroll  PgUp/PgDn page  l layout  x closed  r refresh  o open  q quit`,
     );
     widgets.footer.setContent(footerLines.join('\n'));
     widgets.screen.render();
@@ -363,26 +367,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       } else {
         nextIndex = Math.max(0, Math.min(snapshot.clusters.length - 1, nextIndex));
       }
-      selectedClusterId = snapshot.clusters[nextIndex]?.clusterId ?? null;
-      if (selectedClusterId !== null) {
-        try {
-          clusterDetail = loadClusterDetail(selectedClusterId);
-        } catch {
-          status = 'Cluster data changed; refreshing view';
-          refreshAll(true);
-          return;
-        }
-        memberRows = buildMemberRows(clusterDetail, { includeClosedMembers: showClosed });
-        selectedMemberThreadId = preserveSelectedId(
-          memberRows.filter((row) => row.selectable).map((row) => row.threadId),
-          null,
-        );
-        memberIndex = findSelectableIndex(memberRows, selectedMemberThreadId);
-        loadSelectedThreadDetail(false);
-        resetDetailScroll();
-      }
-      status = selectedClusterId !== null ? `Cluster ${selectedClusterId} (${nextIndex + 1}/${snapshot.clusters.length})` : `Cluster ${nextIndex + 1}/${snapshot.clusters.length}`;
-      render();
+      selectClusterIndex(nextIndex);
       return;
     }
 
@@ -396,12 +381,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
         }
         nextIndex = candidateIndex;
       }
-      memberIndex = nextIndex;
-      selectedMemberThreadId = selectedThreadIdFromRow(memberRows, memberIndex);
-      loadSelectedThreadDetail(false);
-      resetDetailScroll();
-      status = selectedMemberThreadId !== null ? `Selected #${threadDetail?.thread.number ?? '?'}` : 'No selectable member';
-      render();
+      selectMemberIndex(nextIndex);
     }
   };
 
@@ -416,6 +396,49 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       return;
     }
     moveSelection(delta, { steps: getFocusedListPageSize(), wrap: false });
+  };
+
+  const selectClusterIndex = (nextIndex: number): void => {
+    if (!snapshot || snapshot.clusters.length === 0) return;
+    const boundedIndex = Math.max(0, Math.min(snapshot.clusters.length - 1, nextIndex));
+    selectedClusterId = snapshot.clusters[boundedIndex]?.clusterId ?? null;
+    if (selectedClusterId !== null) {
+      try {
+        clusterDetail = loadClusterDetail(selectedClusterId);
+      } catch {
+        status = 'Cluster data changed; refreshing view';
+        refreshAll(true);
+        return;
+      }
+      memberRows = buildMemberRows(clusterDetail, { includeClosedMembers: showClosed });
+      selectedMemberThreadId = preserveSelectedId(
+        memberRows.filter((row) => row.selectable).map((row) => row.threadId),
+        null,
+      );
+      memberIndex = findSelectableIndex(memberRows, selectedMemberThreadId);
+      loadSelectedThreadDetail(false);
+      resetDetailScroll();
+    }
+    status =
+      selectedClusterId !== null
+        ? `Cluster ${selectedClusterId} (${boundedIndex + 1}/${snapshot.clusters.length})`
+        : `Cluster ${boundedIndex + 1}/${snapshot.clusters.length}`;
+    render();
+  };
+
+  const selectMemberIndex = (nextIndex: number): void => {
+    if (memberRows.length === 0) return;
+    const row = memberRows[nextIndex];
+    if (!row?.selectable) {
+      render();
+      return;
+    }
+    memberIndex = nextIndex;
+    selectedMemberThreadId = row.threadId;
+    loadSelectedThreadDetail(false);
+    resetDetailScroll();
+    status = selectedMemberThreadId !== null ? `Selected #${threadDetail?.thread.number ?? '?'}` : 'No selectable member';
+    render();
   };
 
   const promptFilter = (): void => {
@@ -796,6 +819,32 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     if (modalOpen) return;
     openSelectedThread();
   });
+  widgets.clusters.on('select item', (_item, index) => {
+    if (isRendering || modalOpen) return;
+    focusPane = 'clusters';
+    widgets.clusters.focus();
+    selectClusterIndex(Number(index));
+  });
+  widgets.clusters.on('select', () => {
+    if (isRendering || modalOpen) return;
+    updateFocus('members');
+  });
+  widgets.members.on('select item', (_item, index) => {
+    if (isRendering || modalOpen) return;
+    focusPane = 'members';
+    widgets.members.focus();
+    selectMemberIndex(Number(index));
+  });
+  widgets.members.on('select', () => {
+    if (isRendering || modalOpen) return;
+    loadSelectedThreadDetail(true);
+    status = selectedMemberThreadId !== null ? `Loaded neighbors for #${threadDetail?.thread.number ?? '?'}` : status;
+    updateFocus('detail');
+  });
+  widgets.detail.on('click', () => {
+    if (modalOpen) return;
+    updateFocus('detail');
+  });
   widgets.screen.on('resize', () => render());
 
   widgets.screen.on('destroy', () => {
@@ -825,6 +874,7 @@ function createWidgets(owner: string, repo: string): Widgets {
     fullUnicode: true,
     dockBorders: true,
     autoPadding: false,
+    mouse: true,
     title: owner && repo ? `ghcrawl ${owner}/${repo}` : 'ghcrawl',
   });
   const header = blessed.box({
@@ -838,6 +888,7 @@ function createWidgets(owner: string, repo: string): Widgets {
     label: ' Clusters ',
     tags: true,
     keys: false,
+    mouse: true,
     style: {
       border: { fg: '#5bc0eb' },
       item: { fg: 'white' },
@@ -851,6 +902,7 @@ function createWidgets(owner: string, repo: string): Widgets {
     label: ' Members ',
     tags: true,
     keys: false,
+    mouse: true,
     style: {
       border: { fg: '#9bc53d' },
       item: { fg: 'white' },
@@ -866,6 +918,7 @@ function createWidgets(owner: string, repo: string): Widgets {
     scrollable: true,
     alwaysScroll: true,
     keys: false,
+    mouse: true,
     scrollbar: { ch: ' ' },
     style: {
       border: { fg: '#fde74c' },
@@ -882,9 +935,16 @@ function createWidgets(owner: string, repo: string): Widgets {
 }
 
 function updatePaneStyles(widgets: Widgets, focus: TuiFocusPane): void {
+  widgets.clusters.setLabel(`${focus === 'clusters' ? '[*]' : '[ ]'} Clusters `);
+  widgets.members.setLabel(`${focus === 'members' ? '[*]' : '[ ]'} Members `);
+  widgets.detail.setLabel(`${focus === 'detail' ? '[*]' : '[ ]'} Detail `);
   widgets.clusters.style.border = { fg: focus === 'clusters' ? 'white' : '#5bc0eb' };
   widgets.members.style.border = { fg: focus === 'members' ? 'white' : '#9bc53d' };
   widgets.detail.style.border = { fg: focus === 'detail' ? 'white' : '#fde74c' };
+  widgets.clusters.style.selected =
+    focus === 'clusters' ? { bg: '#f7f7ff', fg: 'black', bold: true } : { bg: '#23445c', fg: 'white', bold: true };
+  widgets.members.style.selected =
+    focus === 'members' ? { bg: '#f7f7ff', fg: 'black', bold: true } : { bg: '#33521e', fg: 'white', bold: true };
 }
 
 export function renderDetailPane(
@@ -981,6 +1041,7 @@ export function buildHelpContent(): string {
     'Left / Right      cycle focus backward or forward across panes',
     'Up / Down         move selection, or scroll detail when detail is focused',
     'Enter             clusters -> members, members -> detail',
+    'Mouse             click a pane or row to focus/select; wheel scrolls lists and detail',
     'PgUp / PgDn       page through the focused pane or this help popup faster',
     'Home / End        jump to the top or bottom of detail or help',
     '',
@@ -1005,6 +1066,8 @@ export function buildHelpContent(): string {
     '{bold}Notes{/bold}',
     'The TUI only reads local SQLite. Run ghcrawl sync, ghcrawl embed, and ghcrawl cluster from the shell to update data.',
     'The default cluster filter is 1+, so solo clusters are visible unless you raise it with f.',
+    'The default sort is size. Press s to toggle size and recent.',
+    'Mouse clicks focus panes; clicking an already selected row advances to the next pane.',
     'Clusters show C<clusterId> so the cluster id is easy to copy into CLI or skill flows.',
     'The footer only shows the short command list. Open help to see the full list.',
     'This popup scrolls. Use arrows, PgUp/PgDn, Home, and End if it does not fit.',
@@ -1022,7 +1085,7 @@ async function promptHelp(screen: blessed.Widgets.Screen): Promise<void> {
     alwaysScroll: true,
     keys: true,
     vi: true,
-    mouse: false,
+    mouse: true,
     top: 'center',
     left: 'center',
     width: modalWidth,
@@ -1121,7 +1184,7 @@ async function promptRepositoryChoice(
     label: ' Repositories ',
     keys: true,
     vi: true,
-    mouse: false,
+    mouse: true,
     top: 'center',
     left: 'center',
     width: '70%',
@@ -1210,6 +1273,23 @@ export function parseOwnerRepoValue(value: string): { owner: string; repo: strin
     return null;
   }
   return { owner: parts[0], repo: parts[1] };
+}
+
+export function formatClusterListLabel(cluster: TuiClusterSummary): string {
+  const countLabel = `${cluster.totalCount} ${cluster.totalCount === 1 ? 'item' : 'items'}`.padStart(7);
+  const mixLabel = `${cluster.pullRequestCount}P/${cluster.issueCount}I`.padStart(6);
+  const updated = formatClusterDateColumn(cluster.latestUpdatedAt);
+  return `${countLabel}  C${cluster.clusterId}  ${mixLabel}  ${updated}  ${formatClusterShortName(cluster.displayTitle)}`;
+}
+
+export function formatClusterShortName(title: string, maxWords = 3): string {
+  const words = title
+    .replace(/[\[\]{}()<>]/g, ' ')
+    .split(/\s+/)
+    .map((word) => word.trim())
+    .filter(Boolean)
+    .slice(0, maxWords);
+  return words.join(' ') || 'untitled';
 }
 
 function formatActivityTimestamp(now: Date = new Date()): string {

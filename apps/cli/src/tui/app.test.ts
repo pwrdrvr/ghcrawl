@@ -7,6 +7,8 @@ import {
   buildHelpContent,
   escapeBlessedText,
   formatClusterDateColumn,
+  formatClusterListLabel,
+  formatClusterShortName,
   getRepositoryChoices,
   parseOwnerRepoValue,
   renderDetailPane,
@@ -94,6 +96,31 @@ test('formatClusterDateColumn follows locale month/day ordering while keeping fi
   assert.equal(formatClusterDateColumn(iso, 'en-GB'), '10-03 16:04');
 });
 
+test('formatClusterListLabel keeps counts first and adds a short cluster name', () => {
+  const label = formatClusterListLabel({
+    clusterId: 1507,
+    displayTitle: 'Fix: dedupe section title/desc in single-section config view',
+    isClosed: false,
+    closedAtLocal: null,
+    closeReasonLocal: null,
+    totalCount: 3,
+    issueCount: 0,
+    pullRequestCount: 3,
+    latestUpdatedAt: '2026-04-24T07:29:02',
+    representativeThreadId: 252,
+    representativeNumber: 55342,
+    representativeKind: 'issue',
+    searchText: 'fix dedupe section',
+  });
+
+  assert.match(label, /3 items\s+C1507\s+3P\/0I\s+04-24 07:29\s+Fix: dedupe section/);
+});
+
+test('formatClusterShortName returns the first meaningful words', () => {
+  assert.equal(formatClusterShortName('[codex] fix agent session-id routing'), 'codex fix agent');
+  assert.equal(formatClusterShortName(''), 'untitled');
+});
+
 test('getRepositoryChoices sorts by most recent update and includes the new-repo action', () => {
   const service = {
     listRepositories() {
@@ -136,6 +163,8 @@ test('buildHelpContent includes the full key command list', () => {
   assert.match(content, /#\s+jump directly to an issue or PR number/);
   assert.match(content, /TUI only reads local SQLite/);
   assert.match(content, /default cluster filter is 1\+/);
+  assert.match(content, /default sort is size/);
+  assert.match(content, /Mouse clicks focus panes/);
   assert.match(content, /p\s+open the repository browser/);
   assert.match(content, /l\s+toggle wide layout/);
   assert.match(content, /x\s+show or hide locally closed clusters and members/);
