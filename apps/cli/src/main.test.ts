@@ -47,6 +47,7 @@ const publicCommands = [
   'author',
   'close-thread',
   'close-cluster',
+  'exclude-cluster-member',
   'embed',
   'cluster',
   'clusters',
@@ -268,6 +269,7 @@ test('agent-facing command help advertises explicit --json', async () => {
     'author',
     'close-thread',
     'close-cluster',
+    'exclude-cluster-member',
     'embed',
     'cluster',
     'clusters',
@@ -308,6 +310,44 @@ test('compatibility path keeps json-by-default commands working without --json',
   }
 
   assert.match(stdout.read(), /"threads"/);
+});
+
+test('exclude-cluster-member command forwards durable override inputs', async () => {
+  const stdout = createWritableCapture();
+  const context = makeRunContext();
+  const original = GHCrawlService.prototype.excludeThreadFromCluster;
+  let received: unknown;
+
+  GHCrawlService.prototype.excludeThreadFromCluster = function excludeThreadFromClusterStub(params: unknown) {
+    received = params;
+    return {
+      ok: true,
+      clusterId: 7,
+      thread: { number: 42 },
+      action: 'exclude',
+      state: 'removed_by_user',
+      message: 'removed',
+    } as never;
+  };
+
+  try {
+    await run(['exclude-cluster-member', 'openclaw/openclaw', '--id', '7', '--number', '42', '--reason', 'false positive'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+  } finally {
+    GHCrawlService.prototype.excludeThreadFromCluster = original;
+    context.cleanup();
+  }
+
+  assert.deepEqual(received, {
+    owner: 'openclaw',
+    repo: 'openclaw',
+    clusterId: 7,
+    threadNumber: 42,
+    reason: 'false positive',
+  });
+  assert.match(stdout.read(), /"state": "removed_by_user"/);
 });
 
 test('long-running command progress stays on stderr and payload stays on stdout', async () => {
@@ -385,6 +425,13 @@ test('parseRepoFlags accepts kind filter for threads', () => {
   assert.equal(parsed.owner, 'openclaw');
   assert.equal(parsed.repo, 'openclaw');
   assert.equal(parsed.values.kind, 'pull_request');
+});
+
+test('parseRepoFlags accepts exclusion reason', () => {
+  const parsed = parseRepoFlags('exclude-cluster-member', ['openclaw/openclaw', '--id', '7', '--number', '42', '--reason', 'false positive']);
+  assert.equal(parsed.owner, 'openclaw');
+  assert.equal(parsed.repo, 'openclaw');
+  assert.equal(parsed.values.reason, 'false positive');
 });
 
 test('parseRepoFlags accepts heap diagnostics options', () => {

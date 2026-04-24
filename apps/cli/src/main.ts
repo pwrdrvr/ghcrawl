@@ -21,6 +21,7 @@ type CommandName =
   | 'author'
   | 'close-thread'
   | 'close-cluster'
+  | 'exclude-cluster-member'
   | 'summarize'
   | 'purge-comments'
   | 'embed'
@@ -189,6 +190,19 @@ const COMMAND_SPECS: readonly CommandSpec[] = [
     description: 'Mark one local cluster closed immediately.',
     options: ['--id <cluster-id>  Cluster id to close locally', '--json  Emit machine-readable JSON output explicitly'],
     examples: ['ghcrawl close-cluster openclaw/openclaw --id 123 --json'],
+    agentJson: true,
+  },
+  {
+    name: 'exclude-cluster-member',
+    synopsis: 'exclude-cluster-member <owner/repo> --id <cluster-id> --number <thread> [--reason <text>] [--json]',
+    description: 'Remove one issue or PR from a durable cluster and block automatic re-entry.',
+    options: [
+      '--id <cluster-id>  Durable cluster id',
+      '--number <thread>  Issue or PR number to exclude',
+      '--reason <text>  Optional maintainer reason',
+      '--json  Emit machine-readable JSON output explicitly',
+    ],
+    examples: ['ghcrawl exclude-cluster-member openclaw/openclaw --id 123 --number 42 --reason "false positive" --json'],
     agentJson: true,
   },
   {
@@ -470,6 +484,7 @@ export function parseRepoFlags(command: CommandName, args: string[]): ParsedRepo
       threshold: { type: 'string' },
       port: { type: 'string' },
       id: { type: 'string' },
+      reason: { type: 'string' },
       sort: { type: 'string' },
       search: { type: 'string' },
       'min-size': { type: 'string' },
@@ -1000,6 +1015,24 @@ export async function run(
           owner,
           repo,
           clusterId: parsePositiveInteger('id', values.id, 'close-cluster'),
+        });
+        writeJson(stdout, result);
+        return;
+      }
+      case 'exclude-cluster-member': {
+        const { owner, repo, values } = parseRepoFlags('exclude-cluster-member', rest);
+        if (typeof values.id !== 'string') {
+          throw new CliUsageError('Missing --id', 'exclude-cluster-member');
+        }
+        if (typeof values.number !== 'string') {
+          throw new CliUsageError('Missing --number', 'exclude-cluster-member');
+        }
+        const result = getService().excludeThreadFromCluster({
+          owner,
+          repo,
+          clusterId: parsePositiveInteger('id', values.id, 'exclude-cluster-member'),
+          threadNumber: parsePositiveInteger('number', values.number, 'exclude-cluster-member'),
+          reason: typeof values.reason === 'string' ? values.reason : undefined,
         });
         writeJson(stdout, result);
         return;
