@@ -437,6 +437,16 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     refreshAll(true);
   };
 
+  const setMinSize = (nextMinSize: TuiMinSizeFilter): void => {
+    if (minSize === nextMinSize) {
+      return;
+    }
+    minSize = nextMinSize;
+    persistRepositoryPreference();
+    status = `Min size: ${minSize === 0 ? 'all' : `${minSize}+`}`;
+    refreshAll(true);
+  };
+
   const selectClusterIndex = (nextIndex: number): void => {
     if (!snapshot || snapshot.clusters.length === 0) return;
     if (nextIndex === CLUSTER_LIST_HEADER_INDEX) {
@@ -672,6 +682,9 @@ export async function startTui(params: StartTuiParams): Promise<void> {
         : []),
       { label: 'Sort by size', run: () => setSortMode('size') },
       { label: 'Sort by recent', run: () => setSortMode('recent') },
+      { label: 'Min size 1+', run: () => setMinSize(1) },
+      { label: 'Min size 10+', run: () => setMinSize(10) },
+      { label: 'Min size all', run: () => setMinSize(0) },
       { label: showClosed ? 'Hide closed' : 'Show closed', run: () => toggleClosedVisibility() },
       { label: 'Filter clusters', run: promptFilter },
       { label: 'Refresh', run: () => refreshAll(true) },
@@ -684,6 +697,9 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     { label: 'Repository browser', run: browseRepositories },
     { label: 'Sort by size', run: () => setSortMode('size') },
     { label: 'Sort by recent', run: () => setSortMode('recent') },
+    { label: 'Min size 1+', run: () => setMinSize(1) },
+    { label: 'Min size 10+', run: () => setMinSize(10) },
+    { label: 'Min size all', run: () => setMinSize(0) },
     { label: showClosed ? 'Hide closed' : 'Show closed', run: () => toggleClosedVisibility() },
     { label: 'Help', run: openHelp },
     {
@@ -941,10 +957,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   });
   widgets.screen.key(['f'], () => {
     if (modalOpen) return;
-    minSize = cycleMinSizeFilter(minSize);
-    persistRepositoryPreference();
-    status = `Min size: ${minSize === 0 ? 'all' : `${minSize}+`}`;
-    refreshAll(false);
+    setMinSize(cycleMinSizeFilter(minSize));
   });
   widgets.screen.key(['l'], () => {
     if (modalOpen) return;
@@ -1642,8 +1655,8 @@ export function formatClusterListLabel(cluster: TuiClusterSummary): string {
 }
 
 export function formatClusterListHeader(sortMode: TuiClusterSortMode): string {
-  const countLabel = (sortMode === 'size' ? 'cnt↓' : 'cnt').padStart(3);
-  const updated = (sortMode === 'recent' ? 'updated↓' : 'updated').padStart(8);
+  const countLabel = (sortMode === 'size' ? 'cnt*' : 'cnt').padStart(3);
+  const updated = (sortMode === 'recent' ? 'updated*' : 'updated').padStart(8);
   return `${countLabel}  ${'cluster'.padEnd(22)}  ${'title'.padEnd(56)}  ${'mix'.padStart(7)}  ${updated}`;
 }
 

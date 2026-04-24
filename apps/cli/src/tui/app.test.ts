@@ -132,8 +132,8 @@ test('formatClusterListLabel keeps counts first and splits cluster name from tit
 });
 
 test('formatClusterListHeader marks the active clickable sort column', () => {
-  assert.match(formatClusterListHeader('size'), /cnt↓/);
-  assert.match(formatClusterListHeader('recent'), /updated↓/);
+  assert.match(formatClusterListHeader('size'), /cnt\*/);
+  assert.match(formatClusterListHeader('recent'), /updated\*/);
 });
 
 test('formatClusterShortName returns the first meaningful words', () => {
