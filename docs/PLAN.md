@@ -117,6 +117,19 @@ Decision note:
 - [ ] Test on a real or sanitized fixture corpus to inspect false positives and false negatives.
 - [ ] Testing goal: add golden cluster fixtures proving known related threads end up together.
 
+## Phase 6.5: Maintainer Decision Analysis
+
+- [ ] Add a reusable decision-analysis layer above clusters and semantic neighbors.
+- [ ] Introduce a seed-centric `analyze-pr` style workflow for explicit maintainer decisions.
+- [ ] Reuse a shared score/explanation model instead of duplicating logic across CLI, report, and API surfaces.
+- [ ] Split retrieval provenance from decision role so candidates can say how they were found separately from what decision they received.
+- [ ] Define explicit first-pass roles such as `best_base`, `same_cluster_candidate`, `superseded_candidate`, and `excluded_neighbor`, with role eligibility depending on thread kind.
+- [ ] Keep the first iteration read-only against the latest local snapshot, with freshness coming from the existing explicit `refresh` or `sync -> embed -> cluster` pipeline rather than hidden live fetches during scoring.
+- [ ] Add small golden fixtures early so score tuning and role classification have regression protection from the first implementation.
+- [ ] Keep the first iteration additive: no cluster-model replacement and no storage redesign required.
+- [ ] If persisted later, store decision artifacts in adjacent decision tables rather than cluster snapshots.
+- [ ] Track the target shape in `docs/designs/maintainer-decision-layer.md`.
+
 ## Phase 7: API And Future UI
 
 - [x] Implement local API endpoints for health, repositories, threads, search, clusters, and rerun actions.
