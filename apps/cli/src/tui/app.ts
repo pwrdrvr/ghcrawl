@@ -209,7 +209,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     clusterItems.push(...snapshot.clusters.map((cluster, index) => {
       clusterIndexById.set(cluster.clusterId, index + CLUSTER_LIST_FIRST_ITEM_INDEX);
       const label = formatClusterListLabel(cluster);
-      return cluster.isClosed ? `{gray-fg}${escapeBlessedText(label)}{/gray-fg}` : escapeBlessedText(label);
+      return cluster.isClosed ? `{gray-fg}${escapeBlessedText(label)}{/gray-fg}` : `{green-fg}${escapeBlessedText(label)}{/green-fg}`;
     }));
     widgets.clusters.setItems(clusterItems);
   };
@@ -497,6 +497,34 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       return;
     }
     moveSelection(delta, { steps: getFocusedListPageSize(), wrap: false });
+  };
+
+  const jumpFocusedPaneToEdge = (edge: 'start' | 'end'): void => {
+    if (focusPane === 'detail') {
+      if (edge === 'start') {
+        widgets.detail.setScroll(0);
+      } else {
+        widgets.detail.setScrollPerc(100);
+      }
+      widgets.screen.render();
+      return;
+    }
+
+    if (focusPane === 'clusters') {
+      if (!snapshot || snapshot.clusters.length === 0) return;
+      selectClusterIndex(edge === 'start' ? CLUSTER_LIST_FIRST_ITEM_INDEX : snapshot.clusters.length);
+      return;
+    }
+
+    if (focusPane === 'members') {
+      const selectable = memberRows
+        .map((row, index) => ({ row, index }))
+        .filter((item) => item.row.selectable);
+      const target = edge === 'start' ? selectable.at(0) : selectable.at(-1);
+      if (target) {
+        selectMemberIndex(target.index);
+      }
+    }
   };
 
   const setSortMode = (nextSortMode: TuiClusterSortMode): void => {
@@ -1327,15 +1355,11 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   });
   widgets.screen.key(['home'], () => {
     if (modalOpen) return;
-    if (focusPane !== 'detail') return;
-    widgets.detail.setScroll(0);
-    widgets.screen.render();
+    jumpFocusedPaneToEdge('start');
   });
   widgets.screen.key(['end'], () => {
     if (modalOpen) return;
-    if (focusPane !== 'detail') return;
-    widgets.detail.setScrollPerc(100);
-    widgets.screen.render();
+    jumpFocusedPaneToEdge('end');
   });
   widgets.screen.key(['enter'], () => {
     if (modalOpen) return;
@@ -1428,6 +1452,18 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     }
     openContextMenu('Cluster', clusterContextItems(), event);
   });
+  widgets.clusters.on('wheelup', () => {
+    if (isRendering || modalOpen) return;
+    focusPane = 'clusters';
+    widgets.clusters.focus();
+    moveSelection(-1, { wrap: false });
+  });
+  widgets.clusters.on('wheeldown', () => {
+    if (isRendering || modalOpen) return;
+    focusPane = 'clusters';
+    widgets.clusters.focus();
+    moveSelection(1, { wrap: false });
+  });
   widgets.members.on('select item', (_item, index) => {
     if (isRendering || modalOpen) return;
     if (suppressNextMemberSelect) {
@@ -1466,6 +1502,18 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     }
     openContextMenu('Thread', threadContextItems(), event);
   });
+  widgets.members.on('wheelup', () => {
+    if (isRendering || modalOpen) return;
+    focusPane = 'members';
+    widgets.members.focus();
+    moveSelection(-1, { wrap: false });
+  });
+  widgets.members.on('wheeldown', () => {
+    if (isRendering || modalOpen) return;
+    focusPane = 'members';
+    widgets.members.focus();
+    moveSelection(1, { wrap: false });
+  });
   widgets.detail.on('click', () => {
     if (modalOpen) return;
     updateFocus('detail');
@@ -1475,6 +1523,18 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     updateFocus('detail');
     openContextMenu(threadDetail ? 'Thread' : clusterDetail ? 'Cluster' : 'ghcrawl', threadDetail ? threadContextItems() : clusterDetail ? clusterContextItems() : globalContextItems(), event);
   });
+  widgets.detail.on('wheelup', () => {
+    if (modalOpen) return;
+    focusPane = 'detail';
+    widgets.detail.focus();
+    scrollDetail(-3);
+  });
+  widgets.detail.on('wheeldown', () => {
+    if (modalOpen) return;
+    focusPane = 'detail';
+    widgets.detail.focus();
+    scrollDetail(3);
+  });
   widgets.header.on('mousedown', (event: MouseEventArg) => {
     if (modalOpen || event.button !== 'right') return;
     openContextMenu('ghcrawl', globalContextItems(), event);
@@ -1482,11 +1542,6 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   widgets.footer.on('mousedown', (event: MouseEventArg) => {
     if (modalOpen || event.button !== 'right') return;
     openContextMenu('ghcrawl', globalContextItems(), event);
-  });
-  widgets.screen.on('mousedown', (event: MouseEventArg) => {
-    if (event.button === 'right' && modalOpen && dismissModal) {
-      dismissActiveModal();
-    }
   });
   widgets.screen.on('resize', () => render());
 
@@ -1556,7 +1611,6 @@ function createWidgets(owner: string, repo: string): Widgets {
       item: { fg: 'white' },
       selected: { bg: '#9bc53d', fg: 'black', bold: true },
     },
-    scrollbar: { ch: ' ' },
   });
   const detail = blessed.box({
     parent: screen,
@@ -1567,7 +1621,6 @@ function createWidgets(owner: string, repo: string): Widgets {
     alwaysScroll: true,
     keys: false,
     mouse: true,
-    scrollbar: { ch: ' ' },
     style: {
       border: { fg: '#fde74c' },
       fg: 'white',
@@ -1641,6 +1694,7 @@ export function renderDetailPane(
     ? `{bold}Closed:{/bold} ${escapeBlessedText(thread.closedAtLocal ?? thread.closedAtGh ?? 'yes')} ${thread.closeReasonLocal ? `(${escapeBlessedText(thread.closeReasonLocal)})` : ''}`.trimEnd()
     : '{bold}Closed:{/bold} no';
   const summaries = renderSummarySections(threadDetail.summaries);
+  const topFiles = renderTopFiles(threadDetail.topFiles);
   const neighbors =
     threadDetail.neighbors.length > 0
       ? threadDetail.neighbors
@@ -1656,14 +1710,15 @@ export function renderDetailPane(
   return [
     `{bold}${thread.kind === 'pull_request' ? 'PR' : 'Issue'} #${thread.number}{/bold}  ${escapeBlessedText(thread.title)}`,
     `{cyan-fg}${escapeBlessedText(clusterTitle.name)}{/cyan-fg}  C${clusterDetail.clusterId}${escapeBlessedText(representativeLabel)}`,
-    '',
+    '{gray-fg}' + '-'.repeat(72) + '{/gray-fg}',
     `${closedLabel}  {bold}Updated:{/bold} ${escapeBlessedText(formatRelativeTime(thread.updatedAtGh))}  {bold}Author:{/bold} ${escapeBlessedText(thread.authorLogin ?? 'unknown')}`,
     `{bold}Labels:{/bold} ${labels}`,
     `{bold}URL:{/bold} ${formatTerminalLink(thread.htmlUrl, thread.htmlUrl)}`,
+    topFiles ? `\n{bold}Top files{/bold}\n${topFiles}` : '',
+    summaries ? `\n{bold}LLM Summary{/bold}\n${summaries}` : '',
     '',
-    summaries ? `\n\n${summaries}` : '',
-    '',
-    `{bold}Main{/bold}`,
+    '{gray-fg}' + '-'.repeat(72) + '{/gray-fg}',
+    `{bold}Main Preview{/bold}`,
     body,
     linksSection,
     `\n\n{bold}Neighbors{/bold}\n${neighbors}`,
@@ -1776,6 +1831,18 @@ export function renderSummarySections(summaries: TuiThreadDetail['summaries']): 
     if (!value) return [];
     return [`{bold}${formatSummaryLabel(key)}:{/bold}\n${renderMarkdownForTerminal(value)}`];
   }).join('\n\n');
+}
+
+export function renderTopFiles(files: TuiThreadDetail['topFiles']): string {
+  if (files.length === 0) return '';
+  return files
+    .slice(0, 5)
+    .map((file) => {
+      const churn = file.additions + file.deletions;
+      const status = file.status ? `${file.status} ` : '';
+      return `- ${escapeBlessedText(file.path)}  {gray-fg}${escapeBlessedText(status)}+${file.additions}/-${file.deletions} (${churn}){/gray-fg}`;
+    })
+    .join('\n');
 }
 
 function formatSummaryLabel(key: SummaryKey): string {

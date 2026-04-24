@@ -154,8 +154,8 @@ test('buildMemberRows groups issues and pull requests and selection skips header
   const rows = buildMemberRows(detail);
   assert.equal(rows[0]?.selectable, false);
   assert.match(rows[0]?.label ?? '', /number\s+state\s+updated\s+title/);
-  assert.match(rows[2]?.label ?? '', /#42\s+open\s+\d+d ago\s+Issue one/);
-  assert.match(rows[4]?.label ?? '', /closed\s+\d+d ago\s+Bug: PR one/);
+  assert.match(rows[2]?.label ?? '', /#42\s+\{green-fg\}open\{\/green-fg\}\s+\d+d ago\s+Issue one/);
+  assert.match(rows[4]?.label ?? '', /\{gray-fg\}closed\{\/gray-fg\}\s+\d+d ago\s+Bug: PR one/);
   assert.equal(findSelectableIndex(rows, 10), 2);
   assert.equal(moveSelectableIndex(rows, 2, 1), 4);
 });

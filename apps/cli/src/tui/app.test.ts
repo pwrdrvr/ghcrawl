@@ -68,6 +68,14 @@ test('renderDetailPane escapes user-provided text before rendering into a tags-e
     summaries: {
       dedupe_summary: 'Summary {yellow-fg}text{/yellow-fg}',
     },
+    topFiles: [
+      {
+        path: 'apps/cli/src/tui/app.ts',
+        status: 'modified',
+        additions: 10,
+        deletions: 2,
+      },
+    ],
     neighbors: [
       {
         threadId: 2,
@@ -83,13 +91,15 @@ test('renderDetailPane escapes user-provided text before rendering into a tags-e
   assert.match(rendered, /C1 \(#42 representative issue\)/);
   assert.match(rendered, /Bad \\{bold\\}title\\{\/bold\\}/);
   assert.match(rendered, /Cluster signal:/);
-  assert.match(rendered, /Main/);
+  assert.match(rendered, /Top files/);
+  assert.match(rendered, /apps\/cli\/src\/tui\/app\.ts/);
+  assert.match(rendered, /Main Preview/);
   assert.match(rendered, /Body with \\{red-fg\\}tags\\{\/red-fg\\}/);
   assert.match(rendered, /Links/);
   assert.match(rendered, /1\. https:\/\/example\.com\/body-link/);
   assert.match(rendered, /Summary \\{yellow-fg\\}text\\{\/yellow-fg\\}/);
   assert.match(rendered, /Neighbor \\{blue-fg\\}title\\{\/blue-fg\\}/);
-  assert.ok(rendered.indexOf('Cluster signal:') < rendered.indexOf('{bold}Main{/bold}'));
+  assert.ok(rendered.indexOf('Cluster signal:') < rendered.indexOf('{bold}Main Preview{/bold}'));
 });
 
 test('renderDetailPane can compact very long bodies', () => {
@@ -128,6 +138,7 @@ test('renderDetailPane can compact very long bodies', () => {
       clusterId: 1,
     },
     summaries: {},
+    topFiles: [],
     neighbors: [],
   };
 
@@ -273,6 +284,7 @@ test('buildThreadContextMenuItems exposes thread actions for right-click menus',
       clusterId: 1,
     },
     summaries: {},
+    topFiles: [],
     neighbors: [],
   });
 
@@ -320,6 +332,7 @@ test('getThreadReferenceLinks extracts unique body and summary links', () => {
     summaries: {
       dedupe_summary: 'same as https://example.com/raw and https://example.com/summary',
     },
+    topFiles: [],
     neighbors: [],
   });
 

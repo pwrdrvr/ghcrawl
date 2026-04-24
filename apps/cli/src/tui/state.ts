@@ -153,10 +153,11 @@ function compareClusters(left: TuiClusterSummary, right: TuiClusterSummary, sort
 function formatMemberLabel(number: number, title: string, updatedAtGh: string | null, isClosed: boolean): string {
   const updated = formatRelativeTime(updatedAtGh);
   const numberLabel = `#${number}`.padEnd(MEMBER_NUMBER_WIDTH).slice(0, MEMBER_NUMBER_WIDTH);
-  const status = (isClosed ? 'closed' : 'open').padEnd(MEMBER_STATE_WIDTH);
+  const status = isClosed ? '{gray-fg}closed{/gray-fg} ' : '{green-fg}open{/green-fg}   ';
   const age = updated.padEnd(MEMBER_UPDATED_WIDTH).slice(0, MEMBER_UPDATED_WIDTH);
-  const label = escapeBlessedInline(`${numberLabel}${status}${age}${normalizeMemberTitle(title)}`);
-  return isClosed ? `{gray-fg}${label}{/gray-fg}` : label;
+  const titleLabel = escapeBlessedInline(normalizeMemberTitle(title));
+  const prefix = `${escapeBlessedInline(numberLabel)}${status}${escapeBlessedInline(age)}`;
+  return isClosed ? `{gray-fg}${prefix}${titleLabel}{/gray-fg}` : `${prefix}${titleLabel}`;
 }
 
 export function formatMemberListHeader(sortMode: TuiMemberSortMode = 'kind'): string {

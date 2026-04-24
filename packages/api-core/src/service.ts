@@ -360,6 +360,12 @@ export type TuiClusterDetail = {
 export type TuiThreadDetail = {
   thread: ThreadDto;
   summaries: Partial<Record<'problem_summary' | 'solution_summary' | 'maintainer_signal_summary' | 'dedupe_summary', string>>;
+  topFiles: Array<{
+    path: string;
+    status: string | null;
+    additions: number;
+    deletions: number;
+  }>;
   neighbors: SearchHitDto['neighbors'];
 };
 
@@ -3504,6 +3510,7 @@ export class GHCrawlService {
         summaries[summary.summary_kind] = summary.summary_text;
       }
     }
+    const topFiles = this.getTopChangedFiles(row.id, 5);
 
     let neighbors: SearchHitDto['neighbors'] = [];
     if (params.includeNeighbors !== false) {
@@ -3526,8 +3533,33 @@ export class GHCrawlService {
     return {
       thread: threadToDto(row, clusterMembership?.cluster_id ?? null),
       summaries,
+      topFiles,
       neighbors,
     };
+  }
+
+  private getTopChangedFiles(threadId: number, limit: number): TuiThreadDetail['topFiles'] {
+    const latestRevision = this.db
+      .prepare(
+        `select id
+         from thread_revisions
+         where thread_id = ?
+         order by id desc
+         limit 1`,
+      )
+      .get(threadId) as { id: number } | undefined;
+    if (!latestRevision) return [];
+
+    return this.db
+      .prepare(
+        `select cf.path, cf.status, cf.additions, cf.deletions
+         from thread_code_snapshots cs
+         join thread_changed_files cf on cf.snapshot_id = cs.id
+         where cs.thread_revision_id = ?
+         order by (cf.additions + cf.deletions) desc, cf.path asc
+         limit ?`,
+      )
+      .all(latestRevision.id, limit) as TuiThreadDetail['topFiles'];
   }
 
   async rerunAction(request: ActionRequest): Promise<ActionResponse> {

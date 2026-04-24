@@ -3338,6 +3338,30 @@ test('tui cluster detail and thread detail expose members, summaries, and neighb
          values (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(11, 'title', 'text-embedding-3-large', 2, 'hash-title-43', '[0.95,0.05]', now, now);
+    service.db
+      .prepare(
+        `insert into thread_revisions (id, thread_id, source_updated_at, content_hash, title_hash, body_hash, labels_hash, created_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(1000, 10, now, 'hash-42', 'title-hash', 'body-hash', 'labels-hash', now);
+    service.db
+      .prepare(
+        `insert into thread_code_snapshots (id, thread_revision_id, base_sha, head_sha, files_changed, additions, deletions, patch_digest, created_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(2000, 1000, 'base', 'head', 2, 14, 4, 'patch-digest', now);
+    service.db
+      .prepare(
+        `insert into thread_changed_files (snapshot_id, path, status, additions, deletions, previous_path, patch_hash)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(2000, 'apps/cli/src/tui/app.ts', 'modified', 10, 2, null, 'patch-1');
+    service.db
+      .prepare(
+        `insert into thread_changed_files (snapshot_id, path, status, additions, deletions, previous_path, patch_hash)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(2000, 'README.md', 'modified', 4, 2, null, 'patch-2');
 
     const detail = service.getTuiClusterDetail({ owner: 'openclaw', repo: 'openclaw', clusterId: 100 });
     assert.equal(detail.totalCount, 2);
@@ -3353,6 +3377,12 @@ test('tui cluster detail and thread detail expose members, summaries, and neighb
     assert.equal(threadDetail.thread.htmlUrl, 'https://github.com/openclaw/openclaw/issues/42');
     assert.equal(threadDetail.summaries.problem_summary, 'Downloads hang before completion.');
     assert.equal(threadDetail.summaries.dedupe_summary, 'Transfer stalls near completion.');
+    assert.deepEqual(threadDetail.topFiles[0], {
+      path: 'apps/cli/src/tui/app.ts',
+      status: 'modified',
+      additions: 10,
+      deletions: 2,
+    });
     assert.equal(threadDetail.neighbors[0]?.number, 43);
   } finally {
     service.close();
