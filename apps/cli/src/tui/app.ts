@@ -1305,6 +1305,9 @@ export function renderDetailPane(
         ? 'No neighbors available.'
         : 'Neighbors load when the detail pane is focused.';
   const body = renderMarkdownForTerminal(thread.body ?? '(no body)');
+  const referenceLinks = getThreadReferenceLinks(threadDetail);
+  const linksSection =
+    referenceLinks.length > 0 ? `\n\n{bold}Links{/bold}\n${referenceLinks.map((url, index) => `${index + 1}. ${escapeBlessedText(url)}`).join('\n')}` : '';
   return [
     `{bold}${thread.kind === 'pull_request' ? 'PR' : 'Issue'} #${thread.number}{/bold}  ${escapeBlessedText(thread.title)}`,
     `{cyan-fg}${escapeBlessedText(clusterTitle.name)}{/cyan-fg}  C${clusterDetail.clusterId}${escapeBlessedText(representativeLabel)}`,
@@ -1317,6 +1320,7 @@ export function renderDetailPane(
     '',
     `{bold}Main{/bold}`,
     body,
+    linksSection,
     `\n\n{bold}Neighbors{/bold}\n${neighbors}`,
   ]
     .filter(Boolean)

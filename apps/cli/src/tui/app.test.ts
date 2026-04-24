@@ -55,7 +55,7 @@ test('renderDetailPane escapes user-provided text before rendering into a tags-e
       closedAtLocal: null,
       closeReasonLocal: null,
       title: 'Bad {bold}title{/bold}',
-      body: 'Body with {red-fg}tags{/red-fg}',
+      body: 'Body with {red-fg}tags{/red-fg} and https://example.com/body-link',
       authorLogin: 'dev{cyan-fg}',
       htmlUrl: 'https://example.com/{oops}',
       labels: ['bug{green-fg}'],
@@ -82,6 +82,8 @@ test('renderDetailPane escapes user-provided text before rendering into a tags-e
   assert.match(rendered, /Cluster signal:/);
   assert.match(rendered, /Main/);
   assert.match(rendered, /Body with \\{red-fg\\}tags\\{\/red-fg\\}/);
+  assert.match(rendered, /Links/);
+  assert.match(rendered, /1\. https:\/\/example\.com\/body-link/);
   assert.match(rendered, /Summary \\{yellow-fg\\}text\\{\/yellow-fg\\}/);
   assert.match(rendered, /Neighbor \\{blue-fg\\}title\\{\/blue-fg\\}/);
   assert.ok(rendered.indexOf('Cluster signal:') < rendered.indexOf('{bold}Main{/bold}'));
