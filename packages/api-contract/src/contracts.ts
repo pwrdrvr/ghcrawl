@@ -247,6 +247,7 @@ export const refreshRequestSchema = z.object({
   sync: z.boolean().optional(),
   embed: z.boolean().optional(),
   cluster: z.boolean().optional(),
+  includeCode: z.boolean().optional(),
 });
 export type RefreshRequest = z.infer<typeof refreshRequestSchema>;
 
