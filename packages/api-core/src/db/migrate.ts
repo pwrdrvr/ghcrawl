@@ -51,6 +51,7 @@ const migrationStatements = [
     body text not null,
     is_bot integer not null default 0,
     raw_json text not null,
+    raw_json_blob_id integer references blobs(id) on delete set null,
     created_at_gh text,
     updated_at_gh text,
     unique(thread_id, comment_type, github_id)
@@ -503,6 +504,13 @@ export function migrate(db: SqliteDatabase): void {
   }
   if (!threadColumns.has('close_reason_local')) {
     db.exec('alter table threads add column close_reason_local text');
+  }
+
+  const commentColumns = new Set(
+    (db.prepare('pragma table_info(comments)').all() as Array<{ name: string }>).map((column) => column.name),
+  );
+  if (!commentColumns.has('raw_json_blob_id')) {
+    db.exec('alter table comments add column raw_json_blob_id integer references blobs(id) on delete set null');
   }
 
   const clusterColumns = new Set(

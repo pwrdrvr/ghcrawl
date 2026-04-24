@@ -345,6 +345,7 @@ test('syncRepository fetches comments, reviews, and review comments when include
         {
           id: 200,
           body: 'same here',
+          payload: 'x'.repeat(5000),
           created_at: '2026-03-09T00:00:00Z',
           updated_at: '2026-03-09T00:00:00Z',
           user: { login: 'bob', type: 'User' },
@@ -393,6 +394,13 @@ test('syncRepository fetches comments, reviews, and review comments when include
 
     const commentCount = service.db.prepare('select count(*) as count from comments').get() as { count: number };
     assert.equal(commentCount.count, 3);
+    const largeComment = service.db
+      .prepare("select raw_json, raw_json_blob_id from comments where comment_type = 'issue_comment' limit 1")
+      .get() as { raw_json: string; raw_json_blob_id: number | null };
+    assert.equal(largeComment.raw_json, '{}');
+    assert.equal(typeof largeComment.raw_json_blob_id, 'number');
+    const blob = service.db.prepare('select storage_kind from blobs where id = ?').get(largeComment.raw_json_blob_id) as { storage_kind: string };
+    assert.equal(blob.storage_kind, 'file');
   } finally {
     service.close();
   }

@@ -99,7 +99,7 @@ import {
 } from './config.js';
 import { migrate } from './db/migrate.js';
 import { openDb, type SqliteDatabase } from './db/sqlite.js';
-import { readTextBlob } from './db/blob-store.js';
+import { readTextBlob, storeTextBlob } from './db/blob-store.js';
 import { buildCanonicalDocument, isBotLikeAuthor } from './documents/normalize.js';
 import { makeGitHubClient, type GitHubClient } from './github/client.js';
 import { OpenAiProvider, type AiProvider } from './openai/provider.js';
@@ -398,6 +398,7 @@ const SYNC_BATCH_SIZE = 100;
 const SYNC_BATCH_DELAY_MS = 5000;
 const STALE_CLOSED_SWEEP_LIMIT = 1000;
 const CLUSTER_PROGRESS_INTERVAL_MS = 5000;
+const RAW_JSON_INLINE_THRESHOLD_BYTES = 4096;
 const CLUSTER_PARALLEL_MIN_EMBEDDINGS = 5000;
 const EMBED_ESTIMATED_CHARS_PER_TOKEN = 3;
 const EMBED_MAX_ITEM_TOKENS = 7000;
@@ -4082,6 +4083,17 @@ export class GHCrawlService {
     return path.join(path.dirname(this.config.dbPath), '.ghcrawl-store');
   }
 
+  private rawJsonStorage(rawJson: string, mediaType: string): { inlineJson: string; blobId: number | null } {
+    if (Buffer.byteLength(rawJson, 'utf8') <= RAW_JSON_INLINE_THRESHOLD_BYTES) {
+      return { inlineJson: rawJson, blobId: null };
+    }
+    const blob = storeTextBlob(this.db, this.blobStoreRoot(), rawJson, {
+      mediaType,
+      inlineThresholdBytes: RAW_JSON_INLINE_THRESHOLD_BYTES,
+    });
+    return { inlineJson: '{}', blobId: blob.id };
+  }
+
   private async applyClosedOverlapSweep(params: {
     repoId: number;
     owner: string;
@@ -4271,12 +4283,13 @@ export class GHCrawlService {
   private replaceComments(threadId: number, comments: CommentSeed[]): void {
     const insert = this.db.prepare(
       `insert into comments (
-        thread_id, github_id, comment_type, author_login, author_type, body, is_bot, raw_json, created_at_gh, updated_at_gh
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        thread_id, github_id, comment_type, author_login, author_type, body, is_bot, raw_json, raw_json_blob_id, created_at_gh, updated_at_gh
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const tx = this.db.transaction((commentRows: CommentSeed[]) => {
       this.db.prepare('delete from comments where thread_id = ?').run(threadId);
       for (const comment of commentRows) {
+        const raw = this.rawJsonStorage(comment.rawJson, `application/vnd.ghcrawl.${comment.commentType}.raw+json`);
         insert.run(
           threadId,
           comment.githubId,
@@ -4285,7 +4298,8 @@ export class GHCrawlService {
           comment.authorType,
           comment.body,
           comment.isBot ? 1 : 0,
-          comment.rawJson,
+          raw.inlineJson,
+          raw.blobId,
           comment.createdAtGh,
           comment.updatedAtGh,
         );
