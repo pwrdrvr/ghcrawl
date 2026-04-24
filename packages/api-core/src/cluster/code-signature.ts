@@ -1,6 +1,11 @@
 import crypto from 'node:crypto';
 
 const TOKEN_RE = /[a-zA-Z0-9_.$/-]+/g;
+const MAX_PATCH_CHARS_FOR_HUNKS = 120_000;
+const MAX_PATCH_CHARS_PER_FILE = 20_000;
+const MAX_FILES_FOR_HUNK_EXTRACTION = 100;
+const GENERATED_OR_SETUP_PATH_RE =
+  /(^|\/)(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|npm-shrinkwrap\.json|Cargo\.lock|Gemfile\.lock|poetry\.lock|go\.sum|dist|build|coverage|vendor|generated)(\/|$)/i;
 
 export type PullFileMetadata = {
   filename: string;
@@ -104,7 +109,17 @@ export function extractHunkSignatures(path: string, patch: string | null | undef
 
 export function buildCodeSnapshotSignature(files: Array<Record<string, unknown>>): CodeSnapshotSignature {
   const normalizedFiles = files.map(normalizePullFile).filter((file) => file.filename.length > 0);
-  const hunkSignatures = normalizedFiles.flatMap((file) => extractHunkSignatures(file.filename, file.patch));
+  const totalPatchChars = normalizedFiles.reduce((total, file) => total + (file.patch?.length ?? 0), 0);
+  const shouldExtractHunks =
+    normalizedFiles.length <= MAX_FILES_FOR_HUNK_EXTRACTION && totalPatchChars <= MAX_PATCH_CHARS_FOR_HUNKS;
+  const hunkSignatures = shouldExtractHunks
+    ? normalizedFiles.flatMap((file) => {
+        if (isPatchTooBroadForHunks(file)) {
+          return [];
+        }
+        return extractHunkSignatures(file.filename, file.patch);
+      })
+    : [];
   const patchDigest = sha256(
     JSON.stringify(
       normalizedFiles.map((file) => ({
@@ -113,7 +128,7 @@ export function buildCodeSnapshotSignature(files: Array<Record<string, unknown>>
         previousFilename: file.previousFilename,
         additions: file.additions,
         deletions: file.deletions,
-        patchHash: file.patch ? sha256(file.patch) : null,
+        patchHash: shouldHashPatch(file) ? sha256(file.patch ?? '') : null,
       })),
     ),
   );
@@ -123,4 +138,17 @@ export function buildCodeSnapshotSignature(files: Array<Record<string, unknown>>
     patchDigest,
     hunkSignatures,
   };
+}
+
+function isPatchTooBroadForHunks(file: PullFileMetadata): boolean {
+  return (
+    !file.patch ||
+    file.patch.length > MAX_PATCH_CHARS_PER_FILE ||
+    file.changes > 2_000 ||
+    GENERATED_OR_SETUP_PATH_RE.test(file.filename)
+  );
+}
+
+function shouldHashPatch(file: PullFileMetadata): boolean {
+  return Boolean(file.patch) && file.patch!.length <= MAX_PATCH_CHARS_PER_FILE && !GENERATED_OR_SETUP_PATH_RE.test(file.filename);
 }
