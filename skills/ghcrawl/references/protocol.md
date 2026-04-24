@@ -10,19 +10,20 @@ Do not start with `ghcrawl --help` or `<subcommand> --help`. Use the command sur
 
 ### `ghcrawl doctor --json`
 
-Health and auth smoke check.
+Local setup and token-presence check.
 
 Use this only when needed. Treat the result as a gate:
 
-- If GitHub/OpenAI auth is missing or unhealthy, stay read-only.
-- If GitHub/OpenAI auth is healthy, API-backed commands are available, but still require explicit user direction.
+- If the GitHub token is missing, stay read-only.
+- If the GitHub token is present, API-backed GitHub commands are available, but still require explicit user direction.
+- If the OpenAI key is missing, avoid summary and embedding commands.
 
 Do not call this automatically on every skill invocation. Use it when:
 
 - the user explicitly asked for API-backed work
-- or a read-only request failed and local setup/auth may be the reason
+- or a read-only request failed and local setup may be the reason
 
-If the user asked only for read-only analysis, missing auth is not itself a blocker. Work from the existing local dataset through the CLI.
+If the user asked only for read-only analysis, missing tokens are not themselves a blocker. Work from the existing local dataset through the CLI.
 
 ### `ghcrawl configure --json`
 
@@ -58,22 +59,6 @@ Useful flags:
 - `--numbers 42,43,44`
 - `--kind issue|pull_request`
 - `--include-closed`
-
-### `ghcrawl author owner/repo --login <user> --json`
-
-Read path for one local GitHub actor.
-
-Use this when you want to inspect a user's identity, repo-local activity stats, open authored items, and strongest stored same-author similarity match for each item.
-
-Useful flags:
-
-- `--include-closed`
-
-Returns:
-
-- `actor`
-- `stats`
-- `threads[]`
 
 ### `ghcrawl refresh owner/repo`
 
@@ -266,7 +251,6 @@ pnpm --filter ghcrawl cli runs owner/repo --limit 20 --json
 pnpm --filter ghcrawl cli threads owner/repo --numbers 12345 --json
 pnpm --filter ghcrawl cli threads owner/repo --numbers 42,43,44 --json
 pnpm --filter ghcrawl cli threads owner/repo --numbers 42,43,44 --include-closed --json
-pnpm --filter ghcrawl cli author owner/repo --login lqquan --json
 pnpm --filter ghcrawl cli refresh owner/repo
 pnpm --filter ghcrawl cli clusters owner/repo --min-size 10 --limit 20 --sort recent --json
 pnpm --filter ghcrawl cli clusters owner/repo --min-size 10 --limit 20 --sort recent --include-closed --json
@@ -282,7 +266,7 @@ If the supported CLI path still fails, hangs, or returns unusable output, stop a
 
 ## Suggested analysis flow
 
-1. Start read-only with `clusters`, `cluster-detail`, `threads`, `author`, `runs`, `search`, or `neighbors`
+1. Start read-only with `clusters`, `cluster-detail`, `threads`, `runs`, `search`, or `neighbors`
 2. Only if API-backed work is needed or a read-only request failed, run `ghcrawl doctor --json`
 3. If auth is unavailable, stay read-only
 4. Only if doctor is healthy and the user explicitly asked, run `ghcrawl refresh owner/repo`
@@ -290,4 +274,4 @@ If the supported CLI path still fails, hangs, or returns unusable output, stop a
 6. `ghcrawl clusters owner/repo --min-size 10 --limit 20 --sort recent --json`
 7. `ghcrawl cluster-detail owner/repo --id <cluster-id> --json`
 8. `ghcrawl cluster-explain owner/repo --id <cluster-id> --json` when evidence or governance matters
-9. optionally `threads`, `author`, `search`, or `neighbors` with `--json`
+9. optionally `threads`, `search`, or `neighbors` with `--json`

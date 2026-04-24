@@ -52,9 +52,7 @@ These are settled unless the user explicitly changes them:
 - sync default: metadata-only
 - comment hydration: opt-in
 - kNN strategy: exact local cosine search first
-- secret modes:
-  - plaintext config storage
-  - 1Password CLI metadata + env injection
+- token input: read bare `GITHUB_TOKEN` / `OPENAI_API_KEY` from env, `.env.local`, or config JSON
 
 ## Local Environment Contract
 
@@ -127,7 +125,6 @@ The product must keep these machine-facing surfaces working:
 - `ghcrawl refresh owner/repo --json`
 - `ghcrawl runs owner/repo --json`
 - `ghcrawl threads owner/repo --numbers <n,n,...> --json`
-- `ghcrawl author owner/repo --login <user> --json` for actor identity, repo stats, and authored threads
 - `ghcrawl close-thread owner/repo --number <thread-number> --json`
 - `ghcrawl close-cluster owner/repo --id <cluster-id> --json`
 - `ghcrawl embed owner/repo --json`
@@ -151,8 +148,6 @@ The product must keep these machine-facing surfaces working:
 - `GET /repositories`
 - `GET /runs`
 - `GET /threads`
-- `GET /author`
-- `GET /author-threads`
 - `GET /search`
 - `GET /neighbors`
 - `GET /clusters`
@@ -206,7 +201,7 @@ The installable skill lives in:
 
 - keep DB-backed operational state in SQLite, not in config
 - keep user preferences in config
-- keep secret values out of repo files
+- keep token values out of repo files
 - default to stable machine-readable interfaces before adding new UI affordances
 - prefer exact local search until there is measured evidence that a separate vector service is required
 

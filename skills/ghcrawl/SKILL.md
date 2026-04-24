@@ -67,7 +67,6 @@ ghcrawl durable-clusters owner/repo --member-limit 10 --json
 ghcrawl cluster-detail owner/repo --id 123 --member-limit 20 --body-chars 280 --json
 ghcrawl cluster-explain owner/repo --id 123 --member-limit 20 --event-limit 50 --json
 ghcrawl threads owner/repo --numbers 42,43,44 --json
-ghcrawl author owner/repo --login lqquan --json
 ghcrawl search owner/repo --query "download stalls" --mode hybrid --json
 ghcrawl neighbors owner/repo --number 42 --limit 10 --json
 ghcrawl configure --json
@@ -86,15 +85,11 @@ If the user explicitly wants to inspect those records, add `--include-closed`.
 
 Use `threads --numbers 12345` when you need to find the cluster for one specific issue/PR number. The returned thread record includes `clusterId`. If it is non-null, follow with `cluster-detail --id <clusterId>` for snapshot details or `cluster-explain --id <clusterId>` for durable evidence and governance.
 
-Use `author --login <user>` when the user asks about a contributor or maintainer. It returns actor identity, repo-local activity stats, authored threads, and the strongest same-author similarity match for each thread.
-
 Use `runs` when freshness, repeated failures, or background pipeline status matters. It returns recent sync, summary, embedding, and cluster runs with status, timestamps, stats, and errors.
 
 Use `configure --json` when you need to confirm the currently selected summary model or embedding basis before suggesting an expensive refresh.
 
 Use `threads --numbers ...` when you need a batch of specific issue/PR records. Do not pay the CLI startup cost 10 times for 10 separate single-thread lookups.
-
-Use `author --login ...` when you need one author's open threads and their strongest stored same-author similarity matches in one call.
 
 If the user explicitly asks to mark a local issue/PR or cluster closed, use:
 

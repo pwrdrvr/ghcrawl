@@ -25,29 +25,46 @@ If you are working from source or maintaining the repo, use [CONTRIBUTING.md](ht
 
 ## Requirements
 
-Normal `ghcrawl` use needs both:
+Normal `ghcrawl` crawl use needs:
 
 - a GitHub personal access token
-- an OpenAI API key
 
-GitHub is required to crawl issue and PR data. OpenAI is required for embeddings and the maintainer clustering and search workflow. If you already have a populated local DB you can still browse it without live keys, but a fresh `sync` + `embed` + `cluster` or `refresh` run needs both.
+OpenAI is optional and only needed when you run summary or embedding workflows. Deterministic sync, fingerprinting, and clustering can run without it.
 
 ## Quick Start
 
 ```bash
-ghcrawl init
+export GITHUB_TOKEN=github_pat_...
 ghcrawl configure
 ghcrawl doctor
 ghcrawl refresh owner/repo
 ghcrawl tui owner/repo
 ```
 
-`ghcrawl init` runs the setup wizard. It can either:
+`ghcrawl` reads bare tokens from environment variables, `.env.local`, or `~/.config/ghcrawl/config.json`. No setup wizard or external secret provider is required.
 
-- save plaintext keys in `~/.config/ghcrawl/config.json`
-- or guide you through a 1Password CLI (`op`) setup that keeps keys out of the config file
+`ghcrawl refresh owner/repo` is the main pipeline command. It pulls the latest open GitHub issues and pull requests, summarizes changed items only when the active embedding basis depends on summaries, refreshes vectors, and rebuilds the clusters you browse in the TUI.
 
-`ghcrawl refresh owner/repo` is the main pipeline command. It pulls the latest open GitHub issues and pull requests, summarizes changed items when the active embedding basis depends on summaries, refreshes vectors, and rebuilds the clusters you browse in the TUI.
+## One-Time Migration
+
+Upgrading to this release changes the local vector and cluster pipeline:
+
+- vectors now use a persistent `vectorlite` sidecar index
+- the active vector is one vector per open thread
+- old multi-row `document_embeddings` are removed after the first successful rebuild
+
+For an existing repo, the one-time migration command is:
+
+```bash
+ghcrawl refresh owner/repo
+```
+
+Important notes:
+
+- `refresh` performs the migration; plain `sync` does not
+- with the default `title_original` basis, the migration rebuilds vectors and clusters without running LLM summaries
+- if you switch to `title_summary`, `refresh` also runs the summarize step before embedding
+- after the first successful migration refresh, ghcrawl removes legacy embeddings, compacts the local DB, and rebuilds clusters from the current vectors
 
 ## Typical Commands
 
@@ -101,10 +118,10 @@ ghcrawl refresh owner/repo
 
 ### TUI Screenshots
 
-| User open issue/PR list modal | Refresh modal |
+| Issue/PR list modal | Refresh modal |
 | --- | --- |
 | ![User open issue and PR list modal](https://raw.githubusercontent.com/pwrdrvr/ghcrawl/main/docs/images/ghcrawl-tui-user-modal.png) | ![GitHub, embed, and cluster refresh modal](https://raw.githubusercontent.com/pwrdrvr/ghcrawl/main/docs/images/ghcrawl-tui-refresh-modal.png) |
-| Press `u` to open the current user's issue and PR list modal. | Press `g` to open the GitHub/embed/cluster refresh modal. |
+| Browse open issue and PR records from local SQLite. | Press `g` to open the GitHub/embed/cluster refresh modal. |
 
 | Closed members in a cluster | Fully closed cluster |
 | --- | --- |
@@ -128,26 +145,22 @@ ghcrawl embed owner/repo    # generate or refresh the single active vector per t
 ghcrawl cluster owner/repo  # rebuild local related-work clusters from the current vectors (local-only, but can take ~10 minutes on a ~12k issue/PR repo)
 ```
 
-Run them in that order. If your embedding basis is `title_summary`, `refresh` automatically inserts the summarize stage before embed for you.
+Run them in that order. If your embedding basis is `title_summary`, `refresh` automatically inserts the summarize stage before embed for you. With the default `title_original` basis, `refresh` does not summarize unless you run `summarize` explicitly.
 
-## Init And Doctor
+## Tokens And Doctor
 
 First run:
 
 ```bash
-ghcrawl init
+export GITHUB_TOKEN=github_pat_...
 ghcrawl doctor
 ```
 
-`init` behavior:
+Token loading order:
 
-- prompts you to choose one of two secret-storage modes:
-  - `plaintext`: saves both keys to `~/.config/ghcrawl/config.json`
-  - `1Password CLI`: stores only vault and item metadata and tells you how to run `ghcrawl` through `op`
-- if you choose plaintext storage, init warns that anyone who can read that file can use your keys and that resulting API charges are your responsibility
-- if you choose 1Password CLI mode, init tells you to create a Secure Note with concealed fields named:
-  - `GITHUB_TOKEN`
-  - `OPENAI_API_KEY`
+- environment variables: `GITHUB_TOKEN`, `OPENAI_API_KEY`
+- workspace `.env.local`
+- user config: `~/.config/ghcrawl/config.json`
 
 GitHub token guidance:
 
@@ -162,10 +175,9 @@ GitHub token guidance:
 
 - config file presence and path
 - local DB path wiring
-- GitHub token presence, token-shape validation, and a live auth smoke check
-- OpenAI key presence, key-shape validation, and a live auth smoke check
+- GitHub token presence
+- OpenAI key presence for optional summary and embedding commands
 - `vectorlite` runtime readiness
-- if init is configured for 1Password CLI but you forgot to run through your `op` wrapper, doctor tells you that explicitly
 
 ## Configure
 
@@ -180,35 +192,12 @@ ghcrawl configure --embedding-basis title_original
 Current defaults:
 
 - summary model: `gpt-5-mini`
-- embedding basis: `title_summary` (`title + dedupe summary`)
+- embedding basis: `title_original` (`title + original body`)
 - vector backend: `vectorlite`
 
 Changing the summary model or embedding basis makes the next `refresh` rebuild vectors and clusters for that repo.
 
-### 1Password CLI Example
-
-If you choose 1Password CLI mode, create a 1Password Secure Note with concealed fields named exactly:
-
-- `GITHUB_TOKEN`
-- `OPENAI_API_KEY`
-
-Then add this wrapper to `~/.zshrc`:
-
-```bash
-ghcrawl-op() {
-  env GITHUB_TOKEN="$(op read 'op://Private/ghcrawl/GITHUB_TOKEN')" \
-      OPENAI_API_KEY="$(op read 'op://Private/ghcrawl/OPENAI_API_KEY')" \
-      ghcrawl "$@"
-}
-```
-
-Then use:
-
-```bash
-ghcrawl-op doctor
-ghcrawl-op refresh owner/repo
-ghcrawl-op tui owner/repo
-```
+If you opt into `title_summary`, ghcrawl summarizes before embedding and uses `title + dedupe summary` as the active vector text. On `openclaw/openclaw`, that improved non-solo cluster membership by about 50% versus `title_original`, but it adds OpenAI spend. A first summarize of roughly `18k` open issues and PRs in that repo typically costs about `$15-$30` with `gpt-5-mini`; later refreshes are usually much cheaper because only changed items need summaries.
 
 ## Using The CLI To Extract JSON Data
 
@@ -217,25 +206,43 @@ These commands are intended more for scripts, bots, and agent integrations than 
 ```bash
 ghcrawl threads owner/repo --numbers 42,43,44 --json
 ghcrawl threads owner/repo --numbers 42,43,44 --include-closed --json
-ghcrawl author owner/repo --login lqquan --json
 ghcrawl close-thread owner/repo --number 42 --json
 ghcrawl close-cluster owner/repo --id 123 --json
 ghcrawl clusters owner/repo --min-size 10 --limit 20 --json
 ghcrawl clusters owner/repo --min-size 10 --limit 20 --include-closed --json
+ghcrawl durable-clusters owner/repo --member-limit 10 --json
 ghcrawl cluster-detail owner/repo --id 123 --json
 ghcrawl cluster-detail owner/repo --id 123 --include-closed --json
+ghcrawl cluster-explain owner/repo --id 123 --member-limit 20 --event-limit 50 --json
 ghcrawl search owner/repo --query "download stalls" --json
 ```
 
 Use `threads --numbers ...` when you want several specific issue or PR records in one CLI call instead of paying process startup overhead repeatedly.
-
-Use `author --login ...` when you want all currently open issue/PR records from one user plus the strongest stored same-author similarity match for each item.
 
 By default, JSON list commands filter out locally closed issues/PRs and completely closed clusters. Use `--include-closed` when you need to inspect those records too.
 
 Use `close-thread` when you know a local issue/PR should be treated as closed before the next GitHub sync catches up. If that was the last open item in its cluster, `ghcrawl` automatically marks the cluster closed too.
 
 Use `close-cluster` when you want to locally suppress a whole cluster from default JSON exploration without waiting for a rebuild.
+
+## Durable Cluster Governance
+
+The durable cluster commands operate on stable cluster identities, not one-off run snapshots:
+
+```bash
+ghcrawl durable-clusters owner/repo --member-limit 10 --json
+ghcrawl cluster-explain owner/repo --id 123 --json
+ghcrawl exclude-cluster-member owner/repo --id 123 --number 42 --reason "false positive" --json
+ghcrawl include-cluster-member owner/repo --id 123 --number 42 --reason "same root cause" --json
+ghcrawl set-cluster-canonical owner/repo --id 123 --number 42 --reason "best root issue" --json
+ghcrawl merge-clusters owner/repo --source 123 --target 456 --reason "same incident" --json
+ghcrawl split-cluster owner/repo --source 123 --numbers 42,43 --reason "separate root cause" --json
+ghcrawl cluster owner/repo --number 42 --json
+```
+
+Use `cluster-explain` when you need to answer why a durable cluster exists. It returns the stable slug, aliases, governed memberships, overrides, event history, and pairwise evidence sources such as deterministic fingerprints, hunk overlap, and vector-backed edges.
+
+Maintainer overrides are sticky. If you exclude a thread from a durable cluster, future clustering records that decision and will not silently re-add it to the same cluster. `cluster --number` refreshes only one durable neighborhood, which is the cheaper path after a small sync or a manual governance edit.
 
 ## Cost To Operate
 
@@ -270,16 +277,18 @@ npx skills add -g pwrdrvr/ghcrawl
 The skill is built around the stable JSON CLI surface and is intentionally conservative:
 
 - default mode assumes no valid API keys and stays read-only
-- API-backed operations only become available after `ghcrawl doctor --json` shows healthy auth
+- API-backed operations only need the relevant bare token in env, `.env.local`, or config JSON
 - even then, `refresh`, `sync`, `embed`, and `cluster` should only run when the user explicitly asks for them
 - JSON list commands hide locally closed issues/PRs and closed clusters by default unless `--include-closed` is passed
 
 ```bash
 ghcrawl doctor --json
 ghcrawl refresh owner/repo
+ghcrawl runs owner/repo --limit 20 --json
 ghcrawl threads owner/repo --numbers 42,43,44 --json
 ghcrawl clusters owner/repo --min-size 10 --limit 20 --sort recent --json
 ghcrawl cluster-detail owner/repo --id 123 --member-limit 20 --body-chars 280 --json
+ghcrawl cluster-explain owner/repo --id 123 --member-limit 20 --event-limit 50 --json
 ```
 
 ### Video Walkthrough
@@ -300,7 +309,7 @@ The agent and build contract for this repo lives in [SPEC.md](https://github.com
 - `embed` defaults to `text-embedding-3-large` with `dimensions=1024`
 - `embed` maintains one active vector per thread, stored in a persistent `vectorlite` sidecar index
 - `embed` stores an input hash per thread and will not resubmit unchanged text for re-embedding
-- the default embedding basis is `title + dedupe summary`; use `ghcrawl configure` to switch to `title + original body`
+- the default embedding basis is `title + original body`; use `ghcrawl configure --embedding-basis title_summary` if you want to summarize before embedding
 - `sync --since` accepts ISO timestamps and relative durations like `15m`, `2h`, `7d`, and `1mo`
 - `sync --limit <count>` is the best smoke-test path on a busy repository
 - `tui` remembers sort order and min cluster size per repository in the persisted config file
