@@ -11,6 +11,7 @@ import {
   formatClusterListHeader,
   formatClusterListLabel,
   formatClusterShortName,
+  getThreadReferenceLinks,
   getRepositoryChoices,
   parseOwnerRepoValue,
   renderMarkdownForTerminal,
@@ -199,7 +200,7 @@ test('buildThreadContextMenuItems exposes thread actions for right-click menus',
       closedAtLocal: null,
       closeReasonLocal: null,
       title: 'Example',
-      body: null,
+      body: 'See [run](https://example.com/run) and https://example.com/raw.',
       authorLogin: 'dev',
       htmlUrl: 'https://example.com/42',
       labels: [],
@@ -212,12 +213,41 @@ test('buildThreadContextMenuItems exposes thread actions for right-click menus',
 
   assert.deepEqual(
     items.map((item) => item.action),
-    ['open', 'copy-url', 'copy-title', 'copy-markdown-link', 'load-neighbors', 'close'],
+    ['open', 'copy-url', 'copy-title', 'copy-markdown-link', 'open-first-link', 'copy-first-link', 'load-neighbors', 'close'],
   );
 });
 
 test('buildThreadContextMenuItems only closes when no thread is selected', () => {
   assert.deepEqual(buildThreadContextMenuItems(null), [{ label: 'Close', action: 'close' }]);
+});
+
+test('getThreadReferenceLinks extracts unique body and summary links', () => {
+  const links = getThreadReferenceLinks({
+    thread: {
+      id: 1,
+      repoId: 1,
+      number: 42,
+      kind: 'issue',
+      state: 'open',
+      isClosed: false,
+      closedAtGh: null,
+      closedAtLocal: null,
+      closeReasonLocal: null,
+      title: 'Example',
+      body: 'See [run](https://example.com/run), https://example.com/raw.',
+      authorLogin: 'dev',
+      htmlUrl: 'https://example.com/42',
+      labels: [],
+      updatedAtGh: '2026-03-09T00:00:00Z',
+      clusterId: 1,
+    },
+    summaries: {
+      dedupe_summary: 'same as https://example.com/raw and https://example.com/summary',
+    },
+    neighbors: [],
+  });
+
+  assert.deepEqual(links, ['https://example.com/run', 'https://example.com/raw', 'https://example.com/summary']);
 });
 
 test('getRepositoryChoices sorts by most recent update and includes the new-repo action', () => {

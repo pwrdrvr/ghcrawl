@@ -70,7 +70,15 @@ type MouseEventArg = blessed.Widgets.Events.IMouseEventArg & {
   button?: 'left' | 'middle' | 'right' | 'unknown';
 };
 
-export type ThreadContextAction = 'open' | 'copy-url' | 'copy-title' | 'copy-markdown-link' | 'load-neighbors' | 'close';
+export type ThreadContextAction =
+  | 'open'
+  | 'copy-url'
+  | 'copy-title'
+  | 'copy-markdown-link'
+  | 'open-first-link'
+  | 'copy-first-link'
+  | 'load-neighbors'
+  | 'close';
 
 export type ThreadContextMenuItem = {
   label: string;
@@ -688,6 +696,17 @@ export async function startTui(params: StartTuiParams): Promise<void> {
         } else if (item.action === 'copy-markdown-link') {
           const markdownLink = `[#${selectedThread.number} ${selectedThread.title}](${selectedThread.htmlUrl})`;
           status = copyTextToClipboard(markdownLink) ? 'Copied markdown link' : 'Clipboard copy failed';
+        } else if (item.action === 'open-first-link') {
+          const url = getThreadReferenceLinks(threadDetail).at(0);
+          if (url) {
+            openUrl(url);
+            status = `Opened ${url}`;
+          } else {
+            status = 'No referenced links found';
+          }
+        } else if (item.action === 'copy-first-link') {
+          const url = getThreadReferenceLinks(threadDetail).at(0);
+          status = url ? (copyTextToClipboard(url) ? 'Copied referenced link' : 'Clipboard copy failed') : 'No referenced links found';
         } else if (item.action === 'load-neighbors') {
           loadSelectedThreadDetail(true);
           status = `Loaded neighbors for #${threadDetail?.thread.number ?? selectedThread.number}`;
@@ -1344,6 +1363,33 @@ export function renderMarkdownForTerminal(markdown: string): string {
   return rendered.join('\n').replace(/\n{4,}/g, '\n\n\n').trimEnd();
 }
 
+export function getThreadReferenceLinks(threadDetail: TuiThreadDetail | null): string[] {
+  if (!threadDetail) return [];
+  return uniqueStrings([
+    ...extractMarkdownLinks(threadDetail.thread.body ?? ''),
+    ...Object.values(threadDetail.summaries).flatMap((summary) => extractMarkdownLinks(summary ?? '')),
+  ]).filter((url) => url !== threadDetail.thread.htmlUrl);
+}
+
+function extractMarkdownLinks(markdown: string): string[] {
+  const urls: string[] = [];
+  for (const match of markdown.matchAll(/\[[^\]]+\]\((https?:\/\/[^)\s]+)\)/g)) {
+    urls.push(stripTrailingUrlPunctuation(match[1] ?? ''));
+  }
+  for (const match of markdown.matchAll(/(^|[\s(<])(https?:\/\/[^\s<>)]+)/g)) {
+    urls.push(stripTrailingUrlPunctuation(match[2] ?? ''));
+  }
+  return urls.filter(Boolean);
+}
+
+function stripTrailingUrlPunctuation(url: string): string {
+  return url.replace(/[.,;:!?]+$/g, '');
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
 type SummaryKey = NonNullable<keyof TuiThreadDetail['summaries']>;
 
 const SUMMARY_SECTION_ORDER: SummaryKey[] = ['problem_summary', 'solution_summary', 'maintainer_signal_summary', 'dedupe_summary'];
@@ -1426,11 +1472,18 @@ export function buildThreadContextMenuItems(threadDetail: TuiThreadDetail | null
   if (!threadDetail) {
     return [{ label: 'Close', action: 'close' }];
   }
+  const referenceLinks = getThreadReferenceLinks(threadDetail);
   return [
     { label: 'Open in browser', action: 'open' },
     { label: 'Copy URL', action: 'copy-url' },
     { label: 'Copy title', action: 'copy-title' },
     { label: 'Copy Markdown link', action: 'copy-markdown-link' },
+    ...(referenceLinks.length > 0
+      ? [
+          { label: 'Open first body link', action: 'open-first-link' as const },
+          { label: 'Copy first body link', action: 'copy-first-link' as const },
+        ]
+      : []),
     { label: 'Load neighbors', action: 'load-neighbors' },
     { label: 'Close', action: 'close' },
   ];
