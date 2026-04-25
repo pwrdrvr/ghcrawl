@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 
 import { IterableMapper } from '@shutterstock/p-map-iterable';
@@ -73,6 +72,7 @@ import {
   pruneWeakCrossKindEdges,
   type PerSourceScoreEntry,
 } from './cluster/edge-aggregation.js';
+import { resolveEdgeWorkerRuntime } from './cluster/edge-worker-runtime.js';
 import { buildSourceKindEdges } from './cluster/exact-edges.js';
 import { humanKeyForValue, humanKeyStableSlug } from './cluster/human-key.js';
 import { LLM_KEY_SUMMARY_PROMPT_VERSION, llmKeyInputHash } from './cluster/llm-key-summary.js';
@@ -5007,7 +5007,7 @@ export class GHCrawlService {
       return aggregated;
     }
 
-    const workerRuntime = this.resolveEdgeWorkerRuntime();
+    const workerRuntime = resolveEdgeWorkerRuntime();
     const shouldParallelize = workerRuntime !== null && sourceKinds.length > 1 && totalItems >= CLUSTER_PARALLEL_MIN_EMBEDDINGS && os.availableParallelism() > 1;
     if (!shouldParallelize) {
       let processedItems = 0;
@@ -5108,15 +5108,6 @@ export class GHCrawlService {
       )
       .get(repoId, sourceKind) as { count: number };
     return row.count;
-  }
-
-  private resolveEdgeWorkerRuntime(): { url: URL } | null {
-    const jsUrl = new URL('./cluster/edge-worker.js', import.meta.url);
-    if (existsSync(fileURLToPath(jsUrl))) {
-      return { url: jsUrl };
-    }
-    // Source-mode runs do not have a compiled worker entrypoint, so keep clustering in-process.
-    return null;
   }
 
   private persistClusterRun(
