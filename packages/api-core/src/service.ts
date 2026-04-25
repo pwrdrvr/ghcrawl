@@ -63,11 +63,8 @@ import {
 
 import { buildClusters, buildRefinedClusters, buildSizeBoundedClusters } from './cluster/build.js';
 import { buildCodeSnapshotSignature } from './cluster/code-signature.js';
-import { buildDeterministicClusterGraphFromFingerprints, extractDeterministicRefs } from './cluster/deterministic-engine.js';
-import {
-  loadDeterministicClusterableThreadMeta,
-  type DeterministicClusterableThreadMeta,
-} from './cluster/deterministic-thread-loader.js';
+import { buildDeterministicClusterGraphFromFingerprints } from './cluster/deterministic-engine.js';
+import { loadDeterministicClusterableThreadMeta } from './cluster/deterministic-thread-loader.js';
 import {
   collectSourceKindScores,
   edgeKey,
@@ -78,6 +75,7 @@ import {
 } from './cluster/edge-aggregation.js';
 import { resolveEdgeWorkerRuntime } from './cluster/edge-worker-runtime.js';
 import { buildSourceKindEdges } from './cluster/exact-edges.js';
+import { materializeLatestDeterministicFingerprints } from './cluster/fingerprint-materializer.js';
 import { humanKeyForValue, humanKeyStableSlug } from './cluster/human-key.js';
 import { LLM_KEY_SUMMARY_PROMPT_VERSION, llmKeyInputHash } from './cluster/llm-key-summary.js';
 import { listStoredClusterNeighbors } from './cluster/neighbor-queries.js';
@@ -90,14 +88,11 @@ import {
   upsertClusterGroup,
   upsertClusterMembership,
   upsertSimilarityEdgeEvidence,
-  upsertThreadFingerprint,
   upsertThreadRevision,
   upsertThreadCodeSnapshot,
   upsertThreadKeySummary,
 } from './cluster/persistent-store.js';
 import {
-  buildDeterministicThreadFingerprint,
-  fingerprintFeatureHash,
   THREAD_FINGERPRINT_ALGORITHM_VERSION,
   type DeterministicThreadFingerprint,
 } from './cluster/thread-fingerprint.js';
@@ -1117,7 +1112,7 @@ export class GHCrawlService {
           repoId,
           Array.from(new Set(fingerprintThreadIds)),
         );
-        this.materializeLatestDeterministicFingerprints(fingerprintItems, params.onProgress);
+        materializeLatestDeterministicFingerprints(this.db, fingerprintItems, params.onProgress);
       }
       const finishedAt = nowIso();
       const reconciledOpenCloseAt = shouldSweepClosedOverlap || shouldReconcileMissingOpenThreads ? finishedAt : null;
@@ -1678,7 +1673,7 @@ export class GHCrawlService {
       const seedThreadIds = seedThread ? [seedThread.id] : undefined;
       const deterministicItems = loadDeterministicClusterableThreadMeta(this.db, repository.id);
       const fingerprintItems = seedThreadIds ? deterministicItems.filter((item) => seedThreadIds.includes(item.id)) : deterministicItems;
-      this.materializeLatestDeterministicFingerprints(fingerprintItems, params.onProgress);
+      materializeLatestDeterministicFingerprints(this.db, fingerprintItems, params.onProgress);
       const persistedFingerprints = this.loadLatestDeterministicFingerprints(deterministicItems.map((item) => item.id));
       const deterministic = buildDeterministicClusterGraphFromFingerprints(
         deterministicItems.map((item) => ({ id: item.id, number: item.number, title: item.title })),
@@ -4434,71 +4429,6 @@ export class GHCrawlService {
     }
 
     throw new Error(`Unable to shrink embedding input for #${task.threadNumber}:${task.basis} below model limits`);
-  }
-
-  private materializeLatestDeterministicFingerprints(
-    items: DeterministicClusterableThreadMeta[],
-    onProgress?: (message: string) => void,
-  ): { computed: number; skipped: number } {
-    let computed = 0;
-    let skipped = 0;
-    for (const item of items) {
-      const revisionId = upsertThreadRevision(this.db, {
-        threadId: item.id,
-        sourceUpdatedAt: item.updatedAtGh,
-        title: item.title,
-        body: item.body,
-        labels: item.labels,
-        rawJson: item.rawJson,
-      });
-      const inferredRefs = extractDeterministicRefs(`${item.title}\n${item.body ?? ''}`);
-      const featureHash = fingerprintFeatureHash({
-        linkedRefs: inferredRefs,
-        changedFiles: item.changedFiles,
-        hunkSignatures: item.hunkSignatures,
-        patchIds: item.patchIds,
-      });
-      const existing = this.db
-        .prepare(
-          `select id, feature_json
-           from thread_fingerprints
-           where thread_revision_id = ?
-             and algorithm_version = ?
-           limit 1`,
-        )
-        .get(revisionId, THREAD_FINGERPRINT_ALGORITHM_VERSION) as { id: number; feature_json: string } | undefined;
-      if (existing) {
-        const existingFeatureHash = (() => {
-          try {
-            const feature = JSON.parse(existing.feature_json) as Record<string, unknown>;
-            return typeof feature.featureHash === 'string' ? feature.featureHash : null;
-          } catch {
-            return null;
-          }
-        })();
-        if (existingFeatureHash === featureHash) {
-          skipped += 1;
-          continue;
-        }
-      }
-
-      const fingerprint = buildDeterministicThreadFingerprint({
-        threadId: item.id,
-        number: item.number,
-        kind: item.kind,
-        title: item.title,
-        body: item.body,
-        labels: item.labels,
-        linkedRefs: inferredRefs,
-        changedFiles: item.changedFiles,
-        hunkSignatures: item.hunkSignatures,
-        patchIds: item.patchIds,
-      });
-      upsertThreadFingerprint(this.db, { threadRevisionId: revisionId, fingerprint });
-      computed += 1;
-    }
-    onProgress?.(`[fingerprint] latest revisions computed=${computed} skipped=${skipped}`);
-    return { computed, skipped };
   }
 
   private loadLatestDeterministicFingerprints(threadIds: number[]): Map<number, DeterministicThreadFingerprint> {
