@@ -126,6 +126,7 @@ import { finishServiceRun, listRunHistoryForRepository, startServiceRun } from '
 import { cosineSimilarity, dotProduct, normalizeEmbedding, rankNearestNeighbors, rankNearestNeighborsByScore } from './search/exact.js';
 import { missingVectorStoreTarget, optimizeSqliteTarget } from './storage-maintenance.js';
 import { getSyncCursorState, writeSyncCursorState } from './sync/cursor.js';
+import { buildSummarySource } from './summary/source.js';
 import { getLatestTuiKeySummary, getTopChangedFiles, getTuiThreadSummaries } from './tui/thread-detail.js';
 import {
   ACTIVE_EMBED_DIMENSIONS,
@@ -1174,10 +1175,16 @@ export class GHCrawlService {
           : '[summarize] metadata-only mode; comments are excluded from the summary input',
       );
 
-      const sources = rows.map((row) => {
-        const source = this.buildSummarySource(row.id, row.title, row.body, parseArray(row.labels_json), includeComments);
-        return { ...row, ...source };
-      });
+      const sources = rows.map((row) => ({
+        ...row,
+        ...buildSummarySource(this.db, {
+          threadId: row.id,
+          title: row.title,
+          body: row.body,
+          labels: parseArray(row.labels_json),
+          includeComments,
+        }),
+      }));
 
       const pending = sources.filter((row) => {
         const latest = this.db
@@ -4486,59 +4493,6 @@ export class GHCrawlService {
       .run(threadId, thread.title, thread.body, canonical.rawText, canonical.dedupeText, nowIso());
 
     this.db.prepare('update threads set content_hash = ?, updated_at = ? where id = ?').run(canonical.contentHash, nowIso(), threadId);
-  }
-
-  private buildSummarySource(
-    threadId: number,
-    title: string,
-    body: string | null,
-    labels: string[],
-    includeComments: boolean,
-  ): { summaryInput: string; summaryContentHash: string } {
-    const parts = [`title: ${normalizeSummaryText(title)}`];
-    const normalizedBody = normalizeSummaryText(body ?? '');
-    if (normalizedBody) {
-      parts.push(`body: ${normalizedBody}`);
-    }
-    if (labels.length > 0) {
-      parts.push(`labels: ${labels.join(', ')}`);
-    }
-
-    if (includeComments) {
-      const comments = this.db
-        .prepare(
-          `select body, author_login, author_type, is_bot
-           from comments
-           where thread_id = ?
-           order by coalesce(created_at_gh, updated_at_gh) asc, id asc`,
-        )
-        .all(threadId) as Array<{ body: string; author_login: string | null; author_type: string | null; is_bot: number }>;
-
-      const humanComments = comments
-        .filter((comment) =>
-          !isBotLikeAuthor({
-            authorLogin: comment.author_login,
-            authorType: comment.author_type,
-            isBot: comment.is_bot === 1,
-          }),
-        )
-        .map((comment) => {
-          const author = comment.author_login ? `@${comment.author_login}` : 'unknown';
-          const normalized = normalizeSummaryText(comment.body);
-          return normalized ? `${author}: ${normalized}` : '';
-        })
-        .filter(Boolean);
-
-      if (humanComments.length > 0) {
-        parts.push(`discussion:\n${humanComments.join('\n')}`);
-      }
-    }
-
-    const summaryInput = parts.join('\n\n');
-    const summaryContentHash = stableContentHash(
-      `summary:${SUMMARY_PROMPT_VERSION}:${includeComments ? 'with-comments' : 'metadata-only'}\n${summaryInput}`,
-    );
-    return { summaryInput, summaryContentHash };
   }
 
   private buildEmbeddingTasks(params: {
