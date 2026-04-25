@@ -146,10 +146,6 @@ import {
   SUMMARY_PROMPT_VERSION,
   SYNC_BATCH_DELAY_MS,
   SYNC_BATCH_SIZE,
-  VECTORLITE_CLUSTER_EXPANDED_CANDIDATE_K,
-  VECTORLITE_CLUSTER_EXPANDED_EF_SEARCH,
-  VECTORLITE_CLUSTER_EXPANDED_K,
-  VECTORLITE_CLUSTER_EXPANDED_MULTIPLIER,
 } from './service-constants.js';
 import type {
   ActiveVectorRow,
@@ -207,6 +203,7 @@ import {
   userType,
 } from './service-utils.js';
 import type { VectorNeighbor, VectorQueryParams, VectorStore } from './vector/store.js';
+import { getVectorliteClusterQuery, normalizedDistanceToScore, normalizedEmbeddingBuffer, parseStoredVector, vectorBlob } from './vector/encoding.js';
 import { VectorliteStore } from './vector/vectorlite-store.js';
 
 export type { DoctorResult, TuiClusterDetail, TuiClusterMember, TuiClusterSortMode, TuiClusterSummary, TuiRefreshState, TuiRepoStats, TuiSnapshot, TuiThreadDetail } from './service-types.js';
@@ -1680,7 +1677,7 @@ export class GHCrawlService {
         const queryVectorItems = seedThreadIds ? vectorItems.filter((item) => seedThreadIds.includes(item.id)) : vectorItems;
         const activeSourceKind = this.activeVectorSourceKind();
         const activeIds = new Set(vectorItems.map((item) => item.id));
-        const annQuery = this.getVectorliteClusterQuery(vectorItems.length, k);
+        const annQuery = getVectorliteClusterQuery(vectorItems.length, k);
         let processed = 0;
         let lastProgressAt = Date.now();
 
@@ -1971,7 +1968,7 @@ export class GHCrawlService {
           tempDb.transaction(() => {
             const loadStartedAt = Date.now();
             for (const row of source.rows) {
-              insert.run(row.id, this.normalizedEmbeddingBuffer(row.normalizedEmbedding));
+              insert.run(row.id, normalizedEmbeddingBuffer(row.normalizedEmbedding));
             }
             loadMs += Date.now() - loadStartedAt;
           })();
@@ -1988,7 +1985,7 @@ export class GHCrawlService {
           let lastProgressAt = Date.now();
           const queryLoadStartedAt = Date.now();
           for (const row of source.rows) {
-            const candidates = query.all(this.normalizedEmbeddingBuffer(row.normalizedEmbedding)) as Array<{
+            const candidates = query.all(normalizedEmbeddingBuffer(row.normalizedEmbedding)) as Array<{
               rowid: number;
               distance: number;
             }>;
@@ -1999,7 +1996,7 @@ export class GHCrawlService {
                 if (candidate.rowid === row.id) {
                   return -1;
                 }
-                return this.normalizedDistanceToScore(candidate.distance);
+                return normalizedDistanceToScore(candidate.distance);
               },
             });
             let addedThisRow = 0;
@@ -2286,7 +2283,7 @@ export class GHCrawlService {
     if (targetRow) {
       responseThread = targetRow;
       const candidateRows = this.queryNearestWithRecovery(repository.id, repository.fullName, {
-        vector: this.parseStoredVector(targetRow.vector_json),
+        vector: parseStoredVector(targetRow.vector_json),
         limit: limit * 2,
         candidateK: Math.max(limit * 8, 64),
         excludeThreadId: targetRow.id,
@@ -3705,7 +3702,7 @@ export class GHCrawlService {
       const update = this.db.prepare('update thread_vectors set vector_json = ?, updated_at = ? where thread_id = ?');
       this.db.transaction(() => {
         for (const row of rows) {
-          update.run(this.vectorBlob(JSON.parse(row.vector_json) as number[]), nowIso(), row.thread_id);
+          update.run(vectorBlob(JSON.parse(row.vector_json) as number[]), nowIso(), row.thread_id);
         }
       })();
       onProgress?.(`[cleanup] compacted ${inlineJsonVectorCount} inline SQLite vector payload(s) from JSON to binary blobs`);
@@ -5272,14 +5269,6 @@ export class GHCrawlService {
     }));
   }
 
-  private normalizedEmbeddingBuffer(values: number[]): Buffer {
-    return Buffer.from(Float32Array.from(values).buffer);
-  }
-
-  private normalizedDistanceToScore(distance: number): number {
-    return 1 - distance / 2;
-  }
-
   private loadClusterableThreadMeta(repoId: number): {
     items: Array<{ id: number; number: number; title: string }>;
     sourceKinds: EmbeddingSourceKind[];
@@ -5346,7 +5335,7 @@ export class GHCrawlService {
       id: row.id,
       number: row.number,
       title: row.title,
-      embedding: this.parseStoredVector(row.vector_json),
+      embedding: parseStoredVector(row.vector_json),
     }));
   }
 
@@ -6512,7 +6501,7 @@ export class GHCrawlService {
         this.config.embedModel,
         embedding.length,
         contentHash,
-        this.vectorBlob(embedding),
+        vectorBlob(embedding),
         this.config.vectorBackend,
         nowIso(),
         nowIso(),
@@ -6554,48 +6543,6 @@ export class GHCrawlService {
       )
       .get(repoId) as { count: number };
     return row.count;
-  }
-
-  private getVectorliteClusterQuery(totalItems: number, requestedK: number): {
-    limit: number;
-    candidateK: number;
-    efSearch?: number;
-  } {
-    if (totalItems < CLUSTER_PARALLEL_MIN_EMBEDDINGS) {
-      return {
-        limit: requestedK,
-        candidateK: Math.max(requestedK * 16, 64),
-      };
-    }
-
-    const limit = Math.min(
-      Math.max(requestedK * VECTORLITE_CLUSTER_EXPANDED_MULTIPLIER, VECTORLITE_CLUSTER_EXPANDED_K),
-      Math.max(1, totalItems - 1),
-    );
-    const candidateK = Math.min(
-      Math.max(limit * 16, VECTORLITE_CLUSTER_EXPANDED_CANDIDATE_K),
-      Math.max(limit, totalItems - 1),
-    );
-    return {
-      limit,
-      candidateK,
-      efSearch: Math.max(candidateK * 2, VECTORLITE_CLUSTER_EXPANDED_EF_SEARCH),
-    };
-  }
-
-  private vectorBlob(values: number[]): Buffer {
-    return Buffer.from(Float32Array.from(values).buffer);
-  }
-
-  private parseStoredVector(value: Buffer | string): number[] {
-    if (typeof value === 'string') {
-      if (!value) {
-        throw new Error('Stored vector payload is empty. Run refresh or embed first.');
-      }
-      return JSON.parse(value) as number[];
-    }
-    const floats = new Float32Array(value.buffer, value.byteOffset, Math.floor(value.byteLength / Float32Array.BYTES_PER_ELEMENT));
-    return Array.from(floats);
   }
 
   private upsertEmbedding(threadId: number, sourceKind: EmbeddingSourceKind, contentHash: string, embedding: number[]): void {
