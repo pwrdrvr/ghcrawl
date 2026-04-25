@@ -218,6 +218,20 @@ ghcrawl optimize owner/repo --json
 
 Use `threads --numbers ...` when you want several specific issue or PR records in one CLI call instead of paying process startup overhead repeatedly.
 
+## Portable Git Sync Export
+
+The main SQLite database is a local cache and can grow large because it stores raw GitHub payloads, documents, FTS data, vectors, comments, run history, and other rebuildable evidence. Do not put `~/.config/ghcrawl/ghcrawl.db` directly into a git file sync workflow.
+
+Use `export-sync` to write a compact portable core DB:
+
+```bash
+ghcrawl export-sync owner/repo --output ./owner__repo.sync.db --json
+```
+
+The export keeps the syncable state: repository metadata, issue/PR metadata, bounded body excerpts, latest revisions, deterministic fingerprints, LLM key summaries, sync/pipeline state, and durable cluster identities/memberships/overrides. It intentionally excludes bulky or rebuildable caches such as raw JSON blobs, comments, documents/FTS, vectors, code snapshots, cluster event history, run logs, and similarity edge evidence.
+
+Default body excerpts are capped at `512` characters per thread. Raise or lower that with `--body-chars <count>` depending on how much preview text you want in the portable file.
+
 By default, cluster JSON commands show locally closed clusters. Use `--hide-closed` when you only want active clusters. Thread list commands still hide locally closed issues/PRs unless `--include-closed` is passed.
 
 Use `close-thread` when you know a local issue/PR should be treated as closed before the next GitHub sync catches up. If that was the last open item in its cluster, `ghcrawl` automatically marks the cluster closed too.
