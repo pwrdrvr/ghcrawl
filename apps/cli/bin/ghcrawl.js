@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -50,7 +50,17 @@ if (!process.env.GHCRAWL_NODE_REEXEC && existsSync(nodeVersionPath)) {
   }
 }
 
-if (!existsSync(sourceEntrypoint) && existsSync(distEntrypoint)) {
+function isDistFresh() {
+  if (!existsSync(distEntrypoint)) return false;
+  if (!existsSync(sourceEntrypoint)) return true;
+  try {
+    return statSync(distEntrypoint).mtimeMs >= statSync(sourceEntrypoint).mtimeMs;
+  } catch {
+    return false;
+  }
+}
+
+if (process.env.GHCRAWL_DEV_SOURCE !== '1' && isDistFresh()) {
   const entrypoint = await import(pathToFileURL(distEntrypoint).href);
   const exitCode =
     typeof entrypoint.runCli === 'function'

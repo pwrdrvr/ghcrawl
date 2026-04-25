@@ -25,7 +25,7 @@ function runFixture(binDir: string): string {
   }).trim();
 }
 
-test('bin launcher prefers source when source and dist are both present', () => {
+test('bin launcher prefers fresh dist when source and dist are both present', () => {
   const fixtureDir = createFixture();
   try {
     mkdirSync(path.join(fixtureDir, 'src'));
@@ -33,7 +33,26 @@ test('bin launcher prefers source when source and dist are both present', () => 
     writeFileSync(path.join(fixtureDir, 'src', 'main.ts'), "process.stdout.write('source');\n", 'utf8');
     writeFileSync(path.join(fixtureDir, 'dist', 'main.js'), "export async function run() { process.stdout.write('dist'); }\n", 'utf8');
 
-    assert.equal(runFixture(fixtureDir), 'source');
+    assert.equal(runFixture(fixtureDir), 'dist');
+  } finally {
+    rmSync(fixtureDir, { recursive: true, force: true });
+  }
+});
+
+test('bin launcher uses source when explicitly requested', () => {
+  const fixtureDir = createFixture();
+  try {
+    mkdirSync(path.join(fixtureDir, 'src'));
+    mkdirSync(path.join(fixtureDir, 'dist'));
+    writeFileSync(path.join(fixtureDir, 'src', 'main.ts'), "process.stdout.write('source');\n", 'utf8');
+    writeFileSync(path.join(fixtureDir, 'dist', 'main.js'), "export async function run() { process.stdout.write('dist'); }\n", 'utf8');
+
+    const output = execFileSync(process.execPath, [path.join(fixtureDir, 'bin', 'ghcrawl.js')], {
+      cwd: fixtureDir,
+      encoding: 'utf8',
+      env: { ...process.env, GHCRAWL_DEV_SOURCE: '1' },
+    }).trim();
+    assert.equal(output, 'source');
   } finally {
     rmSync(fixtureDir, { recursive: true, force: true });
   }

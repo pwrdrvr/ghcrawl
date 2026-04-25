@@ -448,6 +448,15 @@ const migrationStatements = [
     created_at text not null,
     primary key (cluster_id, alias_slug)
   )
+  `,
+  `
+  create table if not exists cluster_closures (
+    cluster_id integer primary key references cluster_groups(id) on delete cascade,
+    reason text not null,
+    actor_kind text not null,
+    created_at text not null,
+    updated_at text not null
+  )
   `
 ];
 
@@ -533,4 +542,5 @@ export function migrate(db: SqliteDatabase): void {
   db.exec('create index if not exists idx_cluster_memberships_cluster_updated on cluster_memberships(cluster_id, updated_at)');
   db.exec('create index if not exists idx_cluster_overrides_repo_target on cluster_overrides(repo_id, cluster_id, thread_id, action)');
   db.exec('create index if not exists idx_cluster_events_cluster_created on cluster_events(cluster_id, created_at)');
+  db.exec('create index if not exists idx_cluster_closures_updated on cluster_closures(updated_at)');
 }

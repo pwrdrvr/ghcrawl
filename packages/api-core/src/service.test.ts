@@ -4070,6 +4070,11 @@ test('manual cluster closure is shown by default and can be hidden from JSON sum
       closed_at: string | null;
     };
     assert.deepEqual(durable, { status: 'active', closed_at: null });
+    const closure = service.db.prepare('select reason, actor_kind from cluster_closures where cluster_id = ?').get(7) as {
+      reason: string;
+      actor_kind: string;
+    };
+    assert.deepEqual(closure, { reason: 'manual', actor_kind: 'user' });
 
     assert.equal(service.listClusterSummaries({ owner: 'openclaw', repo: 'openclaw', minSize: 0, includeClosed: false }).clusters.length, 0);
     assert.equal(service.listClusterSummaries({ owner: 'openclaw', repo: 'openclaw', minSize: 0 }).clusters.length, 1);
@@ -4086,6 +4091,14 @@ test('manual cluster closure is shown by default and can be hidden from JSON sum
     assert.equal(snapshot.clusters.length, 1);
     assert.equal(snapshot.clusters[0]?.isClosed, true);
     assert.equal(snapshot.clusters[0]?.closeReasonLocal, 'manual');
+
+    service.db.prepare('delete from cluster_members where cluster_id = ?').run(100);
+    service.db.prepare('delete from clusters where id = ?').run(100);
+    const prunedSnapshot = service.getTuiSnapshot({ owner: 'openclaw', repo: 'openclaw', minSize: 0 });
+    assert.equal(prunedSnapshot.clusters.length, 1);
+    assert.equal(prunedSnapshot.clusters[0]?.clusterId, 7);
+    assert.equal(prunedSnapshot.clusters[0]?.isClosed, true);
+    assert.equal(prunedSnapshot.clusters[0]?.closeReasonLocal, 'manual');
   } finally {
     service.close();
   }
