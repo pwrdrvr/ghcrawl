@@ -505,6 +505,14 @@ function isEffectivelyClosed(row: { state: string; closed_at_local: string | nul
   return row.state !== 'open' || row.closed_at_local !== null;
 }
 
+function isClosedGitHubPayload(payload: Record<string, unknown>): boolean {
+  const state = typeof payload.state === 'string' ? payload.state.toLowerCase() : null;
+  if (state !== null && state !== 'open') return true;
+  if (typeof payload.closed_at === 'string' && payload.closed_at.length > 0) return true;
+  if (typeof payload.merged_at === 'string' && payload.merged_at.length > 0) return true;
+  return false;
+}
+
 function isMissingGitHubResourceError(error: unknown): boolean {
   const status = typeof (error as { status?: unknown })?.status === 'number' ? Number((error as { status?: unknown }).status) : null;
   if (status === 404 || status === 410) {
@@ -1523,21 +1531,30 @@ export class GHCrawlService {
         const kind = isPr ? 'pull_request' : 'issue';
         params.onProgress?.(`[sync] ${index + 1}/${items.length} ${kind} #${number}`);
         try {
-          const shouldFetchPullPayload = isPr && includeCode;
+          const itemIsClosed = isClosedGitHubPayload(item);
+          const shouldFetchPullPayload = isPr && includeCode && !itemIsClosed;
           const threadPayload = shouldFetchPullPayload ? await github.getPull(params.owner, params.repo, number, reporter) : item;
+          const threadIsClosed = isClosedGitHubPayload(threadPayload);
           const threadId = this.upsertThread(repoId, kind, threadPayload, crawlStartedAt);
-          if (includeCode && isPr) {
+          if (threadIsClosed && (includeComments || includeCode)) {
+            params.onProgress?.(
+              `[sync] ${kind} #${number} is closed; metadata-only update, skipping comment/code hydration and fingerprint refresh`,
+            );
+          }
+          if (includeCode && isPr && !threadIsClosed) {
             const files = await github.listPullFiles(params.owner, params.repo, number, reporter);
             this.persistThreadCodeSnapshot(threadId, threadPayload, files);
             codeFilesSynced += files.length;
           }
-          if (includeComments) {
+          if (includeComments && !threadIsClosed) {
             const comments = await this.fetchThreadComments(params.owner, params.repo, number, isPr, reporter);
             this.replaceComments(threadId, comments);
             commentsSynced += comments.length;
           }
           this.refreshDocument(threadId);
-          fingerprintThreadIds.push(threadId);
+          if (!threadIsClosed) {
+            fingerprintThreadIds.push(threadId);
+          }
           threadsSynced += 1;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);

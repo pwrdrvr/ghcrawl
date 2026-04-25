@@ -533,6 +533,106 @@ test('syncRepository hydrates pull request code snapshots when includeCode is en
   }
 });
 
+test('syncRepository skips comment/code hydration and fingerprint refresh when a PR closes during sync', async () => {
+  let getPullCalls = 0;
+  let listIssueCommentCalls = 0;
+  let listPullReviewCalls = 0;
+  let listPullReviewCommentCalls = 0;
+  let listPullFileCalls = 0;
+  const messages: string[] = [];
+  const service = makeTestService({
+    getRepo: async () => ({ id: 1, full_name: 'openclaw/openclaw' }),
+    listRepositoryIssues: async () => [
+      {
+        id: 101,
+        number: 43,
+        state: 'open',
+        title: 'Downloader PR',
+        body: 'Implements a fix.',
+        html_url: 'https://github.com/openclaw/openclaw/pull/43',
+        labels: [{ name: 'bug' }],
+        assignees: [],
+        pull_request: { url: 'https://api.github.com/repos/openclaw/openclaw/pulls/43' },
+        user: { login: 'alice', type: 'User' },
+      },
+    ],
+    getIssue: async () => {
+      throw new Error('not expected');
+    },
+    getPull: async (_owner, _repo, number) => {
+      getPullCalls += 1;
+      return {
+        id: 101,
+        number,
+        state: 'closed',
+        title: 'Downloader PR',
+        body: 'Implements a fix.',
+        html_url: `https://github.com/openclaw/openclaw/pull/${number}`,
+        labels: [{ name: 'bug' }],
+        assignees: [],
+        pull_request: { url: `https://api.github.com/repos/openclaw/openclaw/pulls/${number}` },
+        user: { login: 'alice', type: 'User' },
+        draft: false,
+        closed_at: '2026-03-10T00:00:00Z',
+        merged_at: '2026-03-10T00:00:00Z',
+        updated_at: '2026-03-10T00:00:00Z',
+      };
+    },
+    listIssueComments: async () => {
+      listIssueCommentCalls += 1;
+      return [];
+    },
+    listPullReviews: async () => {
+      listPullReviewCalls += 1;
+      return [];
+    },
+    listPullReviewComments: async () => {
+      listPullReviewCommentCalls += 1;
+      return [];
+    },
+    listPullFiles: async () => {
+      listPullFileCalls += 1;
+      return [];
+    },
+  });
+
+  try {
+    const result = await service.syncRepository({
+      owner: 'openclaw',
+      repo: 'openclaw',
+      includeComments: true,
+      includeCode: true,
+      onProgress: (message) => messages.push(message),
+    });
+
+    assert.equal(result.threadsSynced, 1);
+    assert.equal(result.commentsSynced, 0);
+    assert.equal(result.codeFilesSynced, 0);
+    assert.equal(getPullCalls, 1);
+    assert.equal(listIssueCommentCalls, 0);
+    assert.equal(listPullReviewCalls, 0);
+    assert.equal(listPullReviewCommentCalls, 0);
+    assert.equal(listPullFileCalls, 0);
+    assert.match(messages.join('\n'), /metadata-only update, skipping comment\/code hydration and fingerprint refresh/);
+
+    const thread = service.db
+      .prepare("select state, closed_at_gh, merged_at_gh from threads where number = 43 and kind = 'pull_request'")
+      .get() as { state: string; closed_at_gh: string | null; merged_at_gh: string | null };
+    assert.deepEqual(thread, {
+      state: 'closed',
+      closed_at_gh: '2026-03-10T00:00:00Z',
+      merged_at_gh: '2026-03-10T00:00:00Z',
+    });
+
+    const snapshotCount = service.db.prepare('select count(*) as count from thread_code_snapshots').get() as { count: number };
+    const fingerprintCount = service.db.prepare('select count(*) as count from thread_fingerprints').get() as { count: number };
+    assert.equal(snapshotCount.count, 0);
+    assert.equal(fingerprintCount.count, 0);
+  } finally {
+    service.close();
+  }
+});
+
 test('summarizeRepository excludes hydrated comments by default and reports token usage', async () => {
   const summaryInputs: string[] = [];
   const service = makeTestService(
