@@ -139,6 +139,7 @@ import { cosineSimilarity, dotProduct, normalizeEmbedding, rankNearestNeighbors,
 import { missingVectorStoreTarget, optimizeSqliteTarget } from './storage-maintenance.js';
 import { getSyncCursorState, writeSyncCursorState } from './sync/cursor.js';
 import { buildKeySummaryInputText, buildSummarySource } from './summary/source.js';
+import { clusterDisplayTitle, compareTuiClusterSummary, durableClosureReason, parseMemberThreadIdSet } from './tui/cluster-format.js';
 import { getLatestTuiKeySummary, getTopChangedFiles, getTuiThreadSummaries } from './tui/thread-detail.js';
 import {
   ACTIVE_EMBED_DIMENSIONS,
@@ -3010,7 +3011,7 @@ export class GHCrawlService {
         if (!search) return true;
         return cluster.searchText.includes(search);
       })
-      .sort((left, right) => this.compareTuiClusterSummary(left, right, params.sort ?? 'size'));
+      .sort((left, right) => compareTuiClusterSummary(left, right, params.sort ?? 'size'));
 
     return {
       repository,
@@ -3495,11 +3496,6 @@ export class GHCrawlService {
     return durableClusterId;
   }
 
-  private durableClosureReason(closure: DurableTuiClosure): string | null {
-    if (closure.reason) return closure.reason;
-    return closure.status === 'merged' || closure.status === 'split' ? closure.status : null;
-  }
-
   private getDurableClosuresByRepresentative(repoId: number, representativeThreadIds: number[]): Map<number, DurableTuiClosure> {
     const uniqueThreadIds = Array.from(new Set(representativeThreadIds));
     if (uniqueThreadIds.length === 0) {
@@ -3633,7 +3629,7 @@ export class GHCrawlService {
     const selected: Array<{ row: T; memberIds: Set<number> }> = [];
 
     for (const row of sortedRows) {
-      const memberIds = this.parseMemberThreadIdSet(row.member_thread_ids);
+      const memberIds = parseMemberThreadIdSet(row.member_thread_ids);
       const duplicate = selected.some((entry) => {
         const smallerSize = Math.min(memberIds.size, entry.memberIds.size);
         if (smallerSize === 0) return false;
@@ -3649,16 +3645,6 @@ export class GHCrawlService {
     }
 
     return selected.map((entry) => entry.row);
-  }
-
-  private parseMemberThreadIdSet(value: string | null): Set<number> {
-    if (!value) return new Set();
-    return new Set(
-      value
-        .split(',')
-        .map((part) => Number(part))
-        .filter((memberId) => Number.isSafeInteger(memberId) && memberId > 0),
-    );
   }
 
   private getDurableTuiClusterSummary(repoId: number, clusterId: number): TuiClusterSummary | null {
@@ -3756,13 +3742,13 @@ export class GHCrawlService {
     const isClosed = manuallyClosed || lifecycleClosed || row.closed_member_count >= row.member_count;
     const closeReasonLocal =
       manuallyClosed || lifecycleClosed
-        ? this.durableClosureReason(closure)
+        ? durableClosureReason(closure)
         : row.closed_member_count >= row.member_count
           ? 'all_members_closed'
           : null;
     return {
       clusterId: row.cluster_id,
-      displayTitle: this.clusterDisplayTitle(row.stable_slug, row.representative_title, row.cluster_id),
+      displayTitle: clusterDisplayTitle(row.stable_slug, row.representative_title, row.cluster_id),
       isClosed,
       closedAtLocal: manuallyClosed || lifecycleClosed ? row.closed_at : null,
       closeReasonLocal,
@@ -3838,10 +3824,10 @@ export class GHCrawlService {
         row.representative_thread_id === null ? null : (durableClosures.get(row.representative_thread_id) ?? null);
       return {
         clusterId: row.cluster_id,
-        displayTitle: this.clusterDisplayTitle(clusterName, row.representative_title, row.cluster_id),
+        displayTitle: clusterDisplayTitle(clusterName, row.representative_title, row.cluster_id),
         isClosed: row.close_reason_local !== null || durableClosure !== null || row.closed_member_count >= row.member_count,
         closedAtLocal: row.closed_at_local ?? durableClosure?.closedAt ?? null,
-        closeReasonLocal: row.close_reason_local ?? (durableClosure ? this.durableClosureReason(durableClosure) : null),
+        closeReasonLocal: row.close_reason_local ?? (durableClosure ? durableClosureReason(durableClosure) : null),
         totalCount: row.member_count,
         issueCount: row.issue_count,
         pullRequestCount: row.pull_request_count,
@@ -3915,10 +3901,10 @@ export class GHCrawlService {
         : (this.getDurableClosuresByRepresentative(repoId, [row.representative_thread_id]).get(row.representative_thread_id) ?? null);
     return {
       clusterId: row.cluster_id,
-      displayTitle: this.clusterDisplayTitle(clusterName, row.representative_title, row.cluster_id),
+      displayTitle: clusterDisplayTitle(clusterName, row.representative_title, row.cluster_id),
       isClosed: row.close_reason_local !== null || durableClosure !== null || row.closed_member_count >= row.member_count,
       closedAtLocal: row.closed_at_local ?? durableClosure?.closedAt ?? null,
-      closeReasonLocal: row.close_reason_local ?? (durableClosure ? this.durableClosureReason(durableClosure) : null),
+      closeReasonLocal: row.close_reason_local ?? (durableClosure ? durableClosureReason(durableClosure) : null),
       totalCount: row.member_count,
       issueCount: row.issue_count,
       pullRequestCount: row.pull_request_count,
@@ -3936,19 +3922,6 @@ export class GHCrawlService {
         ? `repo:${repoId}:cluster:${clusterId}`
         : `repo:${repoId}:cluster-representative:${representativeThreadId}`,
     ).slug;
-  }
-
-  private clusterDisplayTitle(clusterName: string, representativeTitle: string | null, clusterId: number): string {
-    return `${clusterName}  ${representativeTitle ?? `Cluster ${clusterId}`}`;
-  }
-
-  private compareTuiClusterSummary(left: TuiClusterSummary, right: TuiClusterSummary, sort: TuiClusterSortMode): number {
-    const leftTime = left.latestUpdatedAt ? Date.parse(left.latestUpdatedAt) : 0;
-    const rightTime = right.latestUpdatedAt ? Date.parse(right.latestUpdatedAt) : 0;
-    if (sort === 'size') {
-      return right.totalCount - left.totalCount || rightTime - leftTime || left.clusterId - right.clusterId;
-    }
-    return rightTime - leftTime || right.totalCount - left.totalCount || left.clusterId - right.clusterId;
   }
 
   private async fetchThreadComments(
