@@ -97,7 +97,8 @@ import {
 } from './config.js';
 import { migrate } from './db/migrate.js';
 import { checkpointWal, openDb, type SqliteDatabase } from './db/sqlite.js';
-import { readTextBlob, storeTextBlob } from './db/blob-store.js';
+import { readTextBlob } from './db/blob-store.js';
+import { blobStoreRoot, rawJsonStorage } from './db/raw-json-store.js';
 import { buildCanonicalDocument, isBotLikeAuthor } from './documents/normalize.js';
 import { buildDoctorResult } from './doctor.js';
 import { makeGitHubClient, type GitHubClient } from './github/client.js';
@@ -147,7 +148,6 @@ import {
   KEY_SUMMARY_MAX_BODY_CHARS,
   KEY_SUMMARY_MAX_UNREAD,
   MAX_DIRECT_RECONCILE_THREADS,
-  RAW_JSON_INLINE_THRESHOLD_BYTES,
   requireFromHere,
   STALE_CLOSED_BACKFILL_LIMIT,
   STALE_CLOSED_SWEEP_LIMIT,
@@ -4218,23 +4218,8 @@ export class GHCrawlService {
       baseSha: typeof base?.sha === 'string' ? base.sha : null,
       headSha: typeof head?.sha === 'string' ? head.sha : null,
       signature: buildCodeSnapshotSignature(files),
-      storeRoot: this.blobStoreRoot(),
+      storeRoot: blobStoreRoot(this.config.dbPath),
     });
-  }
-
-  private blobStoreRoot(): string {
-    return path.join(path.dirname(this.config.dbPath), '.ghcrawl-store');
-  }
-
-  private rawJsonStorage(rawJson: string, mediaType: string): { inlineJson: string; blobId: number | null } {
-    if (Buffer.byteLength(rawJson, 'utf8') <= RAW_JSON_INLINE_THRESHOLD_BYTES) {
-      return { inlineJson: rawJson, blobId: null };
-    }
-    const blob = storeTextBlob(this.db, this.blobStoreRoot(), rawJson, {
-      mediaType,
-      inlineThresholdBytes: RAW_JSON_INLINE_THRESHOLD_BYTES,
-    });
-    return { inlineJson: '{}', blobId: blob.id };
   }
 
   private async applyClosedOverlapSweep(params: {
@@ -4448,7 +4433,7 @@ export class GHCrawlService {
     const tx = this.db.transaction((commentRows: CommentSeed[]) => {
       this.db.prepare('delete from comments where thread_id = ?').run(threadId);
       for (const comment of commentRows) {
-        const raw = this.rawJsonStorage(comment.rawJson, `application/vnd.ghcrawl.${comment.commentType}.raw+json`);
+        const raw = rawJsonStorage(this.db, this.config.dbPath, comment.rawJson, `application/vnd.ghcrawl.${comment.commentType}.raw+json`);
         insert.run(
           threadId,
           comment.githubId,
@@ -5310,11 +5295,11 @@ export class GHCrawlService {
         patchIds: stringFeature('patchIds'),
         featureHash: typeof feature.featureHash === 'string' ? feature.featureHash : '',
         minhashSignature: row.minhash_signature_blob_id
-          ? parseStringArrayJson(readTextBlob(this.db, this.blobStoreRoot(), row.minhash_signature_blob_id))
+          ? parseStringArrayJson(readTextBlob(this.db, blobStoreRoot(this.config.dbPath), row.minhash_signature_blob_id))
           : [],
         simhash64: row.simhash64,
         winnowHashes: row.winnow_hashes_blob_id
-          ? parseStringArrayJson(readTextBlob(this.db, this.blobStoreRoot(), row.winnow_hashes_blob_id))
+          ? parseStringArrayJson(readTextBlob(this.db, blobStoreRoot(this.config.dbPath), row.winnow_hashes_blob_id))
           : [],
       });
     }
