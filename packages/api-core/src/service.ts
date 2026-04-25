@@ -115,6 +115,7 @@ import {
   type PortableSyncValidationResponse,
 } from './portable/sync-store.js';
 import { cosineSimilarity, dotProduct, normalizeEmbedding, rankNearestNeighbors, rankNearestNeighborsByScore } from './search/exact.js';
+import { missingVectorStoreTarget, optimizeSqliteTarget } from './storage-maintenance.js';
 import {
   ACTIVE_EMBED_DIMENSIONS,
   ACTIVE_EMBED_PIPELINE_VERSION,
@@ -168,7 +169,6 @@ import type {
   RunTable,
   SearchResultInternal,
   SimilaritySourceKind,
-  SqliteMaintenanceStats,
   StoredEmbeddingRow,
   SyncCursorState,
   SyncOptions,
@@ -2835,7 +2835,7 @@ export class GHCrawlService {
         : null;
 
     const targets = [
-      this.optimizeSqliteTarget({
+      optimizeSqliteTarget({
         name: 'main',
         db: this.db,
         dbPath: this.config.dbPath,
@@ -2852,7 +2852,7 @@ export class GHCrawlService {
           const vectorlite = requireFromHere('vectorlite') as { vectorlitePath: () => string };
           vectorDb.loadExtension(vectorlite.vectorlitePath());
           targets.push(
-            this.optimizeSqliteTarget({
+            optimizeSqliteTarget({
               name: 'vector',
               db: vectorDb,
               dbPath: storePath,
@@ -2863,27 +2863,7 @@ export class GHCrawlService {
           vectorDb.close();
         }
       } else {
-        targets.push({
-          name: 'vector' as const,
-          path: storePath,
-          existed: false,
-          pageSize: 0,
-          pageCountBefore: 0,
-          pageCountAfter: 0,
-          freelistPagesBefore: 0,
-          freelistPagesAfter: 0,
-          bytesBefore: 0,
-          bytesAfter: 0,
-          walBytesBefore: 0,
-          walBytesAfter: 0,
-          shmBytesBefore: 0,
-          shmBytesAfter: 0,
-          sidecarBytesBefore: this.fileSize(sidecarPath),
-          sidecarBytesAfter: this.fileSize(sidecarPath),
-          bytesReclaimed: 0,
-          operations: ['skipped_missing_vector_store'],
-          durationMs: 0,
-        });
+        targets.push(missingVectorStoreTarget(storePath, sidecarPath));
       }
     }
 
@@ -2943,98 +2923,6 @@ export class GHCrawlService {
       liveDb: this.db,
       portablePath: dbPath,
     });
-  }
-
-  private optimizeSqliteTarget(params: {
-    name: 'main' | 'vector';
-    db: SqliteDatabase;
-    dbPath: string;
-    sidecarPath?: string;
-  }): OptimizeResponse['targets'][number] {
-    const startedAt = Date.now();
-    const before = this.sqliteMaintenanceStats(params.db, params.dbPath, params.sidecarPath);
-    const operations: string[] = [];
-
-    this.runMaintenanceStep(params.db, 'wal_checkpoint_truncate_before', operations, () => {
-      params.db.pragma('wal_checkpoint(TRUNCATE)');
-    });
-    this.runMaintenanceStep(params.db, 'analyze', operations, () => {
-      params.db.exec('analyze');
-    });
-    this.runMaintenanceStep(params.db, 'pragma_optimize', operations, () => {
-      params.db.pragma('optimize');
-    });
-    this.runMaintenanceStep(params.db, 'vacuum', operations, () => {
-      params.db.exec('vacuum');
-    });
-    this.runMaintenanceStep(params.db, 'wal_checkpoint_truncate_after', operations, () => {
-      params.db.pragma('wal_checkpoint(TRUNCATE)');
-    });
-
-    const after = this.sqliteMaintenanceStats(params.db, params.dbPath, params.sidecarPath);
-    const bytesBefore = before.bytes + before.walBytes + before.shmBytes;
-    const bytesAfter = after.bytes + after.walBytes + after.shmBytes;
-
-    return {
-      name: params.name,
-      path: params.dbPath,
-      existed: params.dbPath === ':memory:' || existsSync(params.dbPath),
-      pageSize: after.pageSize || before.pageSize,
-      pageCountBefore: before.pageCount,
-      pageCountAfter: after.pageCount,
-      freelistPagesBefore: before.freelistPages,
-      freelistPagesAfter: after.freelistPages,
-      bytesBefore: before.bytes,
-      bytesAfter: after.bytes,
-      walBytesBefore: before.walBytes,
-      walBytesAfter: after.walBytes,
-      shmBytesBefore: before.shmBytes,
-      shmBytesAfter: after.shmBytes,
-      sidecarBytesBefore: before.sidecarBytes,
-      sidecarBytesAfter: after.sidecarBytes,
-      bytesReclaimed: Math.max(0, bytesBefore - bytesAfter),
-      operations,
-      durationMs: Date.now() - startedAt,
-    };
-  }
-
-  private runMaintenanceStep(db: SqliteDatabase, label: string, operations: string[], step: () => void): void {
-    try {
-      step();
-      operations.push(label);
-    } catch (error) {
-      operations.push(`${label}_skipped:${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  private sqliteMaintenanceStats(db: SqliteDatabase, dbPath: string, sidecarPath?: string): SqliteMaintenanceStats {
-    return {
-      pageSize: this.safePragmaNumber(db, 'page_size'),
-      pageCount: this.safePragmaNumber(db, 'page_count'),
-      freelistPages: this.safePragmaNumber(db, 'freelist_count'),
-      bytes: this.fileSize(dbPath),
-      walBytes: this.fileSize(`${dbPath}-wal`),
-      shmBytes: this.fileSize(`${dbPath}-shm`),
-      sidecarBytes: sidecarPath ? this.fileSize(sidecarPath) : 0,
-    };
-  }
-
-  private safePragmaNumber(db: SqliteDatabase, name: string): number {
-    try {
-      const value = db.pragma(name, { simple: true }) as unknown;
-      return typeof value === 'number' && Number.isFinite(value) ? value : 0;
-    } catch {
-      return 0;
-    }
-  }
-
-  private fileSize(filePath: string): number {
-    if (filePath === ':memory:') return 0;
-    try {
-      return fs.statSync(filePath).size;
-    } catch {
-      return 0;
-    }
   }
 
   listClusterSummaries(params: {
