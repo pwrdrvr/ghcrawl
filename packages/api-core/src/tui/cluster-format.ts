@@ -27,3 +27,37 @@ export function compareTuiClusterSummary(left: TuiClusterSummary, right: TuiClus
   }
   return rightTime - leftTime || right.totalCount - left.totalCount || left.clusterId - right.clusterId;
 }
+
+export function collapseOverlappingClosedDurableRows<
+  T extends {
+    cluster_id: number;
+    member_count: number;
+    latest_updated_at: string | null;
+    member_thread_ids: string | null;
+  },
+>(rows: T[]): T[] {
+  const sortedRows = [...rows].sort((left, right) => {
+    const leftTime = left.latest_updated_at ? Date.parse(left.latest_updated_at) : 0;
+    const rightTime = right.latest_updated_at ? Date.parse(right.latest_updated_at) : 0;
+    return right.member_count - left.member_count || rightTime - leftTime || left.cluster_id - right.cluster_id;
+  });
+  const selected: Array<{ row: T; memberIds: Set<number> }> = [];
+
+  for (const row of sortedRows) {
+    const memberIds = parseMemberThreadIdSet(row.member_thread_ids);
+    const duplicate = selected.some((entry) => {
+      const smallerSize = Math.min(memberIds.size, entry.memberIds.size);
+      if (smallerSize === 0) return false;
+      let overlap = 0;
+      for (const memberId of memberIds) {
+        if (entry.memberIds.has(memberId)) overlap += 1;
+      }
+      return overlap / smallerSize >= 0.8;
+    });
+    if (!duplicate) {
+      selected.push({ row, memberIds });
+    }
+  }
+
+  return selected.map((entry) => entry.row);
+}

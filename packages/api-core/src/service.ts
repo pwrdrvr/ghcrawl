@@ -144,7 +144,7 @@ import { cosineSimilarity, dotProduct, rankNearestNeighbors, rankNearestNeighbor
 import { missingVectorStoreTarget, optimizeSqliteTarget } from './storage-maintenance.js';
 import { getSyncCursorState, writeSyncCursorState } from './sync/cursor.js';
 import { buildKeySummaryInputText, buildSummarySource } from './summary/source.js';
-import { clusterDisplayTitle, compareTuiClusterSummary, durableClosureReason, parseMemberThreadIdSet } from './tui/cluster-format.js';
+import { clusterDisplayTitle, collapseOverlappingClosedDurableRows, compareTuiClusterSummary, durableClosureReason } from './tui/cluster-format.js';
 import { getTuiRepoStats } from './tui/repo-stats.js';
 import { getLatestTuiKeySummary, getTopChangedFiles, getTuiThreadSummaries } from './tui/thread-detail.js';
 import {
@@ -3505,7 +3505,7 @@ export class GHCrawlService {
       search_text: string | null;
     }>;
 
-    return this.collapseOverlappingClosedDurableRows(
+    return collapseOverlappingClosedDurableRows(
       rows.filter((row) => row.representative_thread_id === null || !representedThreadIds.has(row.representative_thread_id)),
     )
       .map((row) =>
@@ -3514,40 +3514,6 @@ export class GHCrawlService {
           representative_title: row.representative_title ?? row.title,
         }),
       );
-  }
-
-  private collapseOverlappingClosedDurableRows<
-    T extends {
-      cluster_id: number;
-      member_count: number;
-      latest_updated_at: string | null;
-      member_thread_ids: string | null;
-    },
-  >(rows: T[]): T[] {
-    const sortedRows = [...rows].sort((left, right) => {
-      const leftTime = left.latest_updated_at ? Date.parse(left.latest_updated_at) : 0;
-      const rightTime = right.latest_updated_at ? Date.parse(right.latest_updated_at) : 0;
-      return right.member_count - left.member_count || rightTime - leftTime || left.cluster_id - right.cluster_id;
-    });
-    const selected: Array<{ row: T; memberIds: Set<number> }> = [];
-
-    for (const row of sortedRows) {
-      const memberIds = parseMemberThreadIdSet(row.member_thread_ids);
-      const duplicate = selected.some((entry) => {
-        const smallerSize = Math.min(memberIds.size, entry.memberIds.size);
-        if (smallerSize === 0) return false;
-        let overlap = 0;
-        for (const memberId of memberIds) {
-          if (entry.memberIds.has(memberId)) overlap += 1;
-        }
-        return overlap / smallerSize >= 0.8;
-      });
-      if (!duplicate) {
-        selected.push({ row, memberIds });
-      }
-    }
-
-    return selected.map((entry) => entry.row);
   }
 
   private getDurableTuiClusterSummary(repoId: number, clusterId: number): TuiClusterSummary | null {
