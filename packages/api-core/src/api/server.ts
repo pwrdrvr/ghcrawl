@@ -13,7 +13,8 @@ import {
 } from '@ghcrawl/api-contract';
 import { ZodError } from 'zod';
 
-import { GHCrawlService, parseRepoParams } from '../service.js';
+import { GHCrawlService } from '../service.js';
+import { parseRepoParams } from './params.js';
 
 function sendJson(res: http.ServerResponse, status: number, payload: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });

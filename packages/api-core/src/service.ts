@@ -1,4 +1,3 @@
-import http from 'node:http';
 import fs from 'node:fs';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
@@ -211,6 +210,7 @@ import type { VectorNeighbor, VectorQueryParams, VectorStore } from './vector/st
 import { VectorliteStore } from './vector/vectorlite-store.js';
 
 export type { DoctorResult, TuiClusterDetail, TuiClusterMember, TuiClusterSortMode, TuiClusterSummary, TuiRefreshState, TuiRepoStats, TuiSnapshot, TuiThreadDetail } from './service-types.js';
+export { parseRepoParams } from './api/params.js';
 
 export class GHCrawlService {
   readonly config: GitcrawlConfig;
@@ -6819,13 +6819,4 @@ export class GHCrawlService {
         runId,
       );
   }
-}
-
-export function parseRepoParams(url: URL): { owner: string; repo: string } {
-  const owner = url.searchParams.get('owner');
-  const repo = url.searchParams.get('repo');
-  if (!owner || !repo) {
-    throw new Error('Missing owner or repo query parameter');
-  }
-  return { owner, repo };
 }
