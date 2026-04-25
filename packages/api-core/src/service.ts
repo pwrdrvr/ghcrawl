@@ -114,7 +114,6 @@ import {
   isRepoVectorStateCurrent,
   markRepoClustersCurrent,
   markRepoVectorsCurrent,
-  writeRepoPipelineState,
 } from './pipeline-state.js';
 import {
   exportPortableSyncDatabase,
@@ -211,6 +210,12 @@ import {
 } from './service-utils.js';
 import type { VectorNeighbor, VectorQueryParams, VectorStore } from './vector/store.js';
 import { getVectorliteClusterQuery, normalizedDistanceToScore, normalizedEmbeddingBuffer, parseStoredVector, vectorBlob } from './vector/encoding.js';
+import {
+  pruneInactiveRepositoryVectors,
+  queryNearestWithRecovery,
+  rebuildRepositoryVectorStore,
+  resetRepositoryVectors,
+} from './vector/repository-maintenance.js';
 import { isCorruptedVectorIndexError, repositoryVectorStorePath, vectorStoreSidecarPath } from './vector/repository-store.js';
 import { VectorliteStore } from './vector/vectorlite-store.js';
 
@@ -3283,94 +3288,47 @@ export class GHCrawlService {
     repoFullName: string,
     params: Omit<VectorQueryParams, 'storePath' | 'dimensions'>,
   ): VectorNeighbor[] {
-    try {
-      return this.vectorStore.queryNearest({
-        ...params,
-        storePath: repositoryVectorStorePath(this.config.configDir, repoFullName),
-        dimensions: ACTIVE_EMBED_DIMENSIONS,
-      });
-    } catch (error) {
-      if (!isCorruptedVectorIndexError(error)) {
-        throw error;
-      }
-      this.rebuildRepositoryVectorStore(repoId, repoFullName);
-      return this.vectorStore.queryNearest({
-        ...params,
-        storePath: repositoryVectorStorePath(this.config.configDir, repoFullName),
-        dimensions: ACTIVE_EMBED_DIMENSIONS,
-      });
-    }
+    return queryNearestWithRecovery({
+      vectorStore: this.vectorStore,
+      configDir: this.config.configDir,
+      repoFullName,
+      dimensions: ACTIVE_EMBED_DIMENSIONS,
+      query: params,
+      rebuild: () => this.rebuildRepositoryVectorStore(repoId, repoFullName),
+    });
   }
 
   private rebuildRepositoryVectorStore(repoId: number, repoFullName: string): void {
-    this.vectorStore.resetRepository({
-      storePath: repositoryVectorStorePath(this.config.configDir, repoFullName),
+    rebuildRepositoryVectorStore({
+      vectorStore: this.vectorStore,
+      configDir: this.config.configDir,
+      repoFullName,
       dimensions: ACTIVE_EMBED_DIMENSIONS,
+      vectors: this.loadClusterableActiveVectorMeta(repoId, repoFullName),
     });
-    for (const row of this.loadClusterableActiveVectorMeta(repoId, repoFullName)) {
-      this.vectorStore.upsertVector({
-        storePath: repositoryVectorStorePath(this.config.configDir, repoFullName),
-        dimensions: ACTIVE_EMBED_DIMENSIONS,
-        threadId: row.id,
-        vector: row.embedding,
-      });
-    }
   }
 
   private resetRepositoryVectors(repoId: number, repoFullName: string): void {
-    this.db
-      .prepare(
-        `delete from thread_vectors
-         where thread_id in (select id from threads where repo_id = ?)`,
-      )
-      .run(repoId);
-    this.vectorStore.resetRepository({
-      storePath: repositoryVectorStorePath(this.config.configDir, repoFullName),
+    resetRepositoryVectors({
+      db: this.db,
+      vectorStore: this.vectorStore,
+      config: this.config,
+      repoId,
+      repoFullName,
       dimensions: ACTIVE_EMBED_DIMENSIONS,
-    });
-    writeRepoPipelineState(this.db, this.config, repoId, {
-      vectors_current_at: null,
-      clusters_current_at: null,
     });
   }
 
   private pruneInactiveRepositoryVectors(repoId: number, repoFullName: string): number {
-    const rows = this.db
-      .prepare(
-        `select tv.thread_id
-         from thread_vectors tv
-         join threads t on t.id = tv.thread_id
-         where t.repo_id = ?
-           and (t.state != 'open' or t.closed_at_local is not null)`,
-      )
-      .all(repoId) as Array<{ thread_id: number }>;
-    if (rows.length === 0) {
-      return 0;
-    }
-
-    const deleteVectorRow = this.db.prepare('delete from thread_vectors where thread_id = ?');
-    let shouldRebuildVectorStore = false;
-    this.db.transaction(() => {
-      for (const row of rows) {
-        deleteVectorRow.run(row.thread_id);
-        try {
-          this.vectorStore.deleteVector({
-            storePath: repositoryVectorStorePath(this.config.configDir, repoFullName),
-            dimensions: ACTIVE_EMBED_DIMENSIONS,
-            threadId: row.thread_id,
-          });
-        } catch (error) {
-          if (!isCorruptedVectorIndexError(error)) {
-            throw error;
-          }
-          shouldRebuildVectorStore = true;
-        }
-      }
-    })();
-    if (shouldRebuildVectorStore) {
-      this.rebuildRepositoryVectorStore(repoId, repoFullName);
-    }
-    return rows.length;
+    return pruneInactiveRepositoryVectors({
+      db: this.db,
+      vectorStore: this.vectorStore,
+      configDir: this.config.configDir,
+      repoId,
+      repoFullName,
+      dimensions: ACTIVE_EMBED_DIMENSIONS,
+      rebuild: () => this.rebuildRepositoryVectorStore(repoId, repoFullName),
+    });
   }
 
   private cleanupMigratedRepositoryArtifacts(repoId: number, repoFullName: string, onProgress?: (message: string) => void): void {
