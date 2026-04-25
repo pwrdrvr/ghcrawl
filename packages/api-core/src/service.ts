@@ -77,6 +77,7 @@ import { buildSourceKindEdges } from './cluster/exact-edges.js';
 import { humanKeyForValue, humanKeyStableSlug } from './cluster/human-key.js';
 import { LLM_KEY_SUMMARY_PROMPT_VERSION, llmKeyInputHash } from './cluster/llm-key-summary.js';
 import { summarizeClusterQuality, summarizeClusterSizes } from './cluster/quality.js';
+import { getLatestClusterRun, getLatestRunClusterIdsForThread } from './cluster/run-queries.js';
 import {
   createPipelineRun,
   finishPipelineRun,
@@ -364,7 +365,7 @@ export class GHCrawlService {
          where id = ?`,
       )
       .run(closedAt, closedAt, row.id);
-    const clusterIds = this.getLatestRunClusterIdsForThread(repository.id, row.id);
+    const clusterIds = getLatestRunClusterIdsForThread(this.db, repository.id, row.id);
     const clusterClosed = this.reconcileClusterCloseState(repository.id, clusterIds) > 0;
     const updated = this.db.prepare('select * from threads where id = ? limit 1').get(row.id) as ThreadRow;
 
@@ -380,7 +381,7 @@ export class GHCrawlService {
 
   closeClusterLocally(params: { owner: string; repo: string; clusterId: number }): CloseResponse {
     const repository = this.requireRepository(params.owner, params.repo);
-    const latestRun = this.getLatestClusterRun(repository.id);
+    const latestRun = getLatestClusterRun(this.db, repository.id);
     if (!latestRun) {
       throw new Error(`No completed cluster run found for ${repository.fullName}.`);
     }
@@ -2992,7 +2993,7 @@ export class GHCrawlService {
   }): TuiSnapshot {
     const repository = this.requireRepository(params.owner, params.repo);
     const stats = this.getTuiRepoStats(repository.id);
-    const latestRun = this.getLatestClusterRun(repository.id);
+    const latestRun = getLatestClusterRun(this.db, repository.id);
     const includeClosedClusters = params.includeClosedClusters ?? true;
     const minSize = params.minSize ?? 1;
     const rawClusters = latestRun ? this.listRawTuiClusters(repository.id, latestRun.id, minSize) : [];
@@ -3060,7 +3061,7 @@ export class GHCrawlService {
     const latestEmbedding = this.db
       .prepare("select id from embedding_runs where repo_id = ? and status = 'completed' order by id desc limit 1")
       .get(repository.id) as { id: number } | undefined;
-    const latestClusterRun = this.getLatestClusterRun(repository.id);
+    const latestClusterRun = getLatestClusterRun(this.db, repository.id);
 
     return {
       repositoryUpdatedAt: repository.updatedAt,
@@ -3079,7 +3080,7 @@ export class GHCrawlService {
     const repository = this.requireRepository(params.owner, params.repo);
     const clusterRunId =
       params.clusterRunId ??
-      (this.getLatestClusterRun(repository.id)?.id ?? null);
+      (getLatestClusterRun(this.db, repository.id)?.id ?? null);
 
     const summary = clusterRunId ? this.getRawTuiClusterSummary(repository.id, clusterRunId, params.clusterId) : null;
     const durableSummary = summary ? null : this.getDurableTuiClusterSummary(repository.id, params.clusterId);
@@ -3187,7 +3188,7 @@ export class GHCrawlService {
       throw new Error(`Thread was not found for ${repository.fullName}.`);
     }
 
-    const latestRun = this.getLatestClusterRun(repository.id);
+    const latestRun = getLatestClusterRun(this.db, repository.id);
     const clusterMembership = latestRun
       ? ((this.db
           .prepare(
@@ -3272,7 +3273,7 @@ export class GHCrawlService {
          group by kind`,
       )
       .all(repoId) as Array<{ kind: 'issue' | 'pull_request'; count: number }>;
-    const latestRun = this.getLatestClusterRun(repoId);
+    const latestRun = getLatestClusterRun(this.db, repoId);
     const latestSync = (this.db
       .prepare("select finished_at from sync_runs where repo_id = ? and status = 'completed' order by id desc limit 1")
       .get(repoId) as { finished_at: string | null } | undefined) ?? null;
@@ -3351,34 +3352,8 @@ export class GHCrawlService {
     });
   }
 
-  private getLatestClusterRun(repoId: number): { id: number; finished_at: string | null } | null {
-    return (
-      (this.db
-        .prepare("select id, finished_at from cluster_runs where repo_id = ? and status = 'completed' order by id desc limit 1")
-        .get(repoId) as { id: number; finished_at: string | null } | undefined) ?? null
-    );
-  }
-
-  private getLatestRunClusterIdsForThread(repoId: number, threadId: number): number[] {
-    const latestRun = this.getLatestClusterRun(repoId);
-    if (!latestRun) {
-      return [];
-    }
-    return (
-      this.db
-        .prepare(
-          `select cm.cluster_id
-           from cluster_members cm
-           join clusters c on c.id = cm.cluster_id
-           where c.repo_id = ? and c.cluster_run_id = ? and cm.thread_id = ?
-           order by cm.cluster_id asc`,
-        )
-        .all(repoId, latestRun.id, threadId) as Array<{ cluster_id: number }>
-    ).map((row) => row.cluster_id);
-  }
-
   private reconcileClusterCloseState(repoId: number, clusterIds?: number[]): number {
-    const latestRun = this.getLatestClusterRun(repoId);
+    const latestRun = getLatestClusterRun(this.db, repoId);
     if (!latestRun) {
       return 0;
     }
@@ -4940,7 +4915,7 @@ export class GHCrawlService {
   }
 
   private listStoredClusterNeighbors(repoId: number, threadId: number, limit: number): SearchHitDto['neighbors'] {
-    const latestRun = this.getLatestClusterRun(repoId);
+    const latestRun = getLatestClusterRun(this.db, repoId);
     if (!latestRun) {
       return [];
     }
