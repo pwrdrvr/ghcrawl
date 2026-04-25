@@ -46,6 +46,7 @@ const publicCommands = [
   'version',
   'sync',
   'refresh',
+  'optimize',
   'runs',
   'threads',
   'close-thread',
@@ -605,6 +606,44 @@ test('cluster command forwards neighborhood refresh inputs', async () => {
   assert.equal(params.maxClusterSize, 24);
   assert.equal(typeof params.onProgress, 'function');
   assert.match(stdout.read(), /"edges": 3/);
+});
+
+test('optimize command forwards optional repository target', async () => {
+  const stdout = createWritableCapture();
+  const context = makeRunContext();
+  const original = GHCrawlService.prototype.optimizeStorage;
+  const received: unknown[] = [];
+
+  GHCrawlService.prototype.optimizeStorage = function optimizeStorageStub(params: unknown) {
+    received.push(params);
+    return {
+      ok: true,
+      repository: params ? { fullName: 'openclaw/openclaw' } : null,
+      startedAt: '2026-03-10T12:00:00Z',
+      finishedAt: '2026-03-10T12:00:01Z',
+      targets: [],
+      bytesReclaimed: 42,
+      message: 'optimized',
+    } as never;
+  };
+
+  try {
+    await run(['optimize'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+    await run(['optimize', 'openclaw/openclaw'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+  } finally {
+    GHCrawlService.prototype.optimizeStorage = original;
+    context.cleanup();
+  }
+
+  assert.deepEqual(received[0], undefined);
+  assert.deepEqual(received[1], { owner: 'openclaw', repo: 'openclaw' });
+  assert.match(stdout.read(), /"bytesReclaimed": 42/);
 });
 
 test('clusters command shows closed clusters by default and forwards hide-closed', async () => {

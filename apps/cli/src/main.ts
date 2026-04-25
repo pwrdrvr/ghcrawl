@@ -15,6 +15,7 @@ type CommandName =
   | 'version'
   | 'sync'
   | 'refresh'
+  | 'optimize'
   | 'runs'
   | 'threads'
   | 'close-thread'
@@ -150,6 +151,17 @@ const COMMAND_SPECS: readonly CommandSpec[] = [
       '--json  Emit machine-readable JSON output explicitly',
     ],
     examples: ['ghcrawl refresh openclaw/openclaw', 'ghcrawl refresh openclaw/openclaw --no-sync --json'],
+    agentJson: true,
+  },
+  {
+    name: 'optimize',
+    synopsis: 'optimize [owner/repo] [--json]',
+    description: 'Checkpoint, analyze, optimize, and vacuum local SQLite stores.',
+    options: [
+      'owner/repo  Also optimize this repository vector store when present',
+      '--json  Emit machine-readable JSON output explicitly',
+    ],
+    examples: ['ghcrawl optimize --json', 'ghcrawl optimize openclaw/openclaw --json'],
     agentJson: true,
   },
   {
@@ -1057,6 +1069,34 @@ export async function run(
         } finally {
           heapDiagnostics?.dispose();
         }
+      }
+      case 'optimize': {
+        const parsed = parseArgsForCommand(
+          'optimize',
+          rest,
+          {
+            owner: { type: 'string' },
+            repo: { type: 'string' },
+            json: { type: 'boolean' },
+          },
+          true,
+        );
+        const values = parsed.values as RepoCommandValues;
+        if (parsed.positionals.length > 1) {
+          throw new CliUsageError('Too many positional arguments for optimize', 'optimize');
+        }
+        let target: { owner: string; repo: string } | undefined;
+        if (parsed.positionals.length === 1) {
+          target = parseOwnerRepo(parsed.positionals[0]);
+        } else if (typeof values.owner === 'string' || typeof values.repo === 'string') {
+          if (typeof values.owner !== 'string' || typeof values.repo !== 'string') {
+            throw new CliUsageError('Both --owner and --repo are required when either is set', 'optimize');
+          }
+          target = { owner: values.owner, repo: values.repo };
+        }
+        const result = getService().optimizeStorage(target);
+        writeJson(stdout, result);
+        return;
       }
       case 'runs': {
         const { owner, repo, values } = parseRepoFlags('runs', rest);

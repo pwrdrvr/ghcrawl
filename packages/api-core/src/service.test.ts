@@ -116,6 +116,55 @@ test('doctor reports missing GitHub token without attempting network auth', asyn
   }
 });
 
+test('optimizeStorage runs SQLite maintenance and reports missing vector store', () => {
+  const config = makeTestConfig();
+  const service = new GHCrawlService({
+    config: {
+      ...config,
+      dbPath: path.join(config.configDir, 'optimize.db'),
+    },
+    github: {
+      getRepo: async () => ({}),
+      listRepositoryIssues: async () => [],
+      getIssue: async () => ({}),
+      getPull: async () => ({}),
+      listIssueComments: async () => [],
+      listPullReviews: async () => [],
+      listPullReviewComments: async () => [],
+      listPullFiles: async () => [],
+    },
+  });
+
+  try {
+    const now = '2026-03-10T12:00:00Z';
+    service.db
+      .prepare(
+        `insert into repositories (id, owner, name, full_name, github_repo_id, raw_json, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(1, 'openclaw', 'openclaw', 'openclaw/openclaw', '1', '{}', now);
+    service.db.exec('create table optimize_scratch (value text)');
+    const insert = service.db.prepare('insert into optimize_scratch (value) values (?)');
+    for (let index = 0; index < 200; index += 1) {
+      insert.run(`payload-${index}`);
+    }
+    service.db.exec('delete from optimize_scratch');
+
+    const response = service.optimizeStorage({ owner: 'openclaw', repo: 'openclaw' });
+
+    assert.equal(response.ok, true);
+    assert.equal(response.repository?.fullName, 'openclaw/openclaw');
+    assert.equal(response.targets[0]?.name, 'main');
+    assert.equal(response.targets[0]?.existed, true);
+    assert.ok(response.targets[0]?.operations.includes('vacuum'));
+    assert.equal(response.targets[1]?.name, 'vector');
+    assert.equal(response.targets[1]?.existed, false);
+    assert.deepEqual(response.targets[1]?.operations, ['skipped_missing_vector_store']);
+  } finally {
+    service.close();
+  }
+});
+
 test('listRunHistory returns recent runs across pipeline tables', () => {
   const service = makeTestService({
     getRepo: async () => ({}),

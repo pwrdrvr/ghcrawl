@@ -12,6 +12,7 @@ Use this skill when operating this repo's local-first GitHub crawler and cluster
 - Prefer read-only inspection commands first: `doctor`, `runs`, `clusters`, `cluster-explain`, `threads`.
 - Treat `refresh`, `sync`, `summarize`, `key-summaries`, and `embed` as remote/API-spend commands.
 - `cluster` is local-only but can be CPU-heavy on huge repos.
+- `optimize` is local-only SQLite maintenance; run it after heavy sync, embedding, clustering, or close/archive sessions.
 - Always pass `--json` for agent-readable output.
 - Use `--include-code` only when file overlap matters; it hydrates PR file metadata and can increase DB size.
 
@@ -21,6 +22,7 @@ Use this skill when operating this repo's local-first GitHub crawler and cluster
 ghcrawl doctor --json
 ghcrawl configure --json
 ghcrawl runs owner/repo --limit 10 --json
+ghcrawl optimize owner/repo --json
 ```
 
 If the local store is empty or stale, pull current open GitHub data:
@@ -118,3 +120,13 @@ After edits, re-run:
 ghcrawl cluster owner/repo --json
 ghcrawl cluster-explain owner/repo --id 123 --member-limit 50 --event-limit 50 --json
 ```
+
+## Local Store Maintenance
+
+Run maintenance after large data changes:
+
+```bash
+ghcrawl optimize owner/repo --json
+```
+
+Without `owner/repo`, `optimize` only checkpoints, analyzes, optimizes, and vacuums the main ghcrawl SQLite database. With `owner/repo`, it also optimizes that repo's vector SQLite store and reports the vector `.hnsw` sidecar size without rebuilding it.

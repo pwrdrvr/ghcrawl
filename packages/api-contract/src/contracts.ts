@@ -319,6 +319,40 @@ export const refreshResponseSchema = z.object({
 });
 export type RefreshResponse = z.infer<typeof refreshResponseSchema>;
 
+export const optimizeTargetSchema = z.object({
+  name: z.enum(['main', 'vector']),
+  path: z.string(),
+  existed: z.boolean(),
+  pageSize: z.number().int().nonnegative(),
+  pageCountBefore: z.number().int().nonnegative(),
+  pageCountAfter: z.number().int().nonnegative(),
+  freelistPagesBefore: z.number().int().nonnegative(),
+  freelistPagesAfter: z.number().int().nonnegative(),
+  bytesBefore: z.number().int().nonnegative(),
+  bytesAfter: z.number().int().nonnegative(),
+  walBytesBefore: z.number().int().nonnegative(),
+  walBytesAfter: z.number().int().nonnegative(),
+  shmBytesBefore: z.number().int().nonnegative(),
+  shmBytesAfter: z.number().int().nonnegative(),
+  sidecarBytesBefore: z.number().int().nonnegative(),
+  sidecarBytesAfter: z.number().int().nonnegative(),
+  bytesReclaimed: z.number().int().nonnegative(),
+  operations: z.array(z.string()),
+  durationMs: z.number().int().nonnegative(),
+});
+export type OptimizeTargetDto = z.infer<typeof optimizeTargetSchema>;
+
+export const optimizeResponseSchema = z.object({
+  ok: z.boolean(),
+  repository: repositorySchema.nullable(),
+  startedAt: z.string(),
+  finishedAt: z.string(),
+  targets: z.array(optimizeTargetSchema),
+  bytesReclaimed: z.number().int().nonnegative(),
+  message: z.string(),
+});
+export type OptimizeResponse = z.infer<typeof optimizeResponseSchema>;
+
 export const closeThreadRequestSchema = z.object({
   owner: z.string(),
   repo: z.string(),

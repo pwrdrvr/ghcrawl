@@ -207,13 +207,13 @@ ghcrawl threads owner/repo --numbers 42,43,44 --include-closed --json
 ghcrawl close-thread owner/repo --number 42 --json
 ghcrawl close-cluster owner/repo --id 123 --json
 ghcrawl clusters owner/repo --min-size 10 --limit 20 --json
-ghcrawl clusters owner/repo --min-size 10 --limit 20 --json
 ghcrawl clusters owner/repo --min-size 10 --hide-closed --json
 ghcrawl durable-clusters owner/repo --member-limit 10 --json
 ghcrawl cluster-detail owner/repo --id 123 --json
 ghcrawl cluster-detail owner/repo --id 123 --hide-closed --json
 ghcrawl cluster-explain owner/repo --id 123 --member-limit 20 --event-limit 50 --json
 ghcrawl search owner/repo --query "download stalls" --json
+ghcrawl optimize owner/repo --json
 ```
 
 Use `threads --numbers ...` when you want several specific issue or PR records in one CLI call instead of paying process startup overhead repeatedly.
@@ -223,6 +223,8 @@ By default, cluster JSON commands show locally closed clusters. Use `--hide-clos
 Use `close-thread` when you know a local issue/PR should be treated as closed before the next GitHub sync catches up. If that was the last open item in its cluster, `ghcrawl` automatically marks the cluster closed too.
 
 Use `close-cluster` when you want to locally suppress a whole cluster from default JSON exploration without waiting for a rebuild.
+
+Use `optimize` after heavy sync, embedding, clustering, or close/archive sessions. It checkpoints WAL files, refreshes planner stats, runs SQLite optimize, and vacuums the main database. When passed `owner/repo`, it also optimizes that repo's vector SQLite store and reports the `.hnsw` sidecar size without rebuilding it.
 
 ## Durable Cluster Governance
 
@@ -284,6 +286,7 @@ The skill is built around the stable JSON CLI surface and is intentionally conse
 ```bash
 ghcrawl doctor --json
 ghcrawl refresh owner/repo
+ghcrawl optimize owner/repo --json
 ghcrawl runs owner/repo --limit 20 --json
 ghcrawl threads owner/repo --numbers 42,43,44 --json
 ghcrawl clusters owner/repo --min-size 10 --limit 20 --sort recent --json
