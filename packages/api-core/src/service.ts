@@ -103,6 +103,13 @@ import { buildDoctorResult } from './doctor.js';
 import { makeGitHubClient, type GitHubClient } from './github/client.js';
 import { OpenAiProvider, type AiProvider } from './openai/provider.js';
 import {
+  hasLegacyEmbeddings,
+  isRepoVectorStateCurrent,
+  markRepoClustersCurrent,
+  markRepoVectorsCurrent,
+  writeRepoPipelineState,
+} from './pipeline-state.js';
+import {
   exportPortableSyncDatabase,
   importPortableSyncDatabase,
   portableSyncSizeReport,
@@ -162,7 +169,6 @@ import type {
   KeySummaryTask,
   NeighborsResultInternal,
   PortableSyncExportOptions,
-  RepoPipelineStateRow,
   SearchResultInternal,
   SimilaritySourceKind,
   StoredEmbeddingRow,
@@ -1527,7 +1533,7 @@ export class GHCrawlService {
 
     try {
       if (params.threadNumber === undefined) {
-        if (!this.isRepoVectorStateCurrent(repository.id)) {
+        if (!isRepoVectorStateCurrent(this.db, this.config, repository.id)) {
           this.resetRepositoryVectors(repository.id, repository.fullName);
         } else {
           const pruned = this.pruneInactiveRepositoryVectors(repository.id, repository.fullName);
@@ -1581,7 +1587,7 @@ export class GHCrawlService {
         }
       }
 
-      this.markRepoVectorsCurrent(repository.id);
+      markRepoVectorsCurrent(this.db, this.config, repository.id);
       finishServiceRun(this.db, 'embedding_runs', runId, 'completed', { embedded });
       return embedResultSchema.parse({ runId, embedded });
     } catch (error) {
@@ -1671,7 +1677,7 @@ export class GHCrawlService {
         `[cluster] built ${aggregatedEdges.size} deterministic similarity edge(s) for ${runSubject}`,
       );
 
-      const vectorStateCurrent = this.isRepoVectorStateCurrent(repository.id);
+      const vectorStateCurrent = isRepoVectorStateCurrent(this.db, this.config, repository.id);
       const vectorItems = this.loadClusterableActiveVectorMeta(repository.id, repository.fullName);
       if (vectorItems.length > 0) {
         const queryVectorItems = seedThreadIds ? vectorItems.filter((item) => seedThreadIds.includes(item.id)) : vectorItems;
@@ -1714,7 +1720,7 @@ export class GHCrawlService {
             lastProgressAt = now;
           }
         }
-      } else if (!seedThreadIds && this.hasLegacyEmbeddings(repository.id)) {
+      } else if (!seedThreadIds && hasLegacyEmbeddings(this.db, this.config.embedModel, repository.id)) {
         const legacy = this.loadClusterableThreadMeta(repository.id);
         params.onProgress?.(
           `[cluster] loaded ${legacy.items.length} legacy embedded thread(s) across ${legacy.sourceKinds.length} source kind(s) for ${repository.fullName} k=${k} minScore=${minScore}`,
@@ -1774,7 +1780,7 @@ export class GHCrawlService {
         this.pruneOldClusterRuns(repository.id, runId);
       }
       if (!seedThreadIds && vectorStateCurrent) {
-        this.markRepoClustersCurrent(repository.id);
+        markRepoClustersCurrent(this.db, this.config, repository.id);
         this.cleanupMigratedRepositoryArtifacts(repository.id, repository.fullName, params.onProgress);
       }
 
@@ -1822,7 +1828,7 @@ export class GHCrawlService {
     const backend = params.backend ?? 'vectorlite';
     const repository = this.requireRepository(params.owner, params.repo);
     const loaded = this.loadClusterableThreadMeta(repository.id);
-    const activeVectors = this.isRepoVectorStateCurrent(repository.id) ? this.loadNormalizedActiveVectors(repository.id) : [];
+    const activeVectors = isRepoVectorStateCurrent(this.db, this.config, repository.id) ? this.loadNormalizedActiveVectors(repository.id) : [];
     const activeSourceKind = this.activeVectorSourceKind();
     const useActiveVectors = activeVectors.length > 0 && (params.sourceKinds === undefined || loaded.items.length === 0);
     const sourceKinds = useActiveVectors ? [activeSourceKind] : (params.sourceKinds ?? loaded.sourceKinds);
@@ -2139,7 +2145,7 @@ export class GHCrawlService {
     }
 
     if (mode !== 'keyword' && this.ai) {
-      if (this.isRepoVectorStateCurrent(repository.id)) {
+      if (isRepoVectorStateCurrent(this.db, this.config, repository.id)) {
         const [queryEmbedding] = await this.ai.embedTexts({
           model: this.config.embedModel,
           texts: [params.query],
@@ -2154,7 +2160,7 @@ export class GHCrawlService {
           if (neighbor.score < 0.2) continue;
           semanticScores.set(neighbor.threadId, Math.max(semanticScores.get(neighbor.threadId) ?? -1, neighbor.score));
         }
-      } else if (this.hasLegacyEmbeddings(repository.id)) {
+      } else if (hasLegacyEmbeddings(this.db, this.config.embedModel, repository.id)) {
         const [queryEmbedding] = await this.ai.embedTexts({ model: this.config.embedModel, texts: [params.query] });
         for (const row of this.iterateStoredEmbeddings(repository.id)) {
           const score = cosineSimilarity(queryEmbedding, JSON.parse(row.embedding_json) as number[]);
@@ -3443,125 +3449,6 @@ export class GHCrawlService {
     };
   }
 
-  private getDesiredPipelineState(): Omit<RepoPipelineStateRow, 'repo_id' | 'vectors_current_at' | 'clusters_current_at' | 'updated_at'> {
-    return {
-      summary_model: this.config.summaryModel,
-      summary_prompt_version: SUMMARY_PROMPT_VERSION,
-      embedding_basis: this.config.embeddingBasis,
-      embed_model: this.config.embedModel,
-      embed_dimensions: ACTIVE_EMBED_DIMENSIONS,
-      embed_pipeline_version: ACTIVE_EMBED_PIPELINE_VERSION,
-      vector_backend: this.config.vectorBackend,
-    };
-  }
-
-  private getRepoPipelineState(repoId: number): RepoPipelineStateRow | null {
-    return (
-      (this.db.prepare('select * from repo_pipeline_state where repo_id = ? limit 1').get(repoId) as RepoPipelineStateRow | undefined) ??
-      null
-    );
-  }
-
-  private isRepoVectorStateCurrent(repoId: number): boolean {
-    const state = this.getRepoPipelineState(repoId);
-    if (!state || !state.vectors_current_at) {
-      return false;
-    }
-    const desired = this.getDesiredPipelineState();
-    return (
-      state.summary_model === desired.summary_model &&
-      state.summary_prompt_version === desired.summary_prompt_version &&
-      state.embedding_basis === desired.embedding_basis &&
-      state.embed_model === desired.embed_model &&
-      state.embed_dimensions === desired.embed_dimensions &&
-      state.embed_pipeline_version === desired.embed_pipeline_version &&
-      state.vector_backend === desired.vector_backend
-    );
-  }
-
-  private isRepoClusterStateCurrent(repoId: number): boolean {
-    const state = this.getRepoPipelineState(repoId);
-    return this.isRepoVectorStateCurrent(repoId) && Boolean(state?.clusters_current_at);
-  }
-
-  private hasLegacyEmbeddings(repoId: number): boolean {
-    const row = this.db
-      .prepare(
-        `select count(*) as count
-         from document_embeddings e
-         join threads t on t.id = e.thread_id
-         where t.repo_id = ?
-           and t.state = 'open'
-           and t.closed_at_local is null
-           and e.model = ?`,
-      )
-      .get(repoId, this.config.embedModel) as { count: number };
-    return row.count > 0;
-  }
-
-  private writeRepoPipelineState(
-    repoId: number,
-    overrides: Partial<Pick<RepoPipelineStateRow, 'vectors_current_at' | 'clusters_current_at'>>,
-  ): void {
-    const desired = this.getDesiredPipelineState();
-    const current = this.getRepoPipelineState(repoId);
-    this.db
-      .prepare(
-        `insert into repo_pipeline_state (
-            repo_id,
-            summary_model,
-            summary_prompt_version,
-            embedding_basis,
-            embed_model,
-            embed_dimensions,
-            embed_pipeline_version,
-            vector_backend,
-            vectors_current_at,
-            clusters_current_at,
-            updated_at
-         ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         on conflict(repo_id) do update set
-           summary_model = excluded.summary_model,
-           summary_prompt_version = excluded.summary_prompt_version,
-           embedding_basis = excluded.embedding_basis,
-           embed_model = excluded.embed_model,
-           embed_dimensions = excluded.embed_dimensions,
-           embed_pipeline_version = excluded.embed_pipeline_version,
-           vector_backend = excluded.vector_backend,
-           vectors_current_at = excluded.vectors_current_at,
-           clusters_current_at = excluded.clusters_current_at,
-           updated_at = excluded.updated_at`,
-      )
-      .run(
-        repoId,
-        desired.summary_model,
-        desired.summary_prompt_version,
-        desired.embedding_basis,
-        desired.embed_model,
-        desired.embed_dimensions,
-        desired.embed_pipeline_version,
-        desired.vector_backend,
-        overrides.vectors_current_at ?? current?.vectors_current_at ?? null,
-        overrides.clusters_current_at ?? current?.clusters_current_at ?? null,
-        nowIso(),
-      );
-  }
-
-  private markRepoVectorsCurrent(repoId: number): void {
-    this.writeRepoPipelineState(repoId, {
-      vectors_current_at: nowIso(),
-      clusters_current_at: null,
-    });
-  }
-
-  private markRepoClustersCurrent(repoId: number): void {
-    const state = this.getRepoPipelineState(repoId);
-    this.writeRepoPipelineState(repoId, {
-      vectors_current_at: state?.vectors_current_at ?? nowIso(),
-      clusters_current_at: nowIso(),
-    });
-  }
-
   private repoVectorStorePath(repoFullName: string): string {
     const safeName = repoFullName.replace(/[^a-zA-Z0-9._-]+/g, '__');
     return path.join(this.config.configDir, 'vectors', `${safeName}.sqlite`);
@@ -3626,7 +3513,7 @@ export class GHCrawlService {
       storePath: this.repoVectorStorePath(repoFullName),
       dimensions: ACTIVE_EMBED_DIMENSIONS,
     });
-    this.writeRepoPipelineState(repoId, {
+    writeRepoPipelineState(this.db, this.config, repoId, {
       vectors_current_at: null,
       clusters_current_at: null,
     });
@@ -5706,7 +5593,7 @@ export class GHCrawlService {
       title: string;
       body: string | null;
     }>;
-    const pipelineCurrent = this.isRepoVectorStateCurrent(repoId);
+    const pipelineCurrent = isRepoVectorStateCurrent(this.db, this.config, repoId);
     const existingRows = this.db
       .prepare(
         `select tv.thread_id, tv.content_hash
