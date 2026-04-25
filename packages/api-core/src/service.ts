@@ -101,6 +101,11 @@ import { readTextBlob } from './db/blob-store.js';
 import { blobStoreRoot, rawJsonStorage } from './db/raw-json-store.js';
 import { buildCanonicalDocument, isBotLikeAuthor } from './documents/normalize.js';
 import { buildDoctorResult } from './doctor.js';
+import {
+  activeVectorSourceKind,
+  buildActiveVectorTask,
+  estimateEmbeddingTokens,
+} from './embedding/tasks.js';
 import { makeGitHubClient, type GitHubClient } from './github/client.js';
 import { OpenAiProvider, type AiProvider } from './openai/provider.js';
 import {
@@ -141,9 +146,7 @@ import {
   EMBED_CONTEXT_RETRY_ATTEMPTS,
   EMBED_CONTEXT_RETRY_FALLBACK_SHRINK_RATIO,
   EMBED_CONTEXT_RETRY_TARGET_BUFFER_RATIO,
-  EMBED_ESTIMATED_CHARS_PER_TOKEN,
   EMBED_MAX_BATCH_TOKENS,
-  EMBED_MAX_ITEM_TOKENS,
   EMBED_TRUNCATION_MARKER,
   KEY_SUMMARY_CONCURRENCY,
   KEY_SUMMARY_MAX_BODY_CHARS,
@@ -167,7 +170,6 @@ import type {
   DoctorResult,
   DurableTuiClosure,
   EmbeddingSourceKind,
-  EmbeddingTask,
   EmbeddingWorkset,
   KeySummaryTask,
   NeighborsResultInternal,
@@ -1680,7 +1682,7 @@ export class GHCrawlService {
       const vectorItems = this.loadClusterableActiveVectorMeta(repository.id, repository.fullName);
       if (vectorItems.length > 0) {
         const queryVectorItems = seedThreadIds ? vectorItems.filter((item) => seedThreadIds.includes(item.id)) : vectorItems;
-        const activeSourceKind = this.activeVectorSourceKind();
+        const activeSourceKind = activeVectorSourceKind(this.config.embeddingBasis);
         const activeIds = new Set(vectorItems.map((item) => item.id));
         const annQuery = getVectorliteClusterQuery(vectorItems.length, k);
         let processed = 0;
@@ -1828,7 +1830,7 @@ export class GHCrawlService {
     const repository = this.requireRepository(params.owner, params.repo);
     const loaded = this.loadClusterableThreadMeta(repository.id);
     const activeVectors = isRepoVectorStateCurrent(this.db, this.config, repository.id) ? this.loadNormalizedActiveVectors(repository.id) : [];
-    const activeSourceKind = this.activeVectorSourceKind();
+    const activeSourceKind = activeVectorSourceKind(this.config.embeddingBasis);
     const useActiveVectors = activeVectors.length > 0 && (params.sourceKinds === undefined || loaded.items.length === 0);
     const sourceKinds = useActiveVectors ? [activeSourceKind] : (params.sourceKinds ?? loaded.sourceKinds);
     const items = useActiveVectors
@@ -4486,136 +4488,6 @@ export class GHCrawlService {
     this.db.prepare('update threads set content_hash = ?, updated_at = ? where id = ?').run(canonical.contentHash, nowIso(), threadId);
   }
 
-  private buildEmbeddingTasks(params: {
-    threadId: number;
-    threadNumber: number;
-    title: string;
-    body: string | null;
-    dedupeSummary: string | null;
-  }): EmbeddingTask[] {
-    const tasks: EmbeddingTask[] = [];
-    const titleText = this.prepareEmbeddingText(normalizeSummaryText(params.title), EMBED_MAX_ITEM_TOKENS);
-    if (titleText) {
-      tasks.push({
-        threadId: params.threadId,
-        threadNumber: params.threadNumber,
-        sourceKind: 'title',
-        text: titleText.text,
-        contentHash: stableContentHash(`embedding:title\n${titleText.text}`),
-        estimatedTokens: titleText.estimatedTokens,
-        wasTruncated: titleText.wasTruncated,
-      });
-    }
-
-    const bodyText = this.prepareEmbeddingText(normalizeSummaryText(params.body ?? ''), EMBED_MAX_ITEM_TOKENS);
-    if (bodyText) {
-      tasks.push({
-        threadId: params.threadId,
-        threadNumber: params.threadNumber,
-        sourceKind: 'body',
-        text: bodyText.text,
-        contentHash: stableContentHash(`embedding:body\n${bodyText.text}`),
-        estimatedTokens: bodyText.estimatedTokens,
-        wasTruncated: bodyText.wasTruncated,
-      });
-    }
-
-    const summaryText = this.prepareEmbeddingText(normalizeSummaryText(params.dedupeSummary ?? ''), EMBED_MAX_ITEM_TOKENS);
-    if (summaryText) {
-      tasks.push({
-        threadId: params.threadId,
-        threadNumber: params.threadNumber,
-        sourceKind: 'dedupe_summary',
-        text: summaryText.text,
-        contentHash: stableContentHash(`embedding:dedupe_summary\n${summaryText.text}`),
-        estimatedTokens: summaryText.estimatedTokens,
-        wasTruncated: summaryText.wasTruncated,
-      });
-    }
-
-    return tasks;
-  }
-
-  private buildActiveVectorTask(params: {
-    threadId: number;
-    threadNumber: number;
-    title: string;
-    body: string | null;
-    dedupeSummary: string | null;
-    keySummary: string | null;
-  }): ActiveVectorTask | null {
-    const sections = [`title: ${normalizeSummaryText(params.title)}`];
-    if (this.config.embeddingBasis === 'title_summary') {
-      const summary = normalizeSummaryText(params.dedupeSummary ?? '');
-      if (!summary) {
-        return null;
-      }
-      sections.push(`summary: ${summary}`);
-    } else if (this.config.embeddingBasis === 'llm_key_summary') {
-      const keySummary = normalizeSummaryText(params.keySummary ?? '');
-      if (!keySummary) {
-        return null;
-      }
-      sections.push(`key_summary:\n${keySummary}`);
-    } else {
-      const body = normalizeSummaryText(params.body ?? '');
-      if (body) {
-        sections.push(`body: ${body}`);
-      }
-    }
-
-    const prepared = this.prepareEmbeddingText(sections.join('\n\n'), EMBED_MAX_ITEM_TOKENS);
-    if (!prepared) {
-      return null;
-    }
-
-    return {
-      threadId: params.threadId,
-      threadNumber: params.threadNumber,
-      basis: this.config.embeddingBasis,
-      text: prepared.text,
-      contentHash: stableContentHash(
-        `embedding:${ACTIVE_EMBED_PIPELINE_VERSION}:${this.config.embeddingBasis}:${this.config.embedModel}:${ACTIVE_EMBED_DIMENSIONS}\n${prepared.text}`,
-      ),
-      estimatedTokens: prepared.estimatedTokens,
-      wasTruncated: prepared.wasTruncated,
-    };
-  }
-
-  private activeVectorSourceKind(): EmbeddingSourceKind {
-    if (this.config.embeddingBasis === 'title_summary') {
-      return 'dedupe_summary';
-    }
-    if (this.config.embeddingBasis === 'llm_key_summary') {
-      return 'llm_key_summary';
-    }
-    return 'body';
-  }
-
-  private prepareEmbeddingText(
-    text: string,
-    maxEstimatedTokens: number,
-  ): { text: string; estimatedTokens: number; wasTruncated: boolean } | null {
-    if (!text) {
-      return null;
-    }
-
-    const maxChars = maxEstimatedTokens * EMBED_ESTIMATED_CHARS_PER_TOKEN;
-    const wasTruncated = text.length > maxChars;
-    const prepared = wasTruncated
-      ? `${text.slice(0, Math.max(0, maxChars - EMBED_TRUNCATION_MARKER.length)).trimEnd()}${EMBED_TRUNCATION_MARKER}`
-      : text;
-    return {
-      text: prepared,
-      estimatedTokens: this.estimateEmbeddingTokens(prepared),
-      wasTruncated,
-    };
-  }
-
-  private estimateEmbeddingTokens(text: string): number {
-    return Math.max(1, Math.ceil(text.length / EMBED_ESTIMATED_CHARS_PER_TOKEN));
-  }
-
   private parseEmbeddingContextError(error: unknown): { limitTokens: number | null; requestedTokens: number | null } | null {
     const message = error instanceof Error ? error.message : String(error);
     const requestedMatch = message.match(/requested\s+(\d+)\s+tokens/i);
@@ -4731,7 +4603,7 @@ export class GHCrawlService {
       contentHash: stableContentHash(
         `embedding:${ACTIVE_EMBED_PIPELINE_VERSION}:${task.basis}:${this.config.embedModel}:${ACTIVE_EMBED_DIMENSIONS}\n${nextText}`,
       ),
-      estimatedTokens: this.estimateEmbeddingTokens(nextText),
+      estimatedTokens: estimateEmbeddingTokens(nextText),
       wasTruncated: true,
     };
   }
@@ -5363,13 +5235,15 @@ export class GHCrawlService {
     const keySummaryTexts = this.loadKeySummaryTextMap(repoId, threadNumber);
     const missingSummaryThreadNumbers: number[] = [];
     const tasks = rows.flatMap((row) => {
-      const task = this.buildActiveVectorTask({
+      const task = buildActiveVectorTask({
         threadId: row.id,
         threadNumber: row.number,
         title: row.title,
         body: row.body,
         dedupeSummary: summaryTexts.get(row.id) ?? null,
         keySummary: keySummaryTexts.get(row.id) ?? null,
+        embeddingBasis: this.config.embeddingBasis,
+        embedModel: this.config.embedModel,
       });
       if (task) {
         return [task];
