@@ -5,10 +5,9 @@ import type { TuiClusterDetail, TuiThreadDetail } from '@ghcrawl/api-core';
 
 import {
   buildHelpContent,
-  getRepositoryChoices,
-  parseOwnerRepoValue,
   resolveBlessedTerminal,
 } from './app.js';
+import { getRepositoryChoices, parseOwnerRepoValue } from './repository-picker.js';
 import {
   buildThreadContextMenuItems,
   escapeBlessedText,

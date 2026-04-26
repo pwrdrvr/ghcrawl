@@ -66,7 +66,6 @@ import {
 
 export { resolveBlessedTerminal } from './widgets.js';
 export { buildHelpContent } from './help.js';
-export { getRepositoryChoices, parseOwnerRepoValue } from './repository-picker.js';
 
 type StartTuiParams = {
   service: GHCrawlService;
