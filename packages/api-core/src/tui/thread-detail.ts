@@ -1,8 +1,57 @@
+import type { RepositoryDto, SearchHitDto } from '@ghcrawl/api-contract';
+
+import { listStoredClusterNeighbors } from '../cluster/neighbor-queries.js';
 import { getLatestClusterRun } from '../cluster/run-queries.js';
 import type { SqliteDatabase } from '../db/sqlite.js';
 import { SUMMARY_PROMPT_VERSION } from '../service-constants.js';
 import type { ThreadRow, TuiThreadDetail } from '../service-types.js';
-import { normalizeKeySummaryDisplayText } from '../service-utils.js';
+import { normalizeKeySummaryDisplayText, threadToDto } from '../service-utils.js';
+
+export function buildTuiThreadDetail(params: {
+  db: SqliteDatabase;
+  repository: RepositoryDto;
+  summaryModel: string;
+  threadId?: number;
+  threadNumber?: number;
+  includeNeighbors?: boolean;
+  neighborFallback?: (threadNumber: number) => SearchHitDto['neighbors'];
+}): TuiThreadDetail {
+  const row = getTuiThreadRow({
+    db: params.db,
+    repoId: params.repository.id,
+    threadId: params.threadId,
+    threadNumber: params.threadNumber,
+  });
+
+  if (!row) {
+    throw new Error(`Thread was not found for ${params.repository.fullName}.`);
+  }
+
+  const clusterId = getLatestTuiThreadClusterId(params.db, params.repository.id, row.id);
+  const summaries = getTuiThreadSummaries(params.db, row.id, params.summaryModel);
+  const topFiles = getTopChangedFiles(params.db, row.id, 5);
+  const keySummary = getLatestTuiKeySummary(params.db, row.id, params.summaryModel);
+
+  let neighbors: SearchHitDto['neighbors'] = [];
+  if (params.includeNeighbors !== false) {
+    neighbors = listStoredClusterNeighbors({ db: params.db, repoId: params.repository.id, threadId: row.id, limit: 8 });
+    if (neighbors.length === 0) {
+      try {
+        neighbors = params.neighborFallback?.(row.number) ?? [];
+      } catch {
+        neighbors = [];
+      }
+    }
+  }
+
+  return {
+    thread: threadToDto(row, clusterId),
+    summaries,
+    keySummary,
+    topFiles,
+    neighbors,
+  };
+}
 
 export function getTuiThreadRow(params: {
   db: SqliteDatabase;

@@ -72,7 +72,6 @@ import { materializeLatestDeterministicFingerprints } from './cluster/fingerprin
 import { humanKeyForValue, humanKeyStableSlug } from './cluster/human-key.js';
 import { listStoredClusters } from './cluster/list-query.js';
 import { LLM_KEY_SUMMARY_PROMPT_VERSION, llmKeyInputHash } from './cluster/llm-key-summary.js';
-import { listStoredClusterNeighbors } from './cluster/neighbor-queries.js';
 import { summarizeClusterQuality, summarizeClusterSizes } from './cluster/quality.js';
 import { getLatestClusterRun } from './cluster/run-queries.js';
 import {
@@ -150,11 +149,7 @@ import {
 } from './tui/cluster-queries.js';
 import { getTuiRepoStats, getTuiRepositoryRefreshState } from './tui/repo-stats.js';
 import {
-  getLatestTuiKeySummary,
-  getLatestTuiThreadClusterId,
-  getTopChangedFiles,
-  getTuiThreadRow,
-  getTuiThreadSummaries,
+  buildTuiThreadDetail,
 } from './tui/thread-detail.js';
 import {
   ACTIVE_EMBED_DIMENSIONS,
@@ -2697,47 +2692,22 @@ export class GHCrawlService {
     includeNeighbors?: boolean;
   }): TuiThreadDetail {
     const repository = this.requireRepository(params.owner, params.repo);
-    const row = getTuiThreadRow({
+    return buildTuiThreadDetail({
       db: this.db,
-      repoId: repository.id,
+      repository,
+      summaryModel: this.config.summaryModel,
       threadId: params.threadId,
       threadNumber: params.threadNumber,
+      includeNeighbors: params.includeNeighbors,
+      neighborFallback: (threadNumber) =>
+        this.listNeighbors({
+          owner: params.owner,
+          repo: params.repo,
+          threadNumber,
+          limit: 8,
+          minScore: 0.2,
+        }).neighbors,
     });
-
-    if (!row) {
-      throw new Error(`Thread was not found for ${repository.fullName}.`);
-    }
-
-    const clusterId = getLatestTuiThreadClusterId(this.db, repository.id, row.id);
-    const summaries = getTuiThreadSummaries(this.db, row.id, this.config.summaryModel);
-    const topFiles = getTopChangedFiles(this.db, row.id, 5);
-    const keySummary = getLatestTuiKeySummary(this.db, row.id, this.config.summaryModel);
-
-    let neighbors: SearchHitDto['neighbors'] = [];
-    if (params.includeNeighbors !== false) {
-      neighbors = listStoredClusterNeighbors({ db: this.db, repoId: repository.id, threadId: row.id, limit: 8 });
-      if (neighbors.length === 0) {
-        try {
-          neighbors = this.listNeighbors({
-            owner: params.owner,
-            repo: params.repo,
-            threadNumber: row.number,
-            limit: 8,
-            minScore: 0.2,
-          }).neighbors;
-        } catch {
-          neighbors = [];
-        }
-      }
-    }
-
-    return {
-      thread: threadToDto(row, clusterId),
-      summaries,
-      keySummary,
-      topFiles,
-      neighbors,
-    };
   }
 
   async rerunAction(request: ActionRequest): Promise<ActionResponse> {
