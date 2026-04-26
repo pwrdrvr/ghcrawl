@@ -7,8 +7,6 @@ import path from 'node:path';
 import {
   getConfigPath,
   getTuiRepositoryPreference,
-  isLikelyGitHubToken,
-  isLikelyOpenAiApiKey,
   loadConfig,
   readPersistedConfig,
   writeTuiRepositoryPreference,
@@ -22,6 +20,10 @@ function makeTempHome(): string {
 function makeTestEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     ...process.env,
+    GITHUB_TOKEN: undefined,
+    OPENAI_API_KEY: undefined,
+    GHCRAWL_SUMMARY_MODEL: undefined,
+    GHCRAWL_API_PORT: undefined,
     XDG_CONFIG_HOME: undefined,
     APPDATA: undefined,
     ...overrides,
@@ -55,7 +57,7 @@ test('loadConfig prefers persisted config and stores defaults under the user con
   assert.equal(config.githubTokenSource, 'config');
   assert.equal(config.openaiApiKeySource, 'config');
   assert.equal(config.dbPath, path.join(home, '.config', 'ghcrawl', 'ghcrawl.db'));
-  assert.equal(config.summaryModel, 'gpt-5-mini');
+  assert.equal(config.summaryModel, 'gpt-5.4');
   assert.equal(config.embeddingBasis, 'title_original');
   assert.equal(config.vectorBackend, 'vectorlite');
 });
@@ -218,7 +220,7 @@ test('config path override redirects persisted config reads and writes', () => {
   assert.equal(loaded.configDir, path.dirname(overridePath));
 });
 
-test('loadConfig restores op metadata and repository tui preferences', () => {
+test('loadConfig restores repository tui preferences', () => {
   const home = makeTempHome();
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ghcrawl-workspace-'));
   fs.writeFileSync(path.join(workspace, 'pnpm-workspace.yaml'), 'packages:\n  - "packages/*"\n');
@@ -229,13 +231,11 @@ test('loadConfig restores op metadata and repository tui preferences', () => {
 
   writePersistedConfig(
     {
-      secretProvider: 'op',
-      opVaultName: 'PwrDrvr LLC',
-      opItemName: 'ghcrawl',
       tuiPreferences: {
         'openclaw/openclaw': {
           minClusterSize: 1,
           sortMode: 'size',
+          memberSortMode: 'recent',
           wideLayout: 'right-stack',
         },
       },
@@ -244,12 +244,10 @@ test('loadConfig restores op metadata and repository tui preferences', () => {
   );
 
   const config = loadConfig({ cwd: workspace, env });
-  assert.equal(config.secretProvider, 'op');
-  assert.equal(config.opVaultName, 'PwrDrvr LLC');
-  assert.equal(config.opItemName, 'ghcrawl');
   assert.deepEqual(getTuiRepositoryPreference(config, 'openclaw', 'openclaw'), {
     minClusterSize: 1,
     sortMode: 'size',
+    memberSortMode: 'recent',
     wideLayout: 'right-stack',
   });
 });
@@ -269,6 +267,7 @@ test('writeTuiRepositoryPreference persists sort and min cluster size by reposit
     repo: 'openclaw',
     minClusterSize: 1,
     sortMode: 'size',
+    memberSortMode: 'title',
     wideLayout: 'right-stack',
   });
 
@@ -276,11 +275,13 @@ test('writeTuiRepositoryPreference persists sort and min cluster size by reposit
   assert.deepEqual(getTuiRepositoryPreference(reloaded, 'openclaw', 'openclaw'), {
     minClusterSize: 1,
     sortMode: 'size',
+    memberSortMode: 'title',
     wideLayout: 'right-stack',
   });
   assert.deepEqual(getTuiRepositoryPreference(reloaded, 'other', 'repo'), {
-    minClusterSize: 10,
-    sortMode: 'recent',
+    minClusterSize: 5,
+    sortMode: 'size',
+    memberSortMode: 'kind',
     wideLayout: 'columns',
   });
 });
@@ -315,14 +316,4 @@ test('loadConfig rejects invalid embed queue settings', () => {
       env: { ...makeTestEnv(), HOME: home, GHCRAWL_EMBED_CONCURRENCY: '0' },
     }),
   );
-});
-
-test('token format helpers match expected API key shapes', () => {
-  assert.equal(isLikelyGitHubToken('ghp_testtoken1234567890'), true);
-  assert.equal(isLikelyGitHubToken('github_pat_1234567890abcdefghijklmnopqrstuvwxyz'), true);
-  assert.equal(isLikelyGitHubToken('not-a-token'), false);
-
-  assert.equal(isLikelyOpenAiApiKey('sk-proj-testkey1234567890'), true);
-  assert.equal(isLikelyOpenAiApiKey('sk-testkey1234567890'), true);
-  assert.equal(isLikelyOpenAiApiKey('openai-key'), false);
 });

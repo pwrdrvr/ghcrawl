@@ -1,17 +1,10 @@
-import { spawn, type ChildProcessByStdio } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import path from 'node:path';
-import type { Readable } from 'node:stream';
-import { fileURLToPath } from 'node:url';
-
 import blessed from 'neo-blessed';
 
 import type {
   GHCrawlService,
   TuiClusterDetail,
   TuiClusterSortMode,
-  TuiRepoStats,
+  TuiRefreshState,
   TuiSnapshot,
   TuiThreadDetail,
   TuiWideLayoutPreference,
@@ -19,18 +12,60 @@ import type {
 import { getTuiRepositoryPreference, writeTuiRepositoryPreference } from '@ghcrawl/api-core';
 import {
   buildMemberRows,
+  cycleMemberSortMode,
   cycleFocusPane,
   cycleMinSizeFilter,
   cycleSortMode,
   findSelectableIndex,
+  formatRelativeTime,
   moveSelectableIndex,
   preserveSelectedId,
-  selectedThreadIdFromRow,
+  resolveMemberHeaderSortFromClick,
   type MemberListRow,
   type TuiFocusPane,
+  type TuiMemberSortMode,
   type TuiMinSizeFilter,
 } from './state.js';
 import { computeTuiLayout } from './layout.js';
+import {
+  buildThreadContextMenuItems,
+  escapeBlessedText,
+  formatClusterForClipboard,
+  formatClusterMembersForClipboard,
+  formatLinkChoiceLabel,
+  formatSummariesForClipboard,
+  formatThreadDetailForClipboard,
+  formatVisibleClustersForClipboard,
+  getThreadReferenceLinks,
+  renderDetailPane,
+  type DetailMode,
+} from './detail-render.js';
+import {
+  formatClusterDateColumn,
+  formatClusterListHeader,
+  formatClusterListLabel,
+  formatClusterShortName,
+  resolveClusterHeaderSortFromClick,
+  splitClusterDisplayTitle,
+} from './cluster-render.js';
+import { promptHelp } from './help.js';
+import { copyTextToClipboard, openUrl } from './platform.js';
+import {
+  promptRepositoryChoice,
+  promptRepositoryInput,
+  type RepositoryTarget,
+} from './repository-picker.js';
+import {
+  applyRect,
+  createWidgets,
+  getListItemIndexFromMouse,
+  updatePaneStyles,
+  type MouseEventArg,
+  type Widgets,
+} from './widgets.js';
+
+export { resolveBlessedTerminal } from './widgets.js';
+export { buildHelpContent } from './help.js';
 
 type StartTuiParams = {
   service: GHCrawlService;
@@ -38,109 +73,21 @@ type StartTuiParams = {
   repo?: string;
 };
 
-type RepositoryTarget = {
-  owner: string;
-  repo: string;
-};
-
-type RepositoryChoice =
-  | {
-      kind: 'existing';
-      target: RepositoryTarget;
-      label: string;
-    }
-  | {
-      kind: 'new';
-      label: string;
-    };
-
-type AuthorThreadChoice = {
-  threadId: number;
-  clusterId: number | null | undefined;
-  label: string;
-};
-
-type Widgets = {
-  screen: blessed.Widgets.Screen;
-  header: blessed.Widgets.BoxElement;
-  clusters: blessed.Widgets.ListElement;
-  members: blessed.Widgets.ListElement;
-  detail: blessed.Widgets.BoxElement;
-  footer: blessed.Widgets.BoxElement;
-};
-
 type ThreadDetailCacheEntry = {
   detail: TuiThreadDetail;
   hasNeighbors: boolean;
 };
 
-type UpdateTaskSelection = {
-  sync: boolean;
-  embed: boolean;
-  cluster: boolean;
+type ContextMenuItem = {
+  label: string;
+  run: () => boolean | void;
 };
-
-type BackgroundJobResult = {
-  code: number | null;
-  signal: NodeJS.Signals | null;
-  stdout: string;
-  error: Error | null;
-};
-
-type BackgroundRefreshJob = {
-  child: ChildProcessByStdio<null, Readable, Readable>;
-  repo: RepositoryTarget;
-  selection: UpdateTaskSelection;
-  stdoutBuffer: string;
-  terminatedByUser: boolean;
-  exitPromise: Promise<BackgroundJobResult>;
-};
-
-export function resolveBlessedTerminal(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const term = env.TERM;
-  if (!term) {
-    return undefined;
-  }
-  if (term === 'xterm-ghostty') {
-    return 'xterm-256color';
-  }
-  return term;
-}
-
-function createScreen(options: Parameters<typeof blessed.screen>[0]): blessed.Widgets.Screen {
-  return blessed.screen({
-    ...options,
-    terminal: resolveBlessedTerminal(),
-  });
-}
 
 const ACTIVITY_LOG_LIMIT = 200;
-const FOOTER_LOG_LINES = 3;
-const UPDATE_TASK_ORDER: Array<keyof UpdateTaskSelection> = ['sync', 'embed', 'cluster'];
-
-export function buildRefreshCliArgs(target: RepositoryTarget, selection: UpdateTaskSelection): string[] {
-  const args = ['refresh', `${target.owner}/${target.repo}`];
-  if (!selection.sync) args.push('--no-sync');
-  if (!selection.embed) args.push('--no-embed');
-  if (!selection.cluster) args.push('--no-cluster');
-  return args;
-}
-
-function createCliLaunch(args: string[]): { command: string; args: string[] } {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const distEntrypoint = path.resolve(here, '..', 'main.js');
-  if (existsSync(distEntrypoint)) {
-    return { command: process.execPath, args: [distEntrypoint, ...args] };
-  }
-
-  const sourceEntrypoint = path.resolve(here, '..', 'main.ts');
-  const require = createRequire(import.meta.url);
-  const tsxLoader = require.resolve('tsx');
-  return {
-    command: process.execPath,
-    args: ['--conditions=development', '--import', tsxLoader, sourceEntrypoint, ...args],
-  };
-}
+const FOOTER_LOG_LINES = 1;
+const CLUSTER_LIST_HEADER_INDEX = 0;
+const CLUSTER_LIST_FIRST_ITEM_INDEX = 1;
+const TUI_AUTO_REFRESH_INTERVAL_MS = 15_000;
 
 export async function startTui(params: StartTuiParams): Promise<void> {
   const selectedRepository = params.owner && params.repo ? { owner: params.owner, repo: params.repo } : null;
@@ -148,10 +95,18 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   const widgets = createWidgets(currentRepository.owner, currentRepository.repo);
 
   let focusPane: TuiFocusPane = 'clusters';
+  let isRendering = false;
   const initialPreference = selectedRepository
     ? getTuiRepositoryPreference(params.service.config, currentRepository.owner, currentRepository.repo)
-    : { sortMode: 'recent' as TuiClusterSortMode, minClusterSize: 10 as TuiMinSizeFilter, wideLayout: 'columns' as TuiWideLayoutPreference };
+    : {
+        sortMode: 'size' as TuiClusterSortMode,
+        memberSortMode: 'kind' as TuiMemberSortMode,
+        minClusterSize: 5 as TuiMinSizeFilter,
+        wideLayout: 'columns' as TuiWideLayoutPreference,
+      };
   let sortMode: TuiClusterSortMode = initialPreference.sortMode;
+  let memberSortMode: TuiMemberSortMode = initialPreference.memberSortMode;
+  let detailMode: DetailMode = 'full';
   let minSize: TuiMinSizeFilter = initialPreference.minClusterSize;
   let wideLayout: TuiWideLayoutPreference = initialPreference.wideLayout;
   let showClosed = true;
@@ -169,12 +124,11 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   const activityLines: string[] = [];
   const clusterDetailCache = new Map<number, TuiClusterDetail>();
   const threadDetailCache = new Map<number, ThreadDetailCacheEntry>();
-  let syncJobRunning = false;
-  let embedJobRunning = false;
-  let clusterJobRunning = false;
-  let activeJob: BackgroundRefreshJob | null = null;
   let modalOpen = false;
-  let exitRequested = false;
+  let dismissModal: (() => void) | null = null;
+  let suppressNextClusterSelect = false;
+  let suppressNextMemberSelect = false;
+  let lastRefreshState: TuiRefreshState | null = null;
 
   const clearCaches = (): void => {
     clusterDetailCache.clear();
@@ -182,6 +136,25 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   };
 
   const formatTuiError = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+  const clearModal = (): void => {
+    modalOpen = false;
+    dismissModal = null;
+  };
+
+  const dismissActiveModal = (): boolean => {
+    if (!modalOpen) {
+      return false;
+    }
+    const dismiss = dismissModal;
+    if (dismiss) {
+      dismiss();
+      return true;
+    }
+    clearModal();
+    render();
+    return true;
+  };
 
   const rebuildClusterItems = (): void => {
     if (!snapshot) {
@@ -192,12 +165,12 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     }
 
     clusterIndexById = new Map();
-    clusterItems = snapshot.clusters.map((cluster, index) => {
-      clusterIndexById.set(cluster.clusterId, index);
-      const updated = formatClusterDateColumn(cluster.latestUpdatedAt);
-      const label = `${String(cluster.totalCount).padStart(3, ' ')}  C${String(cluster.clusterId).padStart(5, ' ')}  ${String(cluster.pullRequestCount).padStart(2, ' ')}P/${String(cluster.issueCount).padStart(2, ' ')}I  ${updated}  ${cluster.displayTitle}`;
-      return cluster.isClosed ? `{gray-fg}${escapeBlessedText(label)}{/gray-fg}` : escapeBlessedText(label);
-    });
+    clusterItems = [`{bold}${formatClusterListHeader(sortMode)}{/bold}`];
+    clusterItems.push(...snapshot.clusters.map((cluster, index) => {
+      clusterIndexById.set(cluster.clusterId, index + CLUSTER_LIST_FIRST_ITEM_INDEX);
+      const label = formatClusterListLabel(cluster);
+      return cluster.isClosed ? `{gray-fg}${escapeBlessedText(label)}{/gray-fg}` : `{green-fg}${escapeBlessedText(label)}{/green-fg}`;
+    }));
     widgets.clusters.setItems(clusterItems);
   };
 
@@ -207,12 +180,6 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       activityLines.splice(0, activityLines.length - ACTIVITY_LOG_LIMIT);
     }
     render();
-  };
-
-  const setActiveJobFlags = (selection: UpdateTaskSelection | null): void => {
-    syncJobRunning = selection?.sync === true;
-    embedJobRunning = selection?.embed === true;
-    clusterJobRunning = selection?.cluster === true;
   };
 
   const loadClusterDetail = (clusterId: number): TuiClusterDetail => {
@@ -268,7 +235,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
         refreshAll(true);
         return false;
       }
-      memberRows = buildMemberRows(clusterDetail, { includeClosedMembers: showClosed });
+      memberRows = buildMemberRows(clusterDetail, { includeClosedMembers: showClosed, sortMode: memberSortMode });
       selectedMemberThreadId = threadId;
       memberIndex = findSelectableIndex(memberRows, selectedMemberThreadId);
       loadSelectedThreadDetail(false);
@@ -305,6 +272,11 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       sort: sortMode,
       search,
       includeClosedClusters: showClosed,
+      embeddingStatsMode: 'pipeline',
+    });
+    lastRefreshState = params.service.getTuiRefreshState({
+      owner: currentRepository.owner,
+      repo: currentRepository.repo,
     });
     selectedClusterId = preserveSelectedId(snapshot.clusters.map((cluster) => cluster.clusterId), previousClusterId);
     rebuildClusterItems();
@@ -320,6 +292,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
           sort: sortMode,
           search,
           includeClosedClusters: showClosed,
+          embeddingStatsMode: 'pipeline',
         });
         rebuildClusterItems();
         selectedClusterId = preserveSelectedId(snapshot.clusters.map((cluster) => cluster.clusterId), null);
@@ -328,7 +301,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     }
 
     if (selectedClusterId !== null && clusterDetail) {
-      memberRows = buildMemberRows(clusterDetail, { includeClosedMembers: showClosed });
+      memberRows = buildMemberRows(clusterDetail, { includeClosedMembers: showClosed, sortMode: memberSortMode });
       selectedMemberThreadId = preserveSelectedId(
         memberRows.filter((row) => row.selectable).map((row) => row.threadId),
         previousMemberId,
@@ -345,6 +318,28 @@ export async function startTui(params: StartTuiParams): Promise<void> {
 
     status = `Loaded ${snapshot.clusters.length} cluster(s)`;
     render();
+  };
+
+  const autoRefreshIfChanged = (): void => {
+    if (!currentRepository.owner || !currentRepository.repo || modalOpen || isRendering) {
+      return;
+    }
+    try {
+      const nextState = params.service.getTuiRefreshState({
+        owner: currentRepository.owner,
+        repo: currentRepository.repo,
+      });
+      if (lastRefreshState && formatTuiRefreshStateKey(nextState) !== formatTuiRefreshStateKey(lastRefreshState)) {
+        refreshAll(true);
+        status = 'External DB update detected; refreshed';
+        render();
+        return;
+      }
+      lastRefreshState = nextState;
+    } catch (error) {
+      status = `Auto-refresh failed: ${formatTuiError(error)}`;
+      render();
+    }
   };
 
   const updateFocus = (nextFocus: TuiFocusPane): void => {
@@ -381,33 +376,29 @@ export async function startTui(params: StartTuiParams): Promise<void> {
         ? `#${snapshot.stats.latestClusterRunId} ${formatRelativeTime(snapshot.stats.latestClusterRunFinishedAt ?? null)}`
         : 'never';
     widgets.header.setContent(
-      `{bold}${repoLabel}{/bold}  {cyan-fg}${snapshot?.stats.openPullRequestCount ?? 0} PR{/cyan-fg}  {green-fg}${snapshot?.stats.openIssueCount ?? 0} issues{/green-fg}  GH:${ghStatus}  Emb:${embedStatus}  Cl:${clusterStatus}  sort:${sortMode}  min:${minSize === 0 ? 'all' : `${minSize}+`}  layout:${wideLayout === 'columns' ? 'cols' : 'stack'}  closed:${showClosed ? 'shown' : 'hidden'}  filter:${search || 'none'}`,
+      `{bold}${repoLabel}{/bold}  {cyan-fg}${snapshot?.stats.openPullRequestCount ?? 0} PR{/cyan-fg}  {green-fg}${snapshot?.stats.openIssueCount ?? 0} issues{/green-fg}  GH:${ghStatus}  Emb:${embedStatus}  Cl:${clusterStatus}  sort:${sortMode}  members:${memberSortMode}  min:${minSize === 0 ? 'all' : `${minSize}+`}  layout:${wideLayout === 'columns' ? 'cols' : 'stack'}  closed:${showClosed ? 'shown' : 'hidden'}  filter:${search || 'none'}`,
     );
 
-    const clusterIndex = snapshot && selectedClusterId !== null ? Math.max(0, clusterIndexById.get(selectedClusterId) ?? -1) : 0;
-    widgets.clusters.select(clusterIndex);
+    isRendering = true;
+    try {
+      const clusterIndex =
+        snapshot && selectedClusterId !== null ? Math.max(CLUSTER_LIST_FIRST_ITEM_INDEX, clusterIndexById.get(selectedClusterId) ?? -1) : CLUSTER_LIST_HEADER_INDEX;
+      widgets.clusters.select(clusterIndex);
 
-    widgets.members.setItems(memberRows.length > 0 ? memberRows.map((row) => row.label) : ['No members']);
-    if (memberIndex >= 0) {
-      widgets.members.select(memberIndex);
+      widgets.members.setItems(memberRows.length > 0 ? memberRows.map((row) => row.label) : ['No members']);
+      if (memberIndex >= 0) {
+        widgets.members.select(memberIndex);
+      }
+    } finally {
+      isRendering = false;
     }
 
-    widgets.detail.setContent(renderDetailPane(threadDetail, clusterDetail, focusPane));
+    widgets.detail.setContent(renderDetailPane(threadDetail, clusterDetail, focusPane, snapshot, detailMode));
     updatePaneStyles(widgets, focusPane);
-    const activeJobs = [syncJobRunning ? 'sync' : null, embedJobRunning ? 'embed' : null, clusterJobRunning ? 'cluster' : null]
-      .filter(Boolean)
-      .join(', ') || 'idle';
-    const logLines = activityLines.slice(-FOOTER_LOG_LINES);
-    const footerLines = [...logLines];
-    while (footerLines.length < FOOTER_LOG_LINES) {
-      footerLines.unshift('');
-    }
-    footerLines.push(
-      `${status}  |  jobs:${activeJobs}  |  h/? help  # jump  g update  p repos  u author  / filter  s sort  f min  l layout  x closed`,
-    );
-    footerLines.push(
-      `Tab focus  arrows move-or-scroll  PgUp/PgDn page  r refresh  o open  q quit`,
-    );
+    const footerLines = [
+      activityLines.at(-1) ?? status,
+      `focus:${focusPane} sort:${sortMode} members:${memberSortMode} min:${minSize === 0 ? 'all' : `${minSize}+`}  Tab focus  / filter  s sort  m members  f min  o open  h help`,
+    ];
     widgets.footer.setContent(footerLines.join('\n'));
     widgets.screen.render();
   };
@@ -422,166 +413,24 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     widgets.screen.render();
   };
 
-  const consumeStreamLines = (
-    stream: NodeJS.ReadableStream,
-    onLine: (line: string) => void,
-  ): void => {
-    let buffer = '';
-    stream.setEncoding('utf8');
-    stream.on('data', (chunk: string) => {
-      buffer += chunk;
-      while (true) {
-        const newlineIndex = buffer.indexOf('\n');
-        if (newlineIndex === -1) break;
-        const line = buffer.slice(0, newlineIndex).replace(/\r$/, '').trimEnd();
-        buffer = buffer.slice(newlineIndex + 1);
-        if (line.length > 0) onLine(line);
-      }
-    });
-    stream.on('end', () => {
-      const line = buffer.replace(/\r$/, '').trim();
-      if (line.length > 0) onLine(line);
-    });
-  };
-
-  const finalizeBackgroundJob = (job: BackgroundRefreshJob): void => {
-    void (async () => {
-      const result = await job.exitPromise;
-      if (activeJob === job) {
-        activeJob = null;
-      }
-      setActiveJobFlags(null);
-
-      if (job.terminatedByUser) {
-        pushActivity(`[jobs] update pipeline terminated for ${job.repo.owner}/${job.repo.repo}`);
-      } else if (result.error) {
-        pushActivity(`[jobs] update pipeline failed for ${job.repo.owner}/${job.repo.repo}: ${result.error.message}`);
-      } else if (result.code === 0) {
-        pushActivity(`[jobs] update pipeline complete for ${job.repo.owner}/${job.repo.repo}`);
-        try {
-          const parsed = JSON.parse(result.stdout.trim()) as {
-            sync?: { threadsSynced?: number; threadsClosed?: number } | null;
-            embed?: { embedded?: number } | null;
-            cluster?: { clusters?: number; edges?: number } | null;
-          };
-          const summaryParts = [
-            parsed.sync ? `sync:${parsed.sync.threadsSynced ?? 0} threads` : null,
-            parsed.sync ? `closed:${parsed.sync.threadsClosed ?? 0}` : null,
-            parsed.embed ? `embed:${parsed.embed.embedded ?? 0}` : null,
-            parsed.cluster ? `cluster:${parsed.cluster.clusters ?? 0}` : null,
-            parsed.cluster ? `edges:${parsed.cluster.edges ?? 0}` : null,
-          ].filter((value): value is string => value !== null);
-          if (summaryParts.length > 0) {
-            pushActivity(`[jobs] result ${summaryParts.join('  ')}`);
-          }
-        } catch {
-          // Ignore malformed stdout; progress is already visible in the activity log.
-        }
-        if (currentRepository.owner === job.repo.owner && currentRepository.repo === job.repo.repo) {
-          refreshAll(true);
-        }
-      } else {
-        const exitSuffix =
-          result.signal !== null ? `signal=${result.signal}` : `code=${result.code ?? 1}`;
-        pushActivity(`[jobs] update pipeline failed for ${job.repo.owner}/${job.repo.repo}: exited ${exitSuffix}`);
-      }
-
-      status = 'Ready';
-      if (!exitRequested) {
-        render();
-      }
-    })();
-  };
-
-  const startBackgroundUpdatePipeline = (target: RepositoryTarget, selection: UpdateTaskSelection): boolean => {
-    if (activeJob !== null) {
-      pushActivity('[jobs] another update pipeline is already running');
-      return false;
-    }
-    if (!selection.sync && !selection.embed && !selection.cluster) {
-      pushActivity('[jobs] select at least one update step');
-      return false;
-    }
-
-    const cliArgs = buildRefreshCliArgs(target, selection);
-    const launch = createCliLaunch(cliArgs);
-    const child = spawn(launch.command, launch.args, {
-      env: process.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    const job: BackgroundRefreshJob = {
-      child,
-      repo: target,
-      selection,
-      stdoutBuffer: '',
-      terminatedByUser: false,
-      exitPromise: new Promise<BackgroundJobResult>((resolve) => {
-        let resolved = false;
-        const finish = (result: BackgroundJobResult): void => {
-          if (resolved) return;
-          resolved = true;
-          resolve(result);
-        };
-        child.on('error', (error) => {
-          finish({ code: null, signal: null, stdout: job.stdoutBuffer, error });
-        });
-        child.on('close', (code, signal) => {
-          finish({ code, signal, stdout: job.stdoutBuffer, error: null });
-        });
-      }),
-    };
-
-    child.stdout.setEncoding('utf8');
-    child.stdout.on('data', (chunk: string) => {
-      job.stdoutBuffer += chunk;
-    });
-    consumeStreamLines(child.stderr, (line) => pushActivity(line, { raw: true }));
-
-    activeJob = job;
-    setActiveJobFlags(selection);
-    status = `Running update pipeline for ${target.owner}/${target.repo}`;
-    pushActivity(
-      `[jobs] starting update pipeline for ${target.owner}/${target.repo}: ${UPDATE_TASK_ORDER.filter((task) => selection[task]).join(' -> ')}`,
-    );
-    render();
-    finalizeBackgroundJob(job);
-    return true;
-  };
-
   const moveSelection = (delta: -1 | 1, options?: { steps?: number; wrap?: boolean }): void => {
     if (!snapshot) return;
     const steps = Math.max(1, options?.steps ?? 1);
     const wrap = options?.wrap ?? true;
     if (focusPane === 'clusters') {
       if (snapshot.clusters.length === 0) return;
-      const currentIndex = Math.max(0, selectedClusterId === null ? -1 : (clusterIndexById.get(selectedClusterId) ?? -1));
+      const currentIndex = Math.max(
+        CLUSTER_LIST_FIRST_ITEM_INDEX,
+        selectedClusterId === null ? CLUSTER_LIST_FIRST_ITEM_INDEX : (clusterIndexById.get(selectedClusterId) ?? CLUSTER_LIST_FIRST_ITEM_INDEX),
+      );
       let nextIndex = currentIndex + delta * steps;
       if (wrap) {
-        nextIndex = ((nextIndex % snapshot.clusters.length) + snapshot.clusters.length) % snapshot.clusters.length;
+        const relativeIndex = nextIndex - CLUSTER_LIST_FIRST_ITEM_INDEX;
+        nextIndex = ((relativeIndex % snapshot.clusters.length) + snapshot.clusters.length) % snapshot.clusters.length + CLUSTER_LIST_FIRST_ITEM_INDEX;
       } else {
-        nextIndex = Math.max(0, Math.min(snapshot.clusters.length - 1, nextIndex));
+        nextIndex = Math.max(CLUSTER_LIST_FIRST_ITEM_INDEX, Math.min(snapshot.clusters.length, nextIndex));
       }
-      selectedClusterId = snapshot.clusters[nextIndex]?.clusterId ?? null;
-      if (selectedClusterId !== null) {
-        try {
-          clusterDetail = loadClusterDetail(selectedClusterId);
-        } catch {
-          status = 'Cluster data changed; refreshing view';
-          refreshAll(true);
-          return;
-        }
-        memberRows = buildMemberRows(clusterDetail, { includeClosedMembers: showClosed });
-        selectedMemberThreadId = preserveSelectedId(
-          memberRows.filter((row) => row.selectable).map((row) => row.threadId),
-          null,
-        );
-        memberIndex = findSelectableIndex(memberRows, selectedMemberThreadId);
-        loadSelectedThreadDetail(false);
-        resetDetailScroll();
-      }
-      status = selectedClusterId !== null ? `Cluster ${selectedClusterId} (${nextIndex + 1}/${snapshot.clusters.length})` : `Cluster ${nextIndex + 1}/${snapshot.clusters.length}`;
-      render();
+      selectClusterIndex(nextIndex);
       return;
     }
 
@@ -595,12 +444,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
         }
         nextIndex = candidateIndex;
       }
-      memberIndex = nextIndex;
-      selectedMemberThreadId = selectedThreadIdFromRow(memberRows, memberIndex);
-      loadSelectedThreadDetail(false);
-      resetDetailScroll();
-      status = selectedMemberThreadId !== null ? `Selected #${threadDetail?.thread.number ?? '?'}` : 'No selectable member';
-      render();
+      selectMemberIndex(nextIndex);
     }
   };
 
@@ -615,6 +459,135 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       return;
     }
     moveSelection(delta, { steps: getFocusedListPageSize(), wrap: false });
+  };
+
+  const jumpFocusedPaneToEdge = (edge: 'start' | 'end'): void => {
+    if (focusPane === 'detail') {
+      if (edge === 'start') {
+        widgets.detail.setScroll(0);
+      } else {
+        widgets.detail.setScrollPerc(100);
+      }
+      widgets.screen.render();
+      return;
+    }
+
+    if (focusPane === 'clusters') {
+      if (!snapshot || snapshot.clusters.length === 0) return;
+      selectClusterIndex(edge === 'start' ? CLUSTER_LIST_FIRST_ITEM_INDEX : snapshot.clusters.length);
+      return;
+    }
+
+    if (focusPane === 'members') {
+      const selectable = memberRows
+        .map((row, index) => ({ row, index }))
+        .filter((item) => item.row.selectable);
+      const target = edge === 'start' ? selectable.at(0) : selectable.at(-1);
+      if (target) {
+        selectMemberIndex(target.index);
+      }
+    }
+  };
+
+  const setSortMode = (nextSortMode: TuiClusterSortMode): void => {
+    if (sortMode === nextSortMode) {
+      return;
+    }
+    sortMode = nextSortMode;
+    persistRepositoryPreference();
+    status = `Sort: ${sortMode}`;
+    refreshAll(true);
+  };
+
+  const toggleSortMode = (): void => {
+    setSortMode(cycleSortMode(sortMode));
+  };
+
+  const toggleClosedVisibility = (): void => {
+    showClosed = !showClosed;
+    status = showClosed ? 'Showing closed clusters and members' : 'Hiding closed clusters and members';
+    refreshAll(true);
+  };
+
+  const setMemberSortMode = (nextMemberSortMode: TuiMemberSortMode): void => {
+    if (memberSortMode === nextMemberSortMode) {
+      return;
+    }
+    const previousMemberId = selectedMemberThreadId;
+    memberSortMode = nextMemberSortMode;
+    persistRepositoryPreference();
+    if (clusterDetail) {
+      memberRows = buildMemberRows(clusterDetail, { includeClosedMembers: showClosed, sortMode: memberSortMode });
+      selectedMemberThreadId = preserveSelectedId(
+        memberRows.filter((row) => row.selectable).map((row) => row.threadId),
+        previousMemberId,
+      );
+      memberIndex = findSelectableIndex(memberRows, selectedMemberThreadId);
+      loadSelectedThreadDetail(false);
+    }
+    status = `Member sort: ${memberSortMode}`;
+    render();
+  };
+
+  const toggleMemberSortMode = (): void => {
+    setMemberSortMode(cycleMemberSortMode(memberSortMode));
+  };
+
+  const setMinSize = (nextMinSize: TuiMinSizeFilter): void => {
+    if (minSize === nextMinSize) {
+      return;
+    }
+    minSize = nextMinSize;
+    persistRepositoryPreference();
+    status = `Min size: ${minSize === 0 ? 'all' : `${minSize}+`}`;
+    refreshAll(true);
+  };
+
+  const selectClusterIndex = (nextIndex: number): void => {
+    if (!snapshot || snapshot.clusters.length === 0) return;
+    if (nextIndex === CLUSTER_LIST_HEADER_INDEX) {
+      toggleSortMode();
+      return;
+    }
+    const snapshotIndex = Math.max(0, Math.min(snapshot.clusters.length - 1, nextIndex - CLUSTER_LIST_FIRST_ITEM_INDEX));
+    selectedClusterId = snapshot.clusters[snapshotIndex]?.clusterId ?? null;
+    if (selectedClusterId !== null) {
+      try {
+        clusterDetail = loadClusterDetail(selectedClusterId);
+      } catch {
+        status = 'Cluster data changed; refreshing view';
+        refreshAll(true);
+        return;
+      }
+      memberRows = buildMemberRows(clusterDetail, { includeClosedMembers: showClosed, sortMode: memberSortMode });
+      selectedMemberThreadId = preserveSelectedId(
+        memberRows.filter((row) => row.selectable).map((row) => row.threadId),
+        null,
+      );
+      memberIndex = findSelectableIndex(memberRows, selectedMemberThreadId);
+      loadSelectedThreadDetail(false);
+      resetDetailScroll();
+    }
+    status =
+      selectedClusterId !== null
+        ? `Cluster ${selectedClusterId} (${snapshotIndex + 1}/${snapshot.clusters.length})`
+        : `Cluster ${snapshotIndex + 1}/${snapshot.clusters.length}`;
+    render();
+  };
+
+  const selectMemberIndex = (nextIndex: number): void => {
+    if (memberRows.length === 0) return;
+    const row = memberRows[nextIndex];
+    if (!row?.selectable) {
+      render();
+      return;
+    }
+    memberIndex = nextIndex;
+    selectedMemberThreadId = row.threadId;
+    loadSelectedThreadDetail(false);
+    resetDetailScroll();
+    status = selectedMemberThreadId !== null ? `Selected #${threadDetail?.thread.number ?? '?'}` : 'No selectable member';
+    render();
   };
 
   const promptFilter = (): void => {
@@ -635,12 +608,26 @@ export async function startTui(params: StartTuiParams): Promise<void> {
         bg: '#101522',
       },
     });
+    let closed = false;
+    const closePrompt = (): boolean => {
+      if (closed) return false;
+      closed = true;
+      prompt.destroy();
+      clearModal();
+      render();
+      return true;
+    };
+    dismissModal = () => {
+      closePrompt();
+    };
     prompt.input('Filter clusters', search, (_error, value) => {
+      if (closed) return;
+      closed = true;
       search = (value ?? '').trim();
       status = search ? `Filter: ${search}` : 'Filter cleared';
       refreshAll(false);
       prompt.destroy();
-      modalOpen = false;
+      clearModal();
       updateFocus('clusters');
     });
   };
@@ -664,9 +651,23 @@ export async function startTui(params: StartTuiParams): Promise<void> {
         bg: '#101522',
       },
     });
-    prompt.input('Issue or PR number', '', (_error, value) => {
+    let closed = false;
+    const closePrompt = (): boolean => {
+      if (closed) return false;
+      closed = true;
       prompt.destroy();
-      modalOpen = false;
+      clearModal();
+      render();
+      return true;
+    };
+    dismissModal = () => {
+      closePrompt();
+    };
+    prompt.input('Issue or PR number', '', (_error, value) => {
+      if (closed) return;
+      closed = true;
+      prompt.destroy();
+      clearModal();
       const parsed = Number((value ?? '').trim());
       if (!Number.isInteger(parsed) || parsed <= 0) {
         status = 'Enter a positive issue or PR number';
@@ -706,34 +707,442 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     render();
   };
 
-  const promptAuthorThreads = (): void => {
+  const copyToStatus = (label: string, value: string): void => {
+    if (!value.trim()) {
+      status = `No ${label} to copy`;
+      return;
+    }
+    status = copyTextToClipboard(value) ? `Copied ${label}` : 'Clipboard copy failed';
+  };
+
+  const toggleDetailMode = (): void => {
+    detailMode = detailMode === 'full' ? 'compact' : 'full';
+    status = `Detail mode: ${detailMode}`;
+    render();
+  };
+
+  const runLocalMutation = (action: () => { message?: string }): void => {
+    try {
+      const result = action();
+      status = result.message ?? 'Updated local state';
+      clearCaches();
+      refreshAll(true);
+    } catch (error) {
+      status = formatTuiError(error);
+      render();
+    }
+  };
+
+  const confirmMutation = (message: string, action: () => { message?: string }): void => {
     if (modalOpen) return;
-    const authorLogin = threadDetail?.thread.authorLogin?.trim() ?? '';
-    if (!authorLogin) {
-      status = 'Selected thread has no author login';
+    modalOpen = true;
+    const box = blessed.box({
+      parent: widgets.screen,
+      border: 'line',
+      label: ' Confirm ',
+      top: 'center',
+      left: 'center',
+      width: '62%',
+      height: 7,
+      tags: true,
+      mouse: true,
+      content: `${message}\n\nDefault: no. Press y to confirm, Enter/Esc/n/q to cancel.`,
+      style: {
+        border: { fg: '#fde74c' },
+        fg: 'white',
+        bg: '#101522',
+      },
+    });
+    let closed = false;
+    const closeConfirm = (confirmed: boolean): void => {
+      if (closed) return;
+      closed = true;
+      widgets.screen.off('keypress', handleKeypress);
+      box.destroy();
+      clearModal();
+      if (confirmed) {
+        runLocalMutation(action);
+        return;
+      }
+      status = 'Cancelled';
+      render();
+    };
+    const handleKeypress = (_char: string, key: blessed.Widgets.Events.IKeyEventArg): void => {
+      if (key.name === 'y') {
+        closeConfirm(true);
+        return;
+      }
+      if (key.name === 'enter' || key.name === 'escape' || key.name === 'n' || key.name === 'q') {
+        closeConfirm(false);
+      }
+    };
+    box.on('mousedown', (event: MouseEventArg) => {
+      if (event.button === 'right') {
+        closeConfirm(false);
+      }
+    });
+    dismissModal = () => closeConfirm(false);
+    widgets.screen.on('keypress', handleKeypress);
+    box.focus();
+    widgets.screen.render();
+  };
+
+  const openContextMenu = (label: string, items: ContextMenuItem[], event?: MouseEventArg): void => {
+    if (modalOpen || items.length === 0) {
+      return;
+    }
+    modalOpen = true;
+    const width = Math.max(26, Math.min(42, Math.max(...items.map((item) => item.label.length)) + 4));
+    const height = items.length + 2;
+    const screenWidth = Number(widgets.screen.width);
+    const screenHeight = Number(widgets.screen.height);
+    const left = Math.max(0, Math.min((event?.x ?? Math.floor(screenWidth * 0.72)) - 1, screenWidth - width));
+    const top = Math.max(0, Math.min((event?.y ?? Math.floor(screenHeight * 0.35)) - 1, screenHeight - height));
+    const menu = blessed.list({
+      parent: widgets.screen,
+      border: 'line',
+      top,
+      left,
+      width,
+      height,
+      tags: true,
+      keys: true,
+      mouse: true,
+      label: ` ${label} `,
+      items: items.map((item) => item.label),
+      style: {
+        border: { fg: '#fde74c' },
+        selected: { bg: '#f7f7ff', fg: 'black', bold: true },
+        item: { fg: 'white' },
+        bg: '#101522',
+      },
+    });
+
+    let closed = false;
+    const closeMenu = (): void => {
+      if (closed) return;
+      closed = true;
+      menu.destroy();
+      clearModal();
+      render();
+    };
+    dismissModal = closeMenu;
+    menu.key(['escape', 'q'], closeMenu);
+    menu.on('mousedown', (mouseEvent: MouseEventArg) => {
+      if (mouseEvent.button === 'right') {
+        closeMenu();
+      }
+    });
+    menu.on('select', (_item, index) => {
+      const item = items[Number(index)];
+      closeMenu();
+      const shouldRender = item?.run();
+      if (shouldRender !== false) {
+        render();
+      }
+    });
+    menu.focus();
+    widgets.screen.render();
+  };
+
+  const threadContextItems = (): ContextMenuItem[] => {
+    const selectedThread = threadDetail?.thread;
+    if (!selectedThread) {
+      return [{ label: 'Close', run: () => undefined }];
+    }
+    return [
+      ...buildThreadContextMenuItems(threadDetail).map((item) => ({
+      label: item.label,
+      run: () => {
+        if (item.action === 'open') {
+          openUrl(selectedThread.htmlUrl);
+          status = `Opened ${selectedThread.htmlUrl}`;
+        } else if (item.action === 'copy-url') {
+          status = copyTextToClipboard(selectedThread.htmlUrl) ? 'Copied URL' : 'Clipboard copy failed';
+        } else if (item.action === 'copy-title') {
+          status = copyTextToClipboard(`#${selectedThread.number} ${selectedThread.title}`) ? 'Copied title' : 'Clipboard copy failed';
+        } else if (item.action === 'copy-markdown-link') {
+          const markdownLink = `[#${selectedThread.number} ${selectedThread.title}](${selectedThread.htmlUrl})`;
+          status = copyTextToClipboard(markdownLink) ? 'Copied markdown link' : 'Clipboard copy failed';
+        } else if (item.action === 'open-first-link') {
+          const url = getThreadReferenceLinks(threadDetail).at(0);
+          if (url) {
+            openUrl(url);
+            status = `Opened ${url}`;
+          } else {
+            status = 'No referenced links found';
+          }
+        } else if (item.action === 'copy-first-link') {
+          const url = getThreadReferenceLinks(threadDetail).at(0);
+          status = url ? (copyTextToClipboard(url) ? 'Copied referenced link' : 'Clipboard copy failed') : 'No referenced links found';
+        } else if (item.action === 'open-link-picker') {
+          openLinkPicker('open');
+        } else if (item.action === 'copy-link-picker') {
+          openLinkPicker('copy');
+        } else if (item.action === 'load-neighbors') {
+          loadSelectedThreadDetail(true);
+          status = `Loaded neighbors for #${threadDetail?.thread.number ?? selectedThread.number}`;
+          focusPane = 'detail';
+        }
+      },
+      })),
+      ...detailCopyContextItems(),
+      ...clusterCopyContextItems({ includeVisibleClusters: false }),
+      {
+        label: 'Close thread locally',
+        run: () =>
+          confirmMutation(
+            `Close ${selectedThread.kind === 'pull_request' ? 'PR' : 'issue'} #${selectedThread.number} locally? This hides it from active sync/cluster views.`,
+            () =>
+              params.service.closeThreadLocally({
+                owner: currentRepository.owner,
+                repo: currentRepository.repo,
+                threadNumber: selectedThread.number,
+              }),
+          ),
+      },
+      {
+        label: 'Remove from durable cluster',
+        run: () =>
+          confirmMutation(
+            `Remove #${selectedThread.number} from durable cluster ${clusterDetail?.clusterId ?? selectedThread.clusterId ?? '?'}? Future clustering should respect this override.`,
+            () =>
+              params.service.excludeThreadFromCluster({
+                owner: currentRepository.owner,
+                repo: currentRepository.repo,
+                clusterId: clusterDetail?.clusterId ?? selectedThread.clusterId ?? 0,
+                threadNumber: selectedThread.number,
+                reason: 'TUI manual remove',
+              }),
+          ),
+      },
+      {
+        label: 'Set as durable canonical',
+        run: () =>
+          confirmMutation(
+            `Set #${selectedThread.number} as canonical for durable cluster ${clusterDetail?.clusterId ?? selectedThread.clusterId ?? '?'}?`,
+            () =>
+              params.service.setClusterCanonicalThread({
+                owner: currentRepository.owner,
+                repo: currentRepository.repo,
+                clusterId: clusterDetail?.clusterId ?? selectedThread.clusterId ?? 0,
+                threadNumber: selectedThread.number,
+                reason: 'TUI manual canonical',
+              }),
+          ),
+      },
+    ];
+  };
+
+  const detailCopyContextItems = (): ContextMenuItem[] => {
+    if (!threadDetail) return [];
+    const selectedThreadDetail = threadDetail;
+    return [
+      {
+        label: detailMode === 'full' ? 'Use compact detail' : 'Use full detail',
+        run: toggleDetailMode,
+      },
+      {
+        label: 'Copy all detail',
+        run: () => {
+          copyToStatus('detail', formatThreadDetailForClipboard(selectedThreadDetail, clusterDetail));
+        },
+      },
+      {
+        label: 'Copy body',
+        run: () => {
+          copyToStatus('body', selectedThreadDetail.thread.body ?? '');
+        },
+      },
+      {
+        label: 'Copy summaries',
+        run: () => {
+          copyToStatus('summaries', formatSummariesForClipboard(selectedThreadDetail.summaries));
+        },
+      },
+      {
+        label: 'Copy links',
+        run: () => {
+          const links = getThreadReferenceLinks(selectedThreadDetail);
+          copyToStatus('links', links.join('\n'));
+        },
+      },
+    ];
+  };
+
+  const openLinkPicker = (mode: 'open' | 'copy'): void => {
+    const links = getThreadReferenceLinks(threadDetail);
+    if (links.length === 0 || modalOpen) {
+      status = 'No referenced links found';
       render();
       return;
     }
+    modalOpen = true;
+    const width = Math.min(92, Math.max(48, Math.max(...links.map((url) => url.length)) + 8));
+    const height = Math.min(Number(widgets.screen.height) - 4, Math.max(5, links.length + 2));
+    const picker = blessed.list({
+      parent: widgets.screen,
+      border: 'line',
+      label: mode === 'open' ? ' Open Link ' : ' Copy Link ',
+      top: 'center',
+      left: 'center',
+      width,
+      height,
+      tags: false,
+      keys: true,
+      vi: true,
+      mouse: true,
+      items: links.map((url, index) => formatLinkChoiceLabel(url, index)),
+      scrollbar: { ch: ' ' },
+      style: {
+        border: { fg: '#fde74c' },
+        selected: { bg: '#f7f7ff', fg: 'black', bold: true },
+        item: { fg: 'white' },
+        bg: '#101522',
+      },
+    });
 
-    void (async () => {
-      modalOpen = true;
-      try {
-        const response = params.service.listAuthorThreads({
-          owner: currentRepository.owner,
-          repo: currentRepository.repo,
-          login: authorLogin,
-        });
-        const choice = await promptAuthorThreadChoice(widgets.screen, response.authorLogin, response.threads);
-        if (!choice) {
-          render();
-          return;
-        }
-        jumpToThread(choice.threadId, choice.clusterId);
-        updateFocus('members');
-      } finally {
-        modalOpen = false;
+    let closed = false;
+    const closePicker = (): void => {
+      if (closed) return;
+      closed = true;
+      picker.destroy();
+      clearModal();
+      render();
+    };
+    dismissModal = closePicker;
+    picker.key(['escape', 'q'], closePicker);
+    picker.on('mousedown', (mouseEvent: MouseEventArg) => {
+      if (mouseEvent.button === 'right') {
+        closePicker();
       }
-    })();
+    });
+    picker.on('select', (_item, index) => {
+      const url = links[Number(index)];
+      if (!url) {
+        closePicker();
+        return;
+      }
+      if (mode === 'open') {
+        openUrl(url);
+        status = `Opened ${url}`;
+      } else {
+        status = copyTextToClipboard(url) ? 'Copied referenced link' : 'Clipboard copy failed';
+      }
+      closePicker();
+    });
+    picker.focus();
+    widgets.screen.render();
+  };
+
+  const clusterContextItems = (): ContextMenuItem[] => {
+    const selectedCluster = clusterDetail;
+    return [
+      ...(selectedCluster
+        ? [
+            { label: 'Focus members', run: () => updateFocus('members') },
+          ]
+        : []),
+      ...clusterCopyContextItems({ includeVisibleClusters: true }),
+      ...(selectedCluster
+        ? [
+            {
+              label: 'Close cluster locally',
+              run: () =>
+                confirmMutation(
+                  `Close cluster ${selectedCluster.clusterId} locally? Default is no.`,
+                  () =>
+                    params.service.closeClusterLocally({
+                      owner: currentRepository.owner,
+                      repo: currentRepository.repo,
+                      clusterId: selectedCluster.clusterId,
+                    }),
+                ),
+            },
+          ]
+        : []),
+      { label: 'Sort by size', run: () => setSortMode('size') },
+      { label: 'Sort by recent', run: () => setSortMode('recent') },
+      { label: 'Member sort grouped', run: () => setMemberSortMode('kind') },
+      { label: 'Member sort recent', run: () => setMemberSortMode('recent') },
+      { label: 'Member sort number', run: () => setMemberSortMode('number') },
+      { label: 'Member sort state', run: () => setMemberSortMode('state') },
+      { label: 'Min size 1+', run: () => setMinSize(1) },
+      { label: 'Min size 5+', run: () => setMinSize(5) },
+      { label: 'Min size 10+', run: () => setMinSize(10) },
+      { label: 'Min size all', run: () => setMinSize(0) },
+      { label: showClosed ? 'Hide closed' : 'Show closed', run: () => toggleClosedVisibility() },
+      { label: 'Filter clusters', run: promptFilter },
+      { label: 'Refresh', run: () => refreshAll(true) },
+      { label: 'Help', run: openHelp },
+    ];
+  };
+
+  const globalContextItems = (): ContextMenuItem[] => [
+    { label: 'Refresh', run: () => refreshAll(true) },
+    { label: 'Repository browser', run: browseRepositories },
+    {
+      label: 'Copy visible clusters',
+      run: () => {
+        copyToStatus('visible clusters', formatVisibleClustersForClipboard(snapshot?.clusters ?? []));
+      },
+    },
+    { label: 'Sort by size', run: () => setSortMode('size') },
+    { label: 'Sort by recent', run: () => setSortMode('recent') },
+    { label: 'Member sort grouped', run: () => setMemberSortMode('kind') },
+    { label: 'Member sort recent', run: () => setMemberSortMode('recent') },
+    { label: 'Min size 1+', run: () => setMinSize(1) },
+    { label: 'Min size 5+', run: () => setMinSize(5) },
+    { label: 'Min size 10+', run: () => setMinSize(10) },
+    { label: 'Min size all', run: () => setMinSize(0) },
+    { label: showClosed ? 'Hide closed' : 'Show closed', run: () => toggleClosedVisibility() },
+    { label: 'Help', run: openHelp },
+    {
+      label: 'Quit',
+      run: () => {
+        requestQuit();
+        return false;
+      },
+    },
+  ];
+
+  const clusterCopyContextItems = (options: { includeVisibleClusters: boolean }): ContextMenuItem[] => {
+    const selectedCluster = clusterDetail;
+    const title = selectedCluster ? splitClusterDisplayTitle(selectedCluster.displayTitle) : null;
+    return [
+      ...(selectedCluster && title
+        ? [
+            {
+              label: 'Copy cluster name',
+              run: () => copyToStatus('cluster name', title.name),
+            },
+            {
+              label: 'Copy cluster title',
+              run: () => copyToStatus('cluster title', title.title),
+            },
+            {
+              label: 'Copy cluster id',
+              run: () => copyToStatus('cluster id', String(selectedCluster.clusterId)),
+            },
+            {
+              label: 'Copy cluster details',
+              run: () => copyToStatus('cluster details', formatClusterForClipboard(selectedCluster)),
+            },
+            {
+              label: 'Copy member list',
+              run: () => copyToStatus('member list', formatClusterMembersForClipboard(selectedCluster)),
+            },
+          ]
+        : []),
+      ...(options.includeVisibleClusters
+        ? [
+            {
+              label: 'Copy visible clusters',
+              run: () => copyToStatus('visible clusters', formatVisibleClustersForClipboard(snapshot?.clusters ?? [])),
+            },
+          ]
+        : []),
+    ];
   };
 
   const openHelp = (): void => {
@@ -744,120 +1153,15 @@ export async function startTui(params: StartTuiParams): Promise<void> {
         await promptHelp(widgets.screen);
         render();
       } finally {
-        modalOpen = false;
+        clearModal();
       }
     })();
-  };
-
-  const promptConfirm = async (label: string, message: string): Promise<boolean> => {
-    const box = blessed.box({
-      parent: widgets.screen,
-      border: 'line',
-      label: ` ${label} `,
-      tags: true,
-      top: 'center',
-      left: 'center',
-      width: '68%',
-      height: 9,
-      padding: {
-        left: 1,
-        right: 1,
-      },
-      style: {
-        border: { fg: '#fde74c' },
-        fg: 'white',
-        bg: '#101522',
-      },
-      content: `${message}\n\nPress y or Enter to confirm. Press n or Esc to cancel.`,
-    });
-
-    widgets.screen.render();
-
-    return await new Promise<boolean>((resolve) => {
-      const finish = (value: boolean): void => {
-        widgets.screen.off('keypress', handleKeypress);
-        box.destroy();
-        widgets.screen.render();
-        resolve(value);
-      };
-      const handleKeypress = (char: string, key: blessed.Widgets.Events.IKeyEventArg): void => {
-        if (key.name === 'enter' || char.toLowerCase() === 'y') {
-          finish(true);
-          return;
-        }
-        if (key.name === 'escape' || char.toLowerCase() === 'n' || key.name === 'q') {
-          finish(false);
-        }
-      };
-
-      widgets.screen.on('keypress', handleKeypress);
-    });
   };
 
   const requestQuit = (): void => {
-    if (modalOpen) return;
-    void (async () => {
-      if (activeJob === null) {
-        widgets.screen.destroy();
-        return;
-      }
-
-      modalOpen = true;
-      try {
-        const confirmed = await promptConfirm(
-          'Stop Update Pipeline',
-          `A background update pipeline is still running for ${activeJob.repo.owner}/${activeJob.repo.repo}.\nQuitting now will send SIGTERM to that refresh process and wait for it to exit.`,
-        );
-        if (!confirmed) {
-          render();
-          return;
-        }
-
-        exitRequested = true;
-        status = 'Stopping background update pipeline';
-        pushActivity(`[jobs] stopping update pipeline for ${activeJob.repo.owner}/${activeJob.repo.repo}`);
-        render();
-        activeJob.terminatedByUser = true;
-        activeJob.child.kill('SIGTERM');
-        await activeJob.exitPromise;
-        widgets.screen.destroy();
-      } finally {
-        modalOpen = false;
-      }
-    })();
+    if (dismissActiveModal()) return;
+    widgets.screen.destroy();
   };
-
-  const promptUpdatePipeline = (): void => {
-    if (modalOpen || hasActiveJobs()) {
-      if (hasActiveJobs()) {
-        pushActivity('[jobs] update pipeline is unavailable while another job is running');
-      }
-      return;
-    }
-
-    void (async () => {
-      modalOpen = true;
-      try {
-        const selection = await promptUpdatePipelineSelection(
-          widgets.screen,
-          snapshot?.stats ?? null,
-          params.service.config.embeddingBasis,
-        );
-        if (!selection) {
-          render();
-          return;
-        }
-        const selectedTasks = UPDATE_TASK_ORDER.filter((task) => selection[task]).join(' -> ');
-        pushActivity(`[jobs] queued update pipeline: ${selectedTasks}`);
-        startBackgroundUpdatePipeline(currentRepository, selection);
-        updateFocus('clusters');
-      } finally {
-        modalOpen = false;
-      }
-    })();
-  };
-
-  const hasActiveJobs = (): boolean => activeJob !== null;
 
   const persistRepositoryPreference = (): void => {
     writeTuiRepositoryPreference(params.service.config, {
@@ -865,6 +1169,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       repo: currentRepository.repo,
       minClusterSize: minSize,
       sortMode,
+      memberSortMode,
       wideLayout,
     });
   };
@@ -908,6 +1213,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     const preference = getTuiRepositoryPreference(params.service.config, target.owner, target.repo);
     minSize = overrides?.minClusterSize ?? preference.minClusterSize;
     sortMode = overrides?.sortMode ?? preference.sortMode;
+    memberSortMode = preference.memberSortMode;
     wideLayout = preference.wideLayout;
     persistRepositoryPreference();
     clearCaches();
@@ -937,26 +1243,8 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     refreshAll(false);
   };
 
-  const runRepositoryBootstrap = (target: RepositoryTarget): boolean => {
-    if (hasActiveJobs()) {
-      pushActivity('[repo] repository setup is blocked while jobs are already running');
-      return false;
-    }
-
-    setRepositoryPending(target, {
-      minClusterSize: 1,
-      status: `Preparing ${target.owner}/${target.repo}`,
-    });
-    pushActivity(`[repo] opened ${target.owner}/${target.repo}; starting initial update pipeline in the background`);
-    return startBackgroundUpdatePipeline(target, { sync: true, embed: true, cluster: true });
-  };
-
   const browseRepositories = (): void => {
     if (modalOpen) return;
-    if (hasActiveJobs()) {
-      pushActivity('[repo] repository switching is disabled while jobs are running');
-      return;
-    }
 
     void (async () => {
       modalOpen = true;
@@ -981,13 +1269,17 @@ export async function startTui(params: StartTuiParams): Promise<void> {
           render();
           return;
         }
-        runRepositoryBootstrap(target);
+        setRepositoryPending(target, {
+          minClusterSize: 5,
+          status: `No local data for ${target.owner}/${target.repo}; run sync/embed/cluster in the CLI, then press r`,
+        });
+        pushActivity(`[repo] selected ${target.owner}/${target.repo}; run ghcrawl sync/embed/cluster from the shell`);
         updateFocus('clusters');
       } catch (error) {
         status = 'Repository action failed';
         pushActivity(`[repo] action failed: ${formatTuiError(error)}`);
       } finally {
-        modalOpen = false;
+        clearModal();
       }
     })();
   };
@@ -1017,10 +1309,11 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       if (!target) {
         return false;
       }
-      const ready = runRepositoryBootstrap(target);
-      if (!ready) {
-        return false;
-      }
+      setRepositoryPending(target, {
+        minClusterSize: 5,
+        status: `No local data for ${target.owner}/${target.repo}; run sync/embed/cluster in the CLI, then press r`,
+      });
+      pushActivity(`[repo] selected ${target.owner}/${target.repo}; run ghcrawl sync/embed/cluster from the shell`);
       updateFocus('clusters');
       return true;
     } catch (error) {
@@ -1028,7 +1321,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       pushActivity(`[repo] selection failed: ${formatTuiError(error)}`);
       return false;
     } finally {
-      modalOpen = false;
+      clearModal();
     }
   };
 
@@ -1036,7 +1329,10 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     requestQuit();
   });
   widgets.screen.key(['C-c'], () => {
-    requestQuit();
+    widgets.screen.destroy();
+  });
+  widgets.screen.key(['escape'], () => {
+    dismissActiveModal();
   });
   widgets.screen.key(['tab', 'right'], () => {
     if (modalOpen) return;
@@ -1072,15 +1368,11 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   });
   widgets.screen.key(['home'], () => {
     if (modalOpen) return;
-    if (focusPane !== 'detail') return;
-    widgets.detail.setScroll(0);
-    widgets.screen.render();
+    jumpFocusedPaneToEdge('start');
   });
   widgets.screen.key(['end'], () => {
     if (modalOpen) return;
-    if (focusPane !== 'detail') return;
-    widgets.detail.setScrollPerc(100);
-    widgets.screen.render();
+    jumpFocusedPaneToEdge('end');
   });
   widgets.screen.key(['enter'], () => {
     if (modalOpen) return;
@@ -1096,17 +1388,15 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   });
   widgets.screen.key(['s'], () => {
     if (modalOpen) return;
-    sortMode = cycleSortMode(sortMode);
-    persistRepositoryPreference();
-    status = `Sort: ${sortMode}`;
-    refreshAll(false);
+    toggleSortMode();
+  });
+  widgets.screen.key(['m'], () => {
+    if (modalOpen) return;
+    toggleMemberSortMode();
   });
   widgets.screen.key(['f'], () => {
     if (modalOpen) return;
-    minSize = cycleMinSizeFilter(minSize);
-    persistRepositoryPreference();
-    status = `Min size: ${minSize === 0 ? 'all' : `${minSize}+`}`;
-    refreshAll(false);
+    setMinSize(cycleMinSizeFilter(minSize));
   });
   widgets.screen.key(['l'], () => {
     if (modalOpen) return;
@@ -1117,9 +1407,7 @@ export async function startTui(params: StartTuiParams): Promise<void> {
   });
   widgets.screen.key(['x'], () => {
     if (modalOpen) return;
-    showClosed = !showClosed;
-    status = showClosed ? 'Showing closed clusters and members' : 'Hiding closed clusters and members';
-    refreshAll(true);
+    toggleClosedVisibility();
   });
   widgets.screen.key(['/'], () => {
     if (modalOpen) return;
@@ -1134,10 +1422,6 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     openHelp();
   });
   widgets.screen.key(['p'], () => browseRepositories());
-  widgets.screen.key(['g'], () => {
-    if (modalOpen) return;
-    promptUpdatePipeline();
-  });
   widgets.screen.key(['r'], () => {
     if (modalOpen) return;
     status = 'Refreshing';
@@ -1147,13 +1431,138 @@ export async function startTui(params: StartTuiParams): Promise<void> {
     if (modalOpen) return;
     openSelectedThread();
   });
-  widgets.screen.key(['u'], () => {
+  widgets.clusters.on('select item', (_item, index) => {
+    if (isRendering || modalOpen) return;
+    if (suppressNextClusterSelect) {
+      suppressNextClusterSelect = false;
+      return;
+    }
+    focusPane = 'clusters';
+    widgets.clusters.focus();
+    selectClusterIndex(Number(index));
+  });
+  widgets.clusters.on('select', () => {
+    if (isRendering || modalOpen) return;
+    updateFocus('members');
+  });
+  widgets.clusters.on('mousedown', (event: MouseEventArg) => {
+    if (isRendering || modalOpen) return;
+    const itemIndex = getListItemIndexFromMouse(widgets.clusters, event);
+    if (event.button === 'left' && itemIndex === CLUSTER_LIST_HEADER_INDEX) {
+      suppressNextClusterSelect = true;
+      const relativeX = Math.max(0, Number(event.x) - Number(widgets.clusters.aleft) - 2);
+      const innerWidth = Math.max(1, Number(widgets.clusters.width) - 2);
+      setSortMode(resolveClusterHeaderSortFromClick(relativeX, innerWidth, sortMode));
+      return;
+    }
+    if (event.button !== 'right') return;
+    focusPane = 'clusters';
+    widgets.clusters.focus();
+    if (itemIndex !== null && itemIndex >= CLUSTER_LIST_FIRST_ITEM_INDEX) {
+      selectClusterIndex(itemIndex);
+    } else {
+      render();
+    }
+    openContextMenu('Cluster', clusterContextItems(), event);
+  });
+  widgets.clusters.on('wheelup', () => {
+    if (isRendering || modalOpen) return;
+    focusPane = 'clusters';
+    widgets.clusters.focus();
+    moveSelection(-1, { wrap: false });
+  });
+  widgets.clusters.on('wheeldown', () => {
+    if (isRendering || modalOpen) return;
+    focusPane = 'clusters';
+    widgets.clusters.focus();
+    moveSelection(1, { wrap: false });
+  });
+  widgets.members.on('select item', (_item, index) => {
+    if (isRendering || modalOpen) return;
+    if (suppressNextMemberSelect) {
+      suppressNextMemberSelect = false;
+      return;
+    }
+    focusPane = 'members';
+    widgets.members.focus();
+    selectMemberIndex(Number(index));
+  });
+  widgets.members.on('select', () => {
+    if (isRendering || modalOpen) return;
+    loadSelectedThreadDetail(true);
+    status = selectedMemberThreadId !== null ? `Loaded neighbors for #${threadDetail?.thread.number ?? '?'}` : status;
+    updateFocus('detail');
+  });
+  widgets.members.on('mousedown', (event: MouseEventArg) => {
+    if (isRendering || modalOpen) return;
+    focusPane = 'members';
+    widgets.members.focus();
+    const itemIndex = getListItemIndexFromMouse(widgets.members, event);
+    if (event.button === 'left' && itemIndex === 0) {
+      suppressNextMemberSelect = true;
+      const relativeX = Math.max(0, Number(event.x) - Number(widgets.members.aleft) - 2);
+      setMemberSortMode(resolveMemberHeaderSortFromClick(relativeX, memberSortMode));
+      return;
+    }
+    if (event.button !== 'right') return;
+    const row = itemIndex !== null && itemIndex >= 0 && itemIndex < memberRows.length ? memberRows[itemIndex] : null;
+    if (!row?.selectable) {
+      openContextMenu('Members', clusterContextItems(), event);
+      return;
+    }
+    if (row.threadId !== selectedMemberThreadId) {
+      selectMemberIndex(itemIndex ?? 0);
+    }
+    openContextMenu('Thread', threadContextItems(), event);
+  });
+  widgets.members.on('wheelup', () => {
+    if (isRendering || modalOpen) return;
+    focusPane = 'members';
+    widgets.members.focus();
+    moveSelection(-1, { wrap: false });
+  });
+  widgets.members.on('wheeldown', () => {
+    if (isRendering || modalOpen) return;
+    focusPane = 'members';
+    widgets.members.focus();
+    moveSelection(1, { wrap: false });
+  });
+  widgets.detail.on('click', () => {
     if (modalOpen) return;
-    promptAuthorThreads();
+    updateFocus('detail');
+  });
+  widgets.detail.on('mousedown', (event: MouseEventArg) => {
+    if (modalOpen || event.button !== 'right') return;
+    updateFocus('detail');
+    openContextMenu(threadDetail ? 'Thread' : clusterDetail ? 'Cluster' : 'ghcrawl', threadDetail ? threadContextItems() : clusterDetail ? clusterContextItems() : globalContextItems(), event);
+  });
+  widgets.detail.on('wheelup', () => {
+    if (modalOpen) return;
+    focusPane = 'detail';
+    widgets.detail.focus();
+    scrollDetail(-3);
+  });
+  widgets.detail.on('wheeldown', () => {
+    if (modalOpen) return;
+    focusPane = 'detail';
+    widgets.detail.focus();
+    scrollDetail(3);
+  });
+  widgets.header.on('mousedown', (event: MouseEventArg) => {
+    if (modalOpen || event.button !== 'right') return;
+    openContextMenu('ghcrawl', globalContextItems(), event);
+  });
+  widgets.footer.on('mousedown', (event: MouseEventArg) => {
+    if (modalOpen || event.button !== 'right') return;
+    openContextMenu('ghcrawl', globalContextItems(), event);
   });
   widgets.screen.on('resize', () => render());
 
+  const autoRefreshTimer = setInterval(autoRefreshIfChanged, TUI_AUTO_REFRESH_INTERVAL_MS);
+  autoRefreshTimer.unref?.();
+
   widgets.screen.on('destroy', () => {
+    clearInterval(autoRefreshTimer);
     widgets.screen.program.showCursor();
   });
 
@@ -1169,735 +1578,25 @@ export async function startTui(params: StartTuiParams): Promise<void> {
       return;
     }
   }
-  pushActivity('[jobs] press g to run the staged update pipeline: GitHub sync, embeddings, then clusters');
   updateFocus('clusters');
 
   await new Promise<void>((resolve) => widgets.screen.once('destroy', () => resolve()));
 }
 
-function createWidgets(owner: string, repo: string): Widgets {
-  const screen = createScreen({
-    smartCSR: true,
-    fullUnicode: true,
-    dockBorders: true,
-    autoPadding: false,
-    title: owner && repo ? `ghcrawl ${owner}/${repo}` : 'ghcrawl',
-  });
-  const header = blessed.box({
-    parent: screen,
-    tags: true,
-    style: { fg: 'white', bg: '#0d1321' },
-  });
-  const clusters = blessed.list({
-    parent: screen,
-    border: 'line',
-    label: ' Clusters ',
-    tags: true,
-    keys: false,
-    style: {
-      border: { fg: '#5bc0eb' },
-      item: { fg: 'white' },
-      selected: { bg: '#5bc0eb', fg: 'black', bold: true },
-    },
-    scrollbar: { ch: ' ' },
-  });
-  const members = blessed.list({
-    parent: screen,
-    border: 'line',
-    label: ' Members ',
-    tags: true,
-    keys: false,
-    style: {
-      border: { fg: '#9bc53d' },
-      item: { fg: 'white' },
-      selected: { bg: '#9bc53d', fg: 'black', bold: true },
-    },
-    scrollbar: { ch: ' ' },
-  });
-  const detail = blessed.box({
-    parent: screen,
-    border: 'line',
-    label: ' Detail ',
-    tags: true,
-    scrollable: true,
-    alwaysScroll: true,
-    keys: false,
-    scrollbar: { ch: ' ' },
-    style: {
-      border: { fg: '#fde74c' },
-      fg: 'white',
-    },
-  });
-  const footer = blessed.box({
-    parent: screen,
-    tags: false,
-    style: { fg: 'black', bg: '#5bc0eb' },
-  });
-
-  return { screen, header, clusters, members, detail, footer };
-}
-
-function updatePaneStyles(widgets: Widgets, focus: TuiFocusPane): void {
-  widgets.clusters.style.border = { fg: focus === 'clusters' ? 'white' : '#5bc0eb' };
-  widgets.members.style.border = { fg: focus === 'members' ? 'white' : '#9bc53d' };
-  widgets.detail.style.border = { fg: focus === 'detail' ? 'white' : '#fde74c' };
-}
-
-export function renderDetailPane(
-  threadDetail: TuiThreadDetail | null,
-  clusterDetail: TuiClusterDetail | null,
-  focusPane: TuiFocusPane,
-): string {
-  if (!clusterDetail) {
-    return 'No cluster selected.\n\nRun `ghcrawl cluster owner/repo` if you have not clustered this repository yet.';
-  }
-  if (!threadDetail) {
-    const representativeLabel =
-      clusterDetail.representativeNumber !== null && clusterDetail.representativeKind !== null
-        ? ` (#${clusterDetail.representativeNumber} representative ${clusterDetail.representativeKind === 'pull_request' ? 'pr' : 'issue'})`
-        : '';
-    return `{bold}Cluster ${clusterDetail.clusterId}${escapeBlessedText(representativeLabel)}{/bold}\n${escapeBlessedText(clusterDetail.displayTitle)}\n\nSelect a member to inspect thread details.`;
-  }
-
-  const thread = threadDetail.thread;
-  const representativeLabel =
-    clusterDetail.representativeNumber !== null && clusterDetail.representativeKind !== null
-      ? ` (#${clusterDetail.representativeNumber} representative ${clusterDetail.representativeKind === 'pull_request' ? 'pr' : 'issue'})`
-      : '';
-  const labels = thread.labels.length > 0 ? escapeBlessedText(thread.labels.join(', ')) : 'none';
-  const closedLabel = thread.isClosed
-    ? `{bold}Closed:{/bold} ${escapeBlessedText(thread.closedAtLocal ?? thread.closedAtGh ?? 'yes')} ${thread.closeReasonLocal ? `(${escapeBlessedText(thread.closeReasonLocal)})` : ''}`.trimEnd()
-    : '{bold}Closed:{/bold} no';
-  const summaries = Object.entries(threadDetail.summaries)
-    .map(([key, value]) => {
-      const label = key === 'dedupe_summary' ? 'LLM Summary' : key;
-      return `{bold}${escapeBlessedText(label)}:{/bold}\n${escapeBlessedText(value)}`;
-    })
-    .join('\n\n');
-  const neighbors =
-    threadDetail.neighbors.length > 0
-      ? threadDetail.neighbors
-          .map((neighbor) => `#${neighbor.number} ${neighbor.kind} ${(neighbor.score * 100).toFixed(1)}%  ${escapeBlessedText(neighbor.title)}`)
-          .join('\n')
-      : focusPane === 'detail'
-        ? 'No neighbors available.'
-        : 'Neighbors load when the detail pane is focused.';
+function formatTuiRefreshStateKey(state: TuiRefreshState): string {
   return [
-    `{bold}Cluster ${clusterDetail.clusterId}${escapeBlessedText(representativeLabel)}{/bold}`,
-    '',
-    `{bold}${thread.kind} #${thread.number}{/bold}  ${escapeBlessedText(thread.title)}`,
-    '',
-    `{bold}Author:{/bold} ${escapeBlessedText(thread.authorLogin ?? 'unknown')}`,
-    closedLabel,
-    `{bold}Updated:{/bold} ${thread.updatedAtGh ?? 'unknown'}`,
-    `{bold}Labels:{/bold} ${labels}`,
-    `{bold}URL:{/bold} ${escapeBlessedText(thread.htmlUrl)}`,
-    summaries ? `\n\n${summaries}` : '',
-    '',
-    `{bold}Body{/bold}`,
-    escapeBlessedText(thread.body ?? '(no body)'),
-    `\n\n{bold}Neighbors{/bold}\n${neighbors}`,
-  ]
-    .filter(Boolean)
-    .join('\n');
-}
-
-export function escapeBlessedText(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/\{/g, '\\{').replace(/\}/g, '\\}');
-}
-
-function applyRect(element: blessed.Widgets.BoxElement | blessed.Widgets.ListElement, rect: { top: number; left: number; width: number; height: number }): void {
-  element.top = rect.top;
-  element.left = rect.left;
-  element.width = rect.width;
-  element.height = rect.height;
-}
-
-function openUrl(url: string): void {
-  const launch =
-    process.platform === 'darwin'
-      ? { command: 'open', args: [url] }
-      : process.platform === 'win32'
-        ? { command: 'cmd', args: ['/c', 'start', '', url] }
-        : { command: 'xdg-open', args: [url] };
-  const child = spawn(launch.command, launch.args, {
-    detached: true,
-    stdio: 'ignore',
-    windowsVerbatimArguments: process.platform === 'win32',
-  });
-  child.unref();
-}
-
-export function describeUpdateTask(
-  task: keyof UpdateTaskSelection,
-  stats: TuiRepoStats | null,
-  now: Date = new Date(),
-): string {
-  if (!stats) {
-    if (task === 'sync') return 'recommended';
-    if (task === 'embed') return 'recommended after sync';
-    return 'recommended after embeddings';
-  }
-
-  if (task === 'sync') {
-    return stats.lastGithubReconciliationAt
-      ? `up to date, last ${formatRelativeTime(stats.lastGithubReconciliationAt, now)}`
-      : 'never run';
-  }
-
-  if (task === 'embed') {
-    if (!stats.lastEmbedRefreshAt) return 'never run';
-    if (stats.staleEmbedThreadCount > 0) {
-      return `outdated: ${stats.staleEmbedThreadCount} stale, last ${formatRelativeTime(stats.lastEmbedRefreshAt, now)}`;
-    }
-    const syncMs = parseDateOrNull(stats.lastGithubReconciliationAt);
-    const embedMs = parseDateOrNull(stats.lastEmbedRefreshAt);
-    if (syncMs !== null && embedMs !== null && embedMs < syncMs) {
-      return `outdated: GitHub is newer by ${formatAge(syncMs - embedMs)}`;
-    }
-    return `up to date, last ${formatRelativeTime(stats.lastEmbedRefreshAt, now)}`;
-  }
-
-  if (!stats.latestClusterRunFinishedAt) return 'never run';
-  const embedMs = parseDateOrNull(stats.lastEmbedRefreshAt);
-  const clusterMs = parseDateOrNull(stats.latestClusterRunFinishedAt);
-  if (embedMs !== null && clusterMs !== null && clusterMs < embedMs) {
-    return `outdated: embeddings are newer by ${formatAge(embedMs - clusterMs)}`;
-  }
-  return `up to date, last ${formatRelativeTime(stats.latestClusterRunFinishedAt, now)}`;
-}
-
-export function buildUpdatePipelineLabels(
-  stats: TuiRepoStats | null,
-  selection: UpdateTaskSelection,
-  now: Date = new Date(),
-): string[] {
-  return UPDATE_TASK_ORDER.map((task) => {
-    const mark = selection[task] ? '[x]' : '[ ]';
-    const title = task === 'sync' ? 'GitHub sync/reconcile' : task === 'embed' ? 'Embed refresh' : 'Cluster rebuild';
-    return `${mark} ${title}  ${describeUpdateTask(task, stats, now)}`;
-  });
-}
-
-export function buildUpdatePipelineHelpContent(embeddingBasis: 'title_original' | 'title_summary'): string {
-  const summariesEnabled = embeddingBasis === 'title_summary';
-  const summaryStatus = summariesEnabled
-    ? 'LLM summaries: enabled via title_summary.'
-    : 'LLM summaries: disabled; current basis is title_original.';
-  const summaryAction = summariesEnabled
-    ? 'On openclaw/openclaw this improved non-solo cluster membership by about 50% versus title_original.'
-    : 'Enable with `ghcrawl configure --embedding-basis title_summary` if you want richer clustering; on openclaw/openclaw that improved non-solo cluster membership by about 50%.';
-  return [
-    'Usually you want all three. Run order is fixed: GitHub sync/reconcile -> embeddings -> clusters.',
-    `${summaryStatus} ${summaryAction}`,
-    'A first summarize of ~18k open issues/PRs in openclaw/openclaw typically costs about $15-$30 with gpt-5-mini.',
-    'Later refreshes are usually much cheaper because only changed items need summaries.',
-    'Toggle with space, move with arrows, Enter to start, Esc to cancel.',
-  ].join('\n');
-}
-
-export function buildHelpContent(): string {
-  return [
-    '{bold}ghcrawl TUI Help{/bold}',
-    '',
-    '{bold}Navigation{/bold}',
-    'Tab / Shift-Tab  cycle focus across clusters, members, and detail',
-    'Left / Right      cycle focus backward or forward across panes',
-    'Up / Down         move selection, or scroll detail when detail is focused',
-    'Enter             clusters -> members, members -> detail',
-    'PgUp / PgDn       page through the focused pane or this help popup faster',
-    'Home / End        jump to the top or bottom of detail or help',
-    '',
-    '{bold}Views And Filters{/bold}',
-    '#                 jump directly to an issue or PR number',
-    's                 cycle cluster sort mode',
-    'f                 cycle minimum cluster size filter',
-    'l                 toggle wide layout: columns vs. wide-left stacked-right',
-    'x                 show or hide locally closed clusters and members',
-    '/                 filter clusters by title/member text',
-    'r                 refresh the current local view from SQLite',
-    '',
-    '{bold}Actions{/bold}',
-    'g                 start the staged update pipeline in the background (GitHub, embeddings, clusters)',
-    'p                 open the repository browser / sync a new repository',
-    'u                 show all open threads for the selected author',
-    'o                 open the selected thread URL in your browser',
-    '',
-    '{bold}Help And Exit{/bold}',
-    'h or ?            open this help popup',
-    'q                 quit the TUI (or close this popup); warns if a background update is running',
-    'Esc               close this popup',
-    '',
-    '{bold}Notes{/bold}',
-    'Clusters show C<clusterId> so the cluster id is easy to copy into CLI or skill flows.',
-    'The footer only shows the short command list. Open help to see the full list.',
-    'This popup scrolls. Use arrows, PgUp/PgDn, Home, and End if it does not fit.',
-  ].join('\n');
-}
-
-async function promptHelp(screen: blessed.Widgets.Screen): Promise<void> {
-  const modalWidth = '86%';
-  const box = blessed.box({
-    parent: screen,
-    border: 'line',
-    label: ' Help ',
-    tags: true,
-    scrollable: true,
-    alwaysScroll: true,
-    keys: true,
-    vi: true,
-    mouse: false,
-    top: 'center',
-    left: 'center',
-    width: modalWidth,
-    height: '80%',
-    padding: {
-      left: 1,
-      right: 1,
-    },
-    scrollbar: {
-      ch: ' ',
-    },
-    style: {
-      border: { fg: '#5bc0eb' },
-      fg: 'white',
-      bg: '#101522',
-      scrollbar: { bg: '#5bc0eb' },
-    },
-    content: buildHelpContent(),
-  });
-  const help = blessed.box({
-    parent: screen,
-    width: modalWidth,
-    height: 1,
-    bottom: 1,
-    left: 'center',
-    tags: false,
-    content: 'Scroll with arrows, PgUp/PgDn, Home, End. Press Esc, q, h, ?, or Enter to close.',
-    style: { fg: 'black', bg: '#5bc0eb' },
-  });
-
-  box.focus();
-  box.setScroll(0);
-  screen.render();
-
-  return await new Promise<void>((resolve) => {
-    const finish = (): void => {
-      screen.off('keypress', handleKeypress);
-      box.destroy();
-      help.destroy();
-      screen.render();
-      resolve();
-    };
-    const handleKeypress = (char: string, key: blessed.Widgets.Events.IKeyEventArg): void => {
-      if (key.name === 'escape' || key.name === 'enter' || key.name === 'q' || key.name === 'h' || char === '?') {
-        finish();
-        return;
-      }
-      if (key.name === 'pageup') {
-        box.scroll(-12);
-        screen.render();
-        return;
-      }
-      if (key.name === 'pagedown') {
-        box.scroll(12);
-        screen.render();
-        return;
-      }
-      if (key.name === 'home') {
-        box.setScroll(0);
-        screen.render();
-        return;
-      }
-      if (key.name === 'end') {
-        box.setScrollPerc(100);
-        screen.render();
-      }
-    };
-
-    screen.on('keypress', handleKeypress);
-  });
-}
-
-async function promptUpdatePipelineSelection(
-  screen: blessed.Widgets.Screen,
-  stats: TuiRepoStats | null,
-  embeddingBasis: 'title_original' | 'title_summary',
-): Promise<UpdateTaskSelection | null> {
-  const selection: UpdateTaskSelection = { sync: true, embed: true, cluster: true };
-  const modalWidth = '76%';
-  const box = blessed.list({
-    parent: screen,
-    border: 'line',
-    label: ' Update Pipeline ',
-    keys: true,
-    vi: true,
-    mouse: false,
-    top: 'center',
-    left: 'center',
-    width: modalWidth,
-    height: 14,
-    style: {
-      border: { fg: '#5bc0eb' },
-      item: { fg: 'white' },
-      selected: { bg: '#5bc0eb', fg: 'black', bold: true },
-    },
-    items: buildUpdatePipelineLabels(stats, selection),
-  });
-  const help = blessed.box({
-    parent: screen,
-    top: 'center-5',
-    left: 'center',
-    width: modalWidth,
-    height: 7,
-    style: { fg: 'white', bg: '#101522' },
-    content: buildUpdatePipelineHelpContent(embeddingBasis),
-  });
-
-  box.focus();
-  box.select(0);
-  screen.render();
-
-  return await new Promise<UpdateTaskSelection | null>((resolve) => {
-    const getSelectedIndex = (): number => {
-      const selectedIndex = (box as blessed.Widgets.ListElement & { selected?: number }).selected;
-      return typeof selectedIndex === 'number' && selectedIndex >= 0 ? selectedIndex : 0;
-    };
-    const refreshItems = (): void => {
-      const selectedIndex = getSelectedIndex();
-      box.setItems(buildUpdatePipelineLabels(stats, selection));
-      box.select(selectedIndex);
-      screen.render();
-    };
-    const finish = (value: UpdateTaskSelection | null): void => {
-      screen.off('keypress', handleKeypress);
-      box.destroy();
-      help.destroy();
-      screen.render();
-      resolve(value);
-    };
-    const handleKeypress = (_char: string, key: blessed.Widgets.Events.IKeyEventArg): void => {
-      if (key.name === 'escape' || key.name === 'q') {
-        finish(null);
-        return;
-      }
-      if (key.name === 'space') {
-        const index = getSelectedIndex();
-        const task = UPDATE_TASK_ORDER[index];
-        if (!task) return;
-        selection[task] = !selection[task];
-        if (!selection.sync && !selection.embed && !selection.cluster) {
-          selection[task] = true;
-        }
-        refreshItems();
-      }
-    };
-
-    screen.on('keypress', handleKeypress);
-    box.on('select', () => finish({ ...selection }));
-  });
-}
-
-export function getRepositoryChoices(service: Pick<GHCrawlService, 'listRepositories'>, now: Date = new Date()): RepositoryChoice[] {
-  const repositories = service.listRepositories().repositories
-    .slice()
-    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt) || left.fullName.localeCompare(right.fullName));
-
-  return [
-    ...repositories.map((repository) => ({
-      kind: 'existing' as const,
-      target: { owner: repository.owner, repo: repository.name },
-      label: `${repository.fullName}  ${formatRelativeTime(repository.updatedAt, now)}`,
-    })),
-    { kind: 'new' as const, label: '+ Sync a new repository' },
-  ];
-}
-
-async function promptAuthorThreadChoice(
-  screen: blessed.Widgets.Screen,
-  authorLogin: string,
-  threads: ReturnType<GHCrawlService['listAuthorThreads']>['threads'],
-): Promise<AuthorThreadChoice | null> {
-  const choices: AuthorThreadChoice[] = threads.map((item) => {
-    const match = item.strongestSameAuthorMatch;
-    const matchLabel = match ? `  sim:${(match.score * 100).toFixed(1)}% -> #${match.number}` : '  sim:none';
-    const clusterLabel = item.thread.clusterId ? `C${item.thread.clusterId}` : 'C-';
-    return {
-      threadId: item.thread.id,
-      clusterId: item.thread.clusterId,
-      label: `#${item.thread.number} ${item.thread.kind === 'pull_request' ? 'pr' : 'issue'} ${clusterLabel}${matchLabel}  ${item.thread.title}`,
-    };
-  });
-
-  const box = blessed.list({
-    parent: screen,
-    border: 'line',
-    label: ` @${authorLogin} Threads `,
-    keys: true,
-    vi: true,
-    mouse: false,
-    top: 'center',
-    left: 'center',
-    width: '80%',
-    height: '70%',
-    style: {
-      border: { fg: '#fde74c' },
-      item: { fg: 'white' },
-      selected: { bg: '#fde74c', fg: 'black', bold: true },
-    },
-    items: choices.length > 0 ? choices.map((choice) => choice.label) : ['No open threads for this author'],
-  });
-  const help = blessed.box({
-    parent: screen,
-    bottom: 0,
-    left: 0,
-    width: '100%',
-    height: 1,
-    content: 'Enter jumps to the selected thread. Esc cancels.',
-    style: { fg: 'black', bg: '#fde74c' },
-  });
-
-  box.focus();
-  box.select(0);
-  screen.render();
-
-  return await new Promise<AuthorThreadChoice | null>((resolve) => {
-    const teardown = (): void => {
-      screen.off('keypress', handleKeypress);
-      box.destroy();
-      help.destroy();
-      screen.render();
-    };
-    const finish = (value: AuthorThreadChoice | null): void => {
-      teardown();
-      resolve(value);
-    };
-    const handleKeypress = (_char: string, key: blessed.Widgets.Events.IKeyEventArg): void => {
-      if (key.name === 'escape' || key.name === 'q') {
-        finish(null);
-      }
-    };
-
-    screen.on('keypress', handleKeypress);
-    box.on('select', (_item, index) => finish(choices[index] ?? null));
-  });
-}
-
-async function promptRepositoryChoice(
-  screen: blessed.Widgets.Screen,
-  service: GHCrawlService,
-): Promise<RepositoryChoice | null> {
-  const choices = getRepositoryChoices(service);
-  const box = blessed.list({
-    parent: screen,
-    border: 'line',
-    label: ' Repositories ',
-    keys: true,
-    vi: true,
-    mouse: false,
-    top: 'center',
-    left: 'center',
-    width: '70%',
-    height: '70%',
-    style: {
-      border: { fg: '#5bc0eb' },
-      item: { fg: 'white' },
-      selected: { bg: '#5bc0eb', fg: 'black', bold: true },
-    },
-    items: choices.map((choice) => choice.label),
-  });
-  const help = blessed.box({
-    parent: screen,
-    bottom: 0,
-    left: 0,
-    width: '100%',
-    height: 1,
-    content: 'Select a repository with Enter. Press n for a new repo. Esc cancels.',
-    style: { fg: 'black', bg: '#5bc0eb' },
-  });
-
-  box.focus();
-  box.select(0);
-  screen.render();
-
-  return await new Promise<RepositoryChoice | null>((resolve) => {
-    const teardown = (): void => {
-      screen.off('keypress', handleKeypress);
-      box.destroy();
-      help.destroy();
-      screen.render();
-    };
-    const finish = (value: RepositoryChoice | null): void => {
-      teardown();
-      resolve(value);
-    };
-    const handleKeypress = (_char: string, key: blessed.Widgets.Events.IKeyEventArg): void => {
-      if (key.name === 'escape' || key.name === 'q') {
-        finish(null);
-        return;
-      }
-      if (key.name === 'n') {
-        const newIndex = choices.findIndex((choice) => choice.kind === 'new');
-        if (newIndex >= 0) {
-          box.select(newIndex);
-          screen.render();
-        }
-      }
-    };
-
-    screen.on('keypress', handleKeypress);
-    box.on('select', (_item, index) => finish(choices[index] ?? null));
-  });
-}
-
-async function promptRepositoryInput(screen: blessed.Widgets.Screen): Promise<RepositoryTarget | null> {
-  const prompt = blessed.prompt({
-    parent: screen,
-    border: 'line',
-    height: 7,
-    width: '60%',
-    top: 'center',
-    left: 'center',
-    label: ' Repository ',
-    tags: true,
-    keys: true,
-    vi: true,
-    style: {
-      border: { fg: 'cyan' },
-      bg: '#101522',
-    },
-  });
-
-  return await new Promise<RepositoryTarget | null>((resolve) => {
-    prompt.input('Repository to sync (owner/repo)', '', (_error, value) => {
-      prompt.destroy();
-      const parsed = parseOwnerRepoValue((value ?? '').trim());
-      resolve(parsed);
-    });
-  });
-}
-
-async function runColdStartSetup(
-  service: GHCrawlService,
-  screen: blessed.Widgets.Screen,
-  target: RepositoryTarget,
-  log?: blessed.Widgets.Log,
-  footer?: blessed.Widgets.BoxElement,
-): Promise<boolean> {
-  log?.log(`[setup] starting initial setup for ${target.owner}/${target.repo}`);
-  footer?.setContent('Running initial sync, embed, and cluster. This can take a while.');
-  screen.render();
-
-  try {
-    const reporter = (message: string): void => {
-      log?.log(message);
-      screen.render();
-    };
-    await service.syncRepository({
-      owner: target.owner,
-      repo: target.repo,
-      onProgress: reporter,
-    });
-    await service.embedRepository({
-      owner: target.owner,
-      repo: target.repo,
-      onProgress: reporter,
-    });
-    await service.clusterRepository({
-      owner: target.owner,
-      repo: target.repo,
-      onProgress: reporter,
-    });
-    writeTuiRepositoryPreference(service.config, {
-      owner: target.owner,
-      repo: target.repo,
-      minClusterSize: 1,
-      sortMode: 'recent',
-      wideLayout: 'columns',
-    });
-    log?.log('[setup] initial setup complete');
-    return true;
-  } catch (error) {
-    log?.log(`[setup] failed: ${error instanceof Error ? error.message : String(error)}`);
-    return false;
-  }
-}
-
-export function parseOwnerRepoValue(value: string): { owner: string; repo: string } | null {
-  const parts = value.trim().split('/');
-  if (parts.length !== 2 || !parts[0] || !parts[1]) {
-    return null;
-  }
-  return { owner: parts[0], repo: parts[1] };
+    state.repositoryUpdatedAt ?? '',
+    state.threadUpdatedAt ?? '',
+    state.threadClosedAt ?? '',
+    state.clusterClosedAt ?? '',
+    state.durableClusterUpdatedAt ?? '',
+    state.durableMembershipUpdatedAt ?? '',
+    state.latestSyncRunId ?? '',
+    state.latestEmbeddingRunId ?? '',
+    state.latestClusterRunId ?? '',
+  ].join('|');
 }
 
 function formatActivityTimestamp(now: Date = new Date()): string {
   return now.toISOString().slice(11, 19);
-}
-
-function parseDateOrNull(value: string | null | undefined): number | null {
-  if (!value) return null;
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? null : parsed;
-}
-
-export function formatClusterDateColumn(value: string | null, locales?: Intl.LocalesArgument): string {
-  if (!value) return 'unknown';
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-
-  const month = String(parsed.getMonth() + 1).padStart(2, '0');
-  const day = String(parsed.getDate()).padStart(2, '0');
-  const hour = String(parsed.getHours()).padStart(2, '0');
-  const minute = String(parsed.getMinutes()).padStart(2, '0');
-  const ordering = new Intl.DateTimeFormat(locales, {
-    month: '2-digit',
-    day: '2-digit',
-  })
-    .formatToParts(parsed)
-    .filter((part) => part.type === 'month' || part.type === 'day')
-    .map((part) => part.type);
-  const date = ordering[0] === 'day' ? `${day}-${month}` : `${month}-${day}`;
-
-  return `${date} ${hour}:${minute}`;
-}
-
-function formatAge(diffMs: number): string {
-  const safeDiffMs = Math.max(0, diffMs);
-  const minuteMs = 60_000;
-  const hourMs = 60 * minuteMs;
-  const dayMs = 24 * hourMs;
-
-  if (safeDiffMs < hourMs) {
-    return `${Math.max(1, Math.floor(safeDiffMs / minuteMs))}m`;
-  }
-  if (safeDiffMs < dayMs) {
-    return `${Math.floor(safeDiffMs / hourMs)}h`;
-  }
-  if (safeDiffMs < 14 * dayMs) {
-    return `${Math.floor(safeDiffMs / dayMs)}d`;
-  }
-  return `${Math.floor(safeDiffMs / dayMs)}d`;
-}
-
-function formatRelativeTime(value: string | null, now: Date = new Date()): string {
-  if (!value) return 'never';
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  const diffMs = Math.max(0, now.getTime() - parsed.getTime());
-  const minuteMs = 60_000;
-  const hourMs = 60 * minuteMs;
-  const dayMs = 24 * hourMs;
-
-  if (diffMs < hourMs) {
-    const minutes = Math.max(1, Math.floor(diffMs / minuteMs));
-    return `${minutes}m ago`;
-  }
-  if (diffMs < dayMs) {
-    return `${Math.floor(diffMs / hourMs)}h ago`;
-  }
-  if (diffMs < 14 * dayMs) {
-    return `${Math.floor(diffMs / dayMs)}d ago`;
-  }
-  return parsed.toISOString().slice(0, 10);
 }

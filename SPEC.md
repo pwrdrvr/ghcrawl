@@ -52,9 +52,7 @@ These are settled unless the user explicitly changes them:
 - sync default: metadata-only
 - comment hydration: opt-in
 - kNN strategy: exact local cosine search first
-- secret modes:
-  - plaintext config storage
-  - 1Password CLI metadata + env injection
+- token input: read bare `GITHUB_TOKEN` / `OPENAI_API_KEY` from env, `.env.local`, or config JSON
 
 ## Local Environment Contract
 
@@ -125,14 +123,22 @@ The product must keep these machine-facing surfaces working:
 - `ghcrawl doctor --json`
 - `ghcrawl sync owner/repo --json`
 - `ghcrawl refresh owner/repo --json`
+- `ghcrawl runs owner/repo --json`
 - `ghcrawl threads owner/repo --numbers <n,n,...> --json`
-- `ghcrawl author owner/repo --login <user> --json`
 - `ghcrawl close-thread owner/repo --number <thread-number> --json`
 - `ghcrawl close-cluster owner/repo --id <cluster-id> --json`
 - `ghcrawl embed owner/repo --json`
 - `ghcrawl cluster owner/repo --json`
+- `ghcrawl cluster owner/repo --number <thread-number> --json`
 - `ghcrawl clusters owner/repo --json`
+- `ghcrawl durable-clusters owner/repo --json`
 - `ghcrawl cluster-detail owner/repo --id <cluster-id> --json`
+- `ghcrawl cluster-explain owner/repo --id <cluster-id> --json`
+- `ghcrawl exclude-cluster-member owner/repo --id <cluster-id> --number <thread-number> --json`
+- `ghcrawl include-cluster-member owner/repo --id <cluster-id> --number <thread-number> --json`
+- `ghcrawl set-cluster-canonical owner/repo --id <cluster-id> --number <thread-number> --json`
+- `ghcrawl merge-clusters owner/repo --source <cluster-id> --target <cluster-id> --json`
+- `ghcrawl split-cluster owner/repo --source <cluster-id> --numbers <n,n,...> --json`
 - `ghcrawl search owner/repo --query <text> --json`
 - `ghcrawl neighbors owner/repo --number <thread-number> --json`
 
@@ -140,14 +146,21 @@ The product must keep these machine-facing surfaces working:
 
 - `GET /health`
 - `GET /repositories`
+- `GET /runs`
 - `GET /threads`
 - `GET /search`
 - `GET /neighbors`
 - `GET /clusters`
 - `GET /cluster-summaries`
 - `GET /cluster-detail`
+- `GET /cluster-explain`
 - `POST /actions/rerun`
 - `POST /actions/refresh`
+- `POST /actions/exclude-cluster-member`
+- `POST /actions/include-cluster-member`
+- `POST /actions/set-cluster-canonical`
+- `POST /actions/merge-clusters`
+- `POST /actions/split-cluster`
 
 ### TUI
 
@@ -174,6 +187,11 @@ That means:
   - URL
   - body snippet
   - stored summary fields when present
+- expose durable cluster governance with:
+  - stable slug and aliases
+  - maintainer overrides
+  - pairwise evidence and event history
+  - explicit merge/split/include/exclude/canonical commands
 
 The installable skill lives in:
 
@@ -183,7 +201,7 @@ The installable skill lives in:
 
 - keep DB-backed operational state in SQLite, not in config
 - keep user preferences in config
-- keep secret values out of repo files
+- keep token values out of repo files
 - default to stable machine-readable interfaces before adding new UI affordances
 - prefer exact local search until there is measured evidence that a separate vector service is required
 

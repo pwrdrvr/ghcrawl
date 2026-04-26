@@ -28,6 +28,10 @@ function makeRunContext(): { env: NodeJS.ProcessEnv; cwd: string; cleanup: () =>
     env: {
       ...process.env,
       HOME: home,
+      GITHUB_TOKEN: undefined,
+      OPENAI_API_KEY: undefined,
+      GHCRAWL_SUMMARY_MODEL: undefined,
+      GHCRAWL_API_PORT: undefined,
       XDG_CONFIG_HOME: undefined,
       APPDATA: undefined,
     },
@@ -37,20 +41,33 @@ function makeRunContext(): { env: NodeJS.ProcessEnv; cwd: string; cleanup: () =>
 }
 
 const publicCommands = [
-  'init',
   'doctor',
   'configure',
   'version',
   'sync',
+  'export-sync',
+  'validate-sync',
+  'portable-size',
+  'sync-status',
+  'import-sync',
   'refresh',
+  'optimize',
+  'runs',
   'threads',
-  'author',
   'close-thread',
   'close-cluster',
+  'exclude-cluster-member',
+  'include-cluster-member',
+  'set-cluster-canonical',
+  'merge-clusters',
+  'split-cluster',
   'embed',
+  'key-summaries',
   'cluster',
   'clusters',
+  'durable-clusters',
   'cluster-detail',
+  'cluster-explain',
   'search',
   'neighbors',
   'tui',
@@ -183,8 +200,9 @@ test('configure prints current persisted settings and cost estimates', async () 
   }
 
   assert.match(stdout.read(), /ghcrawl configure/);
-  assert.match(stdout.read(), /summary model: gpt-5-mini/);
+  assert.match(stdout.read(), /summary model: gpt-5\.4/);
   assert.match(stdout.read(), /embedding basis: title_original/);
+  assert.match(stdout.read(), /gpt-5\.4: not estimated locally/);
   assert.match(stdout.read(), /gpt-5\.4-mini: ~\$30 USD/);
 });
 
@@ -215,7 +233,6 @@ test('unknown command exits with code 2 and a top-level help hint', async () => 
 
 test('missing required flags exit with code 2 and command-specific hints', async () => {
   const cases = [
-    { argv: ['author', 'openclaw/openclaw'], message: /Missing --login/, hint: /Run 'ghcrawl author --help' for usage\./ },
     { argv: ['close-thread', 'openclaw/openclaw'], message: /Missing --number/, hint: /Run 'ghcrawl close-thread --help' for usage\./ },
     { argv: ['cluster-detail', 'openclaw/openclaw'], message: /Missing --id/, hint: /Run 'ghcrawl cluster-detail --help' for usage\./ },
   ];
@@ -227,6 +244,58 @@ test('missing required flags exit with code 2 and command-specific hints', async
     assert.match(stderr.read(), testCase.message);
     assert.match(stderr.read(), testCase.hint);
   }
+});
+
+test('runs command returns pipeline history', async () => {
+  const stdout = createWritableCapture();
+  const context = makeRunContext();
+  const original = GHCrawlService.prototype.listRunHistory;
+  let received: unknown;
+
+  GHCrawlService.prototype.listRunHistory = function listRunHistoryStub(params: unknown) {
+    received = params;
+    return {
+      repository: {
+        id: 1,
+        owner: 'openclaw',
+        name: 'openclaw',
+        fullName: 'openclaw/openclaw',
+        githubRepoId: '1',
+        updatedAt: '2026-03-09T00:00:00Z',
+      },
+      runs: [
+        {
+          runId: 1,
+          runKind: 'cluster',
+          scope: 'openclaw/openclaw',
+          status: 'failed',
+          startedAt: '2026-03-09T00:00:00Z',
+          finishedAt: '2026-03-09T00:01:00Z',
+          stats: null,
+          errorText: 'boom',
+        },
+      ],
+    } as never;
+  };
+
+  try {
+    await run(['runs', 'openclaw/openclaw', '--kind', 'cluster', '--limit', '5'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+  } finally {
+    GHCrawlService.prototype.listRunHistory = original;
+    context.cleanup();
+  }
+
+  assert.deepEqual(received, {
+    owner: 'openclaw',
+    repo: 'openclaw',
+    kind: 'cluster',
+    limit: 5,
+  });
+  assert.match(stdout.read(), /"runKind": "cluster"/);
+  assert.match(stdout.read(), /"errorText": "boom"/);
 });
 
 test('invalid enum and value parsing exits with code 2', async () => {
@@ -265,13 +334,20 @@ test('agent-facing command help advertises explicit --json', async () => {
     'sync',
     'refresh',
     'threads',
-    'author',
     'close-thread',
     'close-cluster',
+    'exclude-cluster-member',
+    'include-cluster-member',
+    'set-cluster-canonical',
+    'merge-clusters',
+    'split-cluster',
     'embed',
+    'key-summaries',
     'cluster',
     'clusters',
+    'durable-clusters',
     'cluster-detail',
+    'cluster-explain',
     'search',
     'neighbors',
   ] as const) {
@@ -310,6 +386,369 @@ test('compatibility path keeps json-by-default commands working without --json',
   assert.match(stdout.read(), /"threads"/);
 });
 
+test('exclude-cluster-member command forwards durable override inputs', async () => {
+  const stdout = createWritableCapture();
+  const context = makeRunContext();
+  const original = GHCrawlService.prototype.excludeThreadFromCluster;
+  let received: unknown;
+
+  GHCrawlService.prototype.excludeThreadFromCluster = function excludeThreadFromClusterStub(params: unknown) {
+    received = params;
+    return {
+      ok: true,
+      clusterId: 7,
+      thread: { number: 42 },
+      action: 'exclude',
+      state: 'removed_by_user',
+      message: 'removed',
+    } as never;
+  };
+
+  try {
+    await run(['exclude-cluster-member', 'openclaw/openclaw', '--id', '7', '--number', '42', '--reason', 'false positive'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+  } finally {
+    GHCrawlService.prototype.excludeThreadFromCluster = original;
+    context.cleanup();
+  }
+
+  assert.deepEqual(received, {
+    owner: 'openclaw',
+    repo: 'openclaw',
+    clusterId: 7,
+    threadNumber: 42,
+    reason: 'false positive',
+  });
+  assert.match(stdout.read(), /"state": "removed_by_user"/);
+});
+
+test('set-cluster-canonical command forwards durable override inputs', async () => {
+  const stdout = createWritableCapture();
+  const context = makeRunContext();
+  const original = GHCrawlService.prototype.setClusterCanonicalThread;
+  let received: unknown;
+
+  GHCrawlService.prototype.setClusterCanonicalThread = function setClusterCanonicalThreadStub(params: unknown) {
+    received = params;
+    return {
+      ok: true,
+      clusterId: 7,
+      thread: { number: 42 },
+      action: 'force_canonical',
+      state: 'active',
+      message: 'set',
+    } as never;
+  };
+
+  try {
+    await run(['set-cluster-canonical', 'openclaw/openclaw', '--id', '7', '--number', '42', '--reason', 'best root issue'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+  } finally {
+    GHCrawlService.prototype.setClusterCanonicalThread = original;
+    context.cleanup();
+  }
+
+  assert.deepEqual(received, {
+    owner: 'openclaw',
+    repo: 'openclaw',
+    clusterId: 7,
+    threadNumber: 42,
+    reason: 'best root issue',
+  });
+  assert.match(stdout.read(), /"action": "force_canonical"/);
+});
+
+test('include-cluster-member command forwards durable override inputs', async () => {
+  const stdout = createWritableCapture();
+  const context = makeRunContext();
+  const original = GHCrawlService.prototype.includeThreadInCluster;
+  let received: unknown;
+
+  GHCrawlService.prototype.includeThreadInCluster = function includeThreadInClusterStub(params: unknown) {
+    received = params;
+    return {
+      ok: true,
+      clusterId: 7,
+      thread: { number: 42 },
+      action: 'force_include',
+      state: 'active',
+      message: 'included',
+    } as never;
+  };
+
+  try {
+    await run(['include-cluster-member', 'openclaw/openclaw', '--id', '7', '--number', '42', '--reason', 'same root cause'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+  } finally {
+    GHCrawlService.prototype.includeThreadInCluster = original;
+    context.cleanup();
+  }
+
+  assert.deepEqual(received, {
+    owner: 'openclaw',
+    repo: 'openclaw',
+    clusterId: 7,
+    threadNumber: 42,
+    reason: 'same root cause',
+  });
+  assert.match(stdout.read(), /"action": "force_include"/);
+});
+
+test('merge-clusters command forwards durable merge inputs', async () => {
+  const stdout = createWritableCapture();
+  const context = makeRunContext();
+  const original = GHCrawlService.prototype.mergeDurableClusters;
+  let received: unknown;
+
+  GHCrawlService.prototype.mergeDurableClusters = function mergeDurableClustersStub(params: unknown) {
+    received = params;
+    return {
+      ok: true,
+      sourceClusterId: 7,
+      targetClusterId: 8,
+      message: 'merged',
+    } as never;
+  };
+
+  try {
+    await run(['merge-clusters', 'openclaw/openclaw', '--source', '7', '--target', '8', '--reason', 'same root cause'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+  } finally {
+    GHCrawlService.prototype.mergeDurableClusters = original;
+    context.cleanup();
+  }
+
+  assert.deepEqual(received, {
+    owner: 'openclaw',
+    repo: 'openclaw',
+    sourceClusterId: 7,
+    targetClusterId: 8,
+    reason: 'same root cause',
+  });
+  assert.match(stdout.read(), /"targetClusterId": 8/);
+});
+
+test('split-cluster command forwards durable split inputs', async () => {
+  const stdout = createWritableCapture();
+  const context = makeRunContext();
+  const original = GHCrawlService.prototype.splitDurableCluster;
+  let received: unknown;
+
+  GHCrawlService.prototype.splitDurableCluster = function splitDurableClusterStub(params: unknown) {
+    received = params;
+    return {
+      ok: true,
+      sourceClusterId: 7,
+      newClusterId: 9,
+      movedCount: 2,
+      message: 'split',
+    } as never;
+  };
+
+  try {
+    await run(['split-cluster', 'openclaw/openclaw', '--source', '7', '--numbers', '42,43', '--reason', 'separate root cause'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+  } finally {
+    GHCrawlService.prototype.splitDurableCluster = original;
+    context.cleanup();
+  }
+
+  assert.deepEqual(received, {
+    owner: 'openclaw',
+    repo: 'openclaw',
+    sourceClusterId: 7,
+    threadNumbers: [42, 43],
+    reason: 'separate root cause',
+  });
+  assert.match(stdout.read(), /"newClusterId": 9/);
+});
+
+test('cluster command forwards neighborhood refresh inputs', async () => {
+  const stdout = createWritableCapture();
+  const context = makeRunContext();
+  const original = GHCrawlService.prototype.clusterRepository;
+  let received: unknown;
+
+  GHCrawlService.prototype.clusterRepository = async function clusterRepositoryStub(params: unknown) {
+    received = params;
+    return { runId: 12, edges: 3, clusters: 1 } as never;
+  };
+
+  try {
+    await run(['cluster', 'openclaw/openclaw', '--number', '42', '--k', '4', '--threshold', '0.82', '--max-cluster-size', '24'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+  } finally {
+    GHCrawlService.prototype.clusterRepository = original;
+    context.cleanup();
+  }
+
+  const params = received as {
+    owner: string;
+    repo: string;
+    threadNumber: number;
+    k: number;
+    minScore: number;
+    maxClusterSize: number;
+    onProgress?: unknown;
+  };
+  assert.equal(params.owner, 'openclaw');
+  assert.equal(params.repo, 'openclaw');
+  assert.equal(params.threadNumber, 42);
+  assert.equal(params.k, 4);
+  assert.equal(params.minScore, 0.82);
+  assert.equal(params.maxClusterSize, 24);
+  assert.equal(typeof params.onProgress, 'function');
+  assert.match(stdout.read(), /"edges": 3/);
+});
+
+test('optimize command forwards optional repository target', async () => {
+  const stdout = createWritableCapture();
+  const context = makeRunContext();
+  const original = GHCrawlService.prototype.optimizeStorage;
+  const received: unknown[] = [];
+
+  GHCrawlService.prototype.optimizeStorage = function optimizeStorageStub(params: unknown) {
+    received.push(params);
+    return {
+      ok: true,
+      repository: params ? { fullName: 'openclaw/openclaw' } : null,
+      startedAt: '2026-03-10T12:00:00Z',
+      finishedAt: '2026-03-10T12:00:01Z',
+      targets: [],
+      bytesReclaimed: 42,
+      message: 'optimized',
+    } as never;
+  };
+
+  try {
+    await run(['optimize'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+    await run(['optimize', 'openclaw/openclaw'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+  } finally {
+    GHCrawlService.prototype.optimizeStorage = original;
+    context.cleanup();
+  }
+
+  assert.deepEqual(received[0], undefined);
+  assert.deepEqual(received[1], { owner: 'openclaw', repo: 'openclaw' });
+  assert.match(stdout.read(), /"bytesReclaimed": 42/);
+});
+
+test('clusters command shows closed clusters by default and forwards hide-closed', async () => {
+  const stdout = createWritableCapture();
+  const context = makeRunContext();
+  const original = GHCrawlService.prototype.listClusterSummaries;
+  const received: unknown[] = [];
+
+  GHCrawlService.prototype.listClusterSummaries = function listClusterSummariesStub(params: unknown) {
+    received.push(params);
+    return { repository: { fullName: 'openclaw/openclaw' }, stats: {}, clusters: [] } as never;
+  };
+
+  try {
+    await run(['clusters', 'openclaw/openclaw', '--min-size', '5'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+    await run(['clusters', 'openclaw/openclaw', '--hide-closed'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+  } finally {
+    GHCrawlService.prototype.listClusterSummaries = original;
+    context.cleanup();
+  }
+
+  assert.equal((received[0] as { includeClosed?: boolean }).includeClosed, true);
+  assert.equal((received[0] as { minSize?: number }).minSize, 5);
+  assert.equal((received[1] as { includeClosed?: boolean }).includeClosed, false);
+});
+
+test('durable-clusters command forwards stable cluster list options', async () => {
+  const stdout = createWritableCapture();
+  const context = makeRunContext();
+  const original = GHCrawlService.prototype.listDurableClusters;
+  let received: unknown;
+
+  GHCrawlService.prototype.listDurableClusters = function listDurableClustersStub(params: unknown) {
+    received = params;
+    return { repository: { fullName: 'openclaw/openclaw' }, clusters: [{ stableSlug: 'trace-alpha-river' }] } as never;
+  };
+
+  try {
+    await run(['durable-clusters', 'openclaw/openclaw', '--include-inactive', '--member-limit', '5'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+  } finally {
+    GHCrawlService.prototype.listDurableClusters = original;
+    context.cleanup();
+  }
+
+  assert.deepEqual(received, {
+    owner: 'openclaw',
+    repo: 'openclaw',
+    includeInactive: true,
+    memberLimit: 5,
+  });
+  assert.match(stdout.read(), /trace-alpha-river/);
+});
+
+test('cluster-explain command forwards evidence options', async () => {
+  const stdout = createWritableCapture();
+  const context = makeRunContext();
+  const original = GHCrawlService.prototype.explainDurableCluster;
+  let received: unknown;
+
+  GHCrawlService.prototype.explainDurableCluster = function explainDurableClusterStub(params: unknown) {
+    received = params;
+    return {
+      repository: { fullName: 'openclaw/openclaw' },
+      cluster: { clusterId: 7, stableSlug: 'trace-alpha-river', members: [] },
+      evidence: [{ sources: ['deterministic_fingerprint'] }],
+      overrides: [],
+      aliases: [],
+      events: [],
+    } as never;
+  };
+
+  try {
+    await run(['cluster-explain', 'openclaw/openclaw', '--id', '7', '--member-limit', '4', '--event-limit', '9'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+  } finally {
+    GHCrawlService.prototype.explainDurableCluster = original;
+    context.cleanup();
+  }
+
+  assert.deepEqual(received, {
+    owner: 'openclaw',
+    repo: 'openclaw',
+    clusterId: 7,
+    memberLimit: 4,
+    eventLimit: 9,
+  });
+  assert.match(stdout.read(), /deterministic_fingerprint/);
+});
+
 test('long-running command progress stays on stderr and payload stays on stdout', async () => {
   const stdout = createWritableCapture();
   const stderr = createWritableCapture();
@@ -341,6 +780,191 @@ test('long-running command progress stays on stderr and payload stays on stdout'
   assert.doesNotMatch(stdout.read(), /\[sync] started/);
 });
 
+test('sync command forwards include-code hydration flag', async () => {
+  const stdout = createWritableCapture();
+  const context = makeRunContext();
+  const original = GHCrawlService.prototype.syncRepository;
+  let received: unknown;
+
+  GHCrawlService.prototype.syncRepository = async function syncRepositoryStub(params: unknown) {
+    received = params;
+    return { runId: 1, threadsSynced: 1, commentsSynced: 0, codeFilesSynced: 1, threadsClosed: 0 } as never;
+  };
+
+  try {
+    await run(['sync', 'openclaw/openclaw', '--include-code'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+  } finally {
+    GHCrawlService.prototype.syncRepository = original;
+    context.cleanup();
+  }
+
+  assert.equal((received as { includeCode?: boolean }).includeCode, true);
+  assert.match(stdout.read(), /"codeFilesSynced": 1/);
+});
+
+test('export-sync command forwards profile and manifest options', async () => {
+  const stdout = createWritableCapture();
+  const context = makeRunContext();
+  const original = GHCrawlService.prototype.exportPortableSync;
+  let received: unknown;
+
+  GHCrawlService.prototype.exportPortableSync = function exportPortableSyncStub(params: unknown) {
+    received = params;
+    return {
+      ok: true,
+      profile: 'lean',
+      manifestPath: '/tmp/openclaw.sync.db.manifest.json',
+    } as never;
+  };
+
+  try {
+    await run(['export-sync', 'openclaw/openclaw', '--profile', 'lean', '--manifest', '--output', '/tmp/openclaw.sync.db'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+  } finally {
+    GHCrawlService.prototype.exportPortableSync = original;
+    context.cleanup();
+  }
+
+  assert.deepEqual(received, {
+    owner: 'openclaw',
+    repo: 'openclaw',
+    outputPath: '/tmp/openclaw.sync.db',
+    profile: 'lean',
+    writeManifest: true,
+    bodyChars: undefined,
+  });
+  assert.match(stdout.read(), /"profile": "lean"/);
+});
+
+test('sync-status command forwards portable path', async () => {
+  const stdout = createWritableCapture();
+  const context = makeRunContext();
+  const original = GHCrawlService.prototype.portableSyncStatus;
+  let received: unknown;
+
+  GHCrawlService.prototype.portableSyncStatus = function portableSyncStatusStub(params: unknown) {
+    received = params;
+    return {
+      ok: true,
+      portableRepositoryFound: true,
+      drift: { changedThreads: 0 },
+    } as never;
+  };
+
+  try {
+    await run(['sync-status', 'openclaw/openclaw', '--portable', '/tmp/openclaw.sync.db'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+  } finally {
+    GHCrawlService.prototype.portableSyncStatus = original;
+    context.cleanup();
+  }
+
+  assert.deepEqual(received, {
+    owner: 'openclaw',
+    repo: 'openclaw',
+    portablePath: '/tmp/openclaw.sync.db',
+  });
+  assert.match(stdout.read(), /"portableRepositoryFound": true/);
+});
+
+test('import-sync command forwards portable path', async () => {
+  const stdout = createWritableCapture();
+  const context = makeRunContext();
+  const original = GHCrawlService.prototype.importPortableSync;
+  let received: unknown;
+
+  GHCrawlService.prototype.importPortableSync = function importPortableSyncStub(dbPath: string) {
+    received = dbPath;
+    return {
+      ok: true,
+      repository: { fullName: 'openclaw/openclaw' },
+      imported: { threads: 1 },
+    } as never;
+  };
+
+  try {
+    await run(['import-sync', '/tmp/openclaw.sync.db'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+  } finally {
+    GHCrawlService.prototype.importPortableSync = original;
+    context.cleanup();
+  }
+
+  assert.equal(received, '/tmp/openclaw.sync.db');
+  assert.match(stdout.read(), /"threads": 1/);
+});
+
+test('refresh command forwards include-code hydration flag', async () => {
+  const stdout = createWritableCapture();
+  const context = makeRunContext();
+  const original = GHCrawlService.prototype.refreshRepository;
+  let received: unknown;
+
+  GHCrawlService.prototype.refreshRepository = async function refreshRepositoryStub(params: unknown) {
+    received = params;
+    return {
+      repository: { fullName: 'openclaw/openclaw' },
+      selected: { sync: true, embed: true, cluster: true },
+      sync: { codeFilesSynced: 1 },
+      embed: null,
+      cluster: null,
+    } as never;
+  };
+
+  try {
+    await run(['refresh', 'openclaw/openclaw', '--include-code'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+  } finally {
+    GHCrawlService.prototype.refreshRepository = original;
+    context.cleanup();
+  }
+
+  assert.equal((received as { includeCode?: boolean }).includeCode, true);
+  assert.match(stdout.read(), /"codeFilesSynced": 1/);
+});
+
+test('key-summaries command forwards enrichment options', async () => {
+  const stdout = createWritableCapture();
+  const context = makeRunContext();
+  const original = GHCrawlService.prototype.generateKeySummaries;
+  let received: unknown;
+
+  GHCrawlService.prototype.generateKeySummaries = async function generateKeySummariesStub(params: unknown) {
+    received = params;
+    return { runId: 1, generated: 1, skipped: 0, inputTokens: 10, outputTokens: 5, totalTokens: 15 } as never;
+  };
+
+  try {
+    await run(['key-summaries', 'openclaw/openclaw', '--number', '42', '--limit', '1'], stdout.stream, {
+      env: context.env,
+      cwd: context.cwd,
+    });
+  } finally {
+    GHCrawlService.prototype.generateKeySummaries = original;
+    context.cleanup();
+  }
+
+  assert.deepEqual(received, {
+    owner: 'openclaw',
+    repo: 'openclaw',
+    threadNumber: 42,
+    limit: 1,
+    onProgress: (received as { onProgress?: unknown }).onProgress,
+  });
+  assert.match(stdout.read(), /"generated": 1/);
+});
+
 test('parseOwnerRepo accepts owner slash repo syntax', () => {
   assert.deepEqual(parseOwnerRepo('openclaw/openclaw'), { owner: 'openclaw', repo: 'openclaw' });
 });
@@ -366,6 +990,13 @@ test('parseRepoFlags accepts include-comments boolean flag', () => {
   assert.equal(parsed.values['include-comments'], true);
 });
 
+test('parseRepoFlags accepts include-code boolean flag', () => {
+  const parsed = parseRepoFlags('sync', ['openclaw/openclaw', '--include-code']);
+  assert.equal(parsed.owner, 'openclaw');
+  assert.equal(parsed.repo, 'openclaw');
+  assert.equal(parsed.values['include-code'], true);
+});
+
 test('parseRepoFlags accepts full-reconcile boolean flag', () => {
   const parsed = parseRepoFlags('sync', ['openclaw/openclaw', '--full-reconcile']);
   assert.equal(parsed.owner, 'openclaw');
@@ -380,11 +1011,32 @@ test('parseRepoFlags accepts include-closed boolean flag', () => {
   assert.equal(parsed.values['include-closed'], true);
 });
 
+test('parseRepoFlags accepts hide-closed cluster flag', () => {
+  const parsed = parseRepoFlags('clusters', ['openclaw/openclaw', '--hide-closed']);
+  assert.equal(parsed.owner, 'openclaw');
+  assert.equal(parsed.repo, 'openclaw');
+  assert.equal(parsed.values['hide-closed'], true);
+});
+
+test('parseRepoFlags accepts include-inactive durable cluster flag', () => {
+  const parsed = parseRepoFlags('durable-clusters', ['openclaw/openclaw', '--include-inactive']);
+  assert.equal(parsed.owner, 'openclaw');
+  assert.equal(parsed.repo, 'openclaw');
+  assert.equal(parsed.values['include-inactive'], true);
+});
+
 test('parseRepoFlags accepts kind filter for threads', () => {
   const parsed = parseRepoFlags('threads', ['openclaw/openclaw', '--kind', 'pull_request']);
   assert.equal(parsed.owner, 'openclaw');
   assert.equal(parsed.repo, 'openclaw');
   assert.equal(parsed.values.kind, 'pull_request');
+});
+
+test('parseRepoFlags accepts exclusion reason', () => {
+  const parsed = parseRepoFlags('exclude-cluster-member', ['openclaw/openclaw', '--id', '7', '--number', '42', '--reason', 'false positive']);
+  assert.equal(parsed.owner, 'openclaw');
+  assert.equal(parsed.repo, 'openclaw');
+  assert.equal(parsed.values.reason, 'false positive');
 });
 
 test('parseRepoFlags accepts heap diagnostics options', () => {
@@ -432,15 +1084,13 @@ test('formatDoctorReport renders a human-readable health summary', () => {
     github: {
       configured: true,
       source: 'config',
-      formatOk: true,
-      authOk: true,
+      tokenPresent: true,
       error: null,
     },
     openai: {
       configured: false,
       source: 'none',
-      formatOk: false,
-      authOk: false,
+      tokenPresent: false,
       error: 'missing',
     },
     vectorlite: {

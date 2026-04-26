@@ -6,7 +6,6 @@ This file is for maintainers and contributors working from source.
 
 ```bash
 pnpm install
-pnpm bootstrap
 pnpm health
 ```
 
@@ -21,15 +20,6 @@ pnpm cluster openclaw/openclaw
 pnpm search openclaw/openclaw --query "download stalls"
 pnpm typecheck
 pnpm test
-```
-
-If you configured 1Password CLI support in init:
-
-```bash
-pnpm op:doctor
-pnpm op:tui
-pnpm op:exec -- sync openclaw/openclaw
-pnpm op:shell
 ```
 
 ## Release Flow

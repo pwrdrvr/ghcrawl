@@ -6,7 +6,7 @@
  *   node scripts/summarize-single.mjs <owner/repo> <thread_number> [--prompt-file <path>]
  *   node scripts/summarize-single.mjs <owner/repo> <thread_number> [--prompt "<text>"]
  *
- * Requires OPENAI_API_KEY in environment (use pnpm op:shell or op:exec).
+ * Requires OPENAI_API_KEY in the environment.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -89,7 +89,7 @@ try {
   // Call OpenAI directly with optional prompt override
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    throw new Error('OPENAI_API_KEY not set. Use pnpm op:shell or set the env var.');
+    throw new Error('OPENAI_API_KEY not set. Set the env var before running this script.');
   }
 
   const { default: OpenAI } = await import('openai');

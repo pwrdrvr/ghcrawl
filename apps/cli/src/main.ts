@@ -2,77 +2,44 @@
 import { once } from 'node:events';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
-import { createApiServer, GHCrawlService, loadConfig, readPersistedConfig, writePersistedConfig, type LoadConfigOptions } from '@ghcrawl/api-core';
+import {
+  createApiServer,
+  GHCrawlService,
+  loadConfig,
+  portableSyncSizeReport,
+  readPersistedConfig,
+  validatePortableSyncDatabase,
+  writePersistedConfig,
+  type LoadConfigOptions,
+} from '@ghcrawl/api-core';
+import {
+  CliError,
+  CliUsageError,
+  parseArgsForCommand,
+  parseEnum,
+  parseFiniteNumber,
+  parseGlobalFlags,
+  parseOwnerRepo,
+  parsePositiveInteger,
+  parsePositiveIntegerList,
+  parseRepoFlags,
+  resolveSinceValue,
+  type ParsedGlobalFlags,
+  type RepoCommandValues,
+} from './args.js';
+import {
+  commandUsage,
+  getCommandSpec,
+  hasHelpFlag,
+  usage,
+  usageHint,
+  type CommandName,
+} from './commands.js';
 import { createHeapDiagnostics, type HeapDiagnostics } from './heap-diagnostics.js';
-import { runInitWizard } from './init-wizard.js';
+import { buildConfigureReport, formatConfigureReport, formatDoctorReport, type DoctorReport } from './reports.js';
 import { startTui } from './tui/app.js';
-
-type CommandName =
-  | 'init'
-  | 'doctor'
-  | 'configure'
-  | 'version'
-  | 'sync'
-  | 'refresh'
-  | 'threads'
-  | 'author'
-  | 'close-thread'
-  | 'close-cluster'
-  | 'summarize'
-  | 'purge-comments'
-  | 'embed'
-  | 'cluster'
-  | 'cluster-experiment'
-  | 'clusters'
-  | 'cluster-detail'
-  | 'search'
-  | 'neighbors'
-  | 'tui'
-  | 'serve';
-
-type CommandSpec = {
-  name: CommandName;
-  synopsis: string;
-  description: string;
-  options: string[];
-  examples: string[];
-  devOnly?: boolean;
-  agentJson?: boolean;
-};
-
-type DoctorResult = Awaited<ReturnType<GHCrawlService['doctor']>>;
-type DoctorReport = DoctorResult & {
-  version: string;
-  vectorlite?: {
-    configured: boolean;
-    runtimeOk: boolean;
-    error: string | null;
-  };
-};
-
-type ConfigureReport = {
-  configPath: string;
-  updated: boolean;
-  summaryModel: 'gpt-5-mini' | 'gpt-5.4-mini';
-  embeddingBasis: 'title_original' | 'title_summary';
-  vectorBackend: 'vectorlite';
-  costEstimateUsd: {
-    sampleThreads: number;
-    pricingDate: string;
-    gpt5Mini: number;
-    gpt54Mini: number;
-  };
-};
-
-type ParsedGlobalFlags = {
-  argv: string[];
-  devMode: boolean;
-  configPathOverride?: string;
-  workspaceRootOverride?: string;
-};
 
 type RunContext = {
   stdout?: NodeJS.WritableStream;
@@ -81,487 +48,7 @@ type RunContext = {
   cwd?: string;
 };
 
-type RepoCommandValues = Record<string, string | boolean>;
-type ParsedRepoFlags = { owner: string; repo: string; values: RepoCommandValues };
-
 const CLI_VERSION = loadCliVersion();
-
-const COMMAND_SPECS: readonly CommandSpec[] = [
-  {
-    name: 'init',
-    synopsis: 'init [--reconfigure]',
-    description: 'Configure secrets and local runtime paths.',
-    options: ['--reconfigure  Re-run setup even if config already exists'],
-    examples: ['ghcrawl init', 'ghcrawl init --reconfigure'],
-  },
-  {
-    name: 'doctor',
-    synopsis: 'doctor [--json]',
-    description: 'Check local config, database wiring, and auth health.',
-    options: ['--json  Emit machine-readable JSON output explicitly'],
-    examples: ['ghcrawl doctor', 'ghcrawl doctor --json'],
-    agentJson: true,
-  },
-  {
-    name: 'configure',
-    synopsis: 'configure [--summary-model gpt-5-mini|gpt-5.4-mini] [--embedding-basis title_original|title_summary] [--json]',
-    description: 'Show or update persisted summarization and embedding settings.',
-    options: [
-      '--summary-model <model>  Select gpt-5-mini or gpt-5.4-mini for summarization',
-      '--embedding-basis <basis>  Select title_original or title_summary for active vectors',
-      '--json  Emit machine-readable JSON output explicitly',
-    ],
-    examples: ['ghcrawl configure', 'ghcrawl configure --summary-model gpt-5.4-mini', 'ghcrawl configure --embedding-basis title_original --json'],
-    agentJson: true,
-  },
-  {
-    name: 'version',
-    synopsis: 'version',
-    description: 'Print the installed ghcrawl version.',
-    options: [],
-    examples: ['ghcrawl version', 'ghcrawl --version'],
-  },
-  {
-    name: 'sync',
-    synopsis: 'sync <owner/repo> [--since <iso|duration>] [--limit <count>] [--include-comments] [--full-reconcile] [--json]',
-    description: 'Sync open GitHub issues and PRs into the local database.',
-    options: [
-      '--since <iso|duration>  Limit sync window using ISO time or 15m/2h/7d/1mo',
-      '--limit <count>  Limit the number of synced items',
-      '--include-comments  Hydrate issue comments, PR reviews, and review comments',
-      '--full-reconcile  Reconcile stale open items instead of metadata-only incrementals',
-      '--json  Emit machine-readable JSON output explicitly',
-    ],
-    examples: ['ghcrawl sync openclaw/openclaw --limit 1', 'ghcrawl sync openclaw/openclaw --since 7d --json'],
-    agentJson: true,
-  },
-  {
-    name: 'refresh',
-    synopsis: 'refresh <owner/repo> [--no-sync] [--no-embed] [--no-cluster] [--heap-snapshot-dir <dir>] [--heap-log-interval-ms <ms>] [--json]',
-    description: 'Run sync, embed, and cluster in one staged pipeline.',
-    options: [
-      '--no-sync  Skip the GitHub sync stage',
-      '--no-embed  Skip the embeddings stage',
-      '--no-cluster  Skip the clustering stage',
-      '--heap-snapshot-dir <dir>  Write heap snapshots during long-running work',
-      '--heap-log-interval-ms <ms>  Emit periodic heap diagnostics',
-      '--json  Emit machine-readable JSON output explicitly',
-    ],
-    examples: ['ghcrawl refresh openclaw/openclaw', 'ghcrawl refresh openclaw/openclaw --no-sync --json'],
-    agentJson: true,
-  },
-  {
-    name: 'threads',
-    synopsis: 'threads <owner/repo> [--numbers <n,n,...>] [--kind issue|pull_request] [--include-closed] [--json]',
-    description: 'Read specific local issue and PR records from SQLite.',
-    options: [
-      '--numbers <n,n,...>  Fetch one or more thread numbers in one call',
-      '--kind issue|pull_request  Filter by issue or pull request',
-      '--include-closed  Include locally closed items',
-      '--json  Emit machine-readable JSON output explicitly',
-    ],
-    examples: ['ghcrawl threads openclaw/openclaw --numbers 42,43,44 --json', 'ghcrawl threads openclaw/openclaw --numbers 42 --include-closed --json'],
-    agentJson: true,
-  },
-  {
-    name: 'author',
-    synopsis: 'author <owner/repo> --login <user> [--include-closed] [--json]',
-    description: 'List local issue and PR records for a single author.',
-    options: [
-      '--login <user>  GitHub login to inspect',
-      '--include-closed  Include locally closed items',
-      '--json  Emit machine-readable JSON output explicitly',
-    ],
-    examples: ['ghcrawl author openclaw/openclaw --login lqquan --json'],
-    agentJson: true,
-  },
-  {
-    name: 'close-thread',
-    synopsis: 'close-thread <owner/repo> --number <thread> [--json]',
-    description: 'Mark one local issue or PR closed immediately.',
-    options: ['--number <thread>  Thread number to close locally', '--json  Emit machine-readable JSON output explicitly'],
-    examples: ['ghcrawl close-thread openclaw/openclaw --number 42 --json'],
-    agentJson: true,
-  },
-  {
-    name: 'close-cluster',
-    synopsis: 'close-cluster <owner/repo> --id <cluster-id> [--json]',
-    description: 'Mark one local cluster closed immediately.',
-    options: ['--id <cluster-id>  Cluster id to close locally', '--json  Emit machine-readable JSON output explicitly'],
-    examples: ['ghcrawl close-cluster openclaw/openclaw --id 123 --json'],
-    agentJson: true,
-  },
-  {
-    name: 'embed',
-    synopsis: 'embed <owner/repo> [--number <thread>] [--json]',
-    description: 'Generate or refresh embeddings for one repo or one thread.',
-    options: ['--number <thread>  Restrict embedding work to one thread', '--json  Emit machine-readable JSON output explicitly'],
-    examples: ['ghcrawl embed openclaw/openclaw --json', 'ghcrawl embed openclaw/openclaw --number 42 --json'],
-    agentJson: true,
-  },
-  {
-    name: 'cluster',
-    synopsis: 'cluster <owner/repo> [--k <count>] [--threshold <score>] [--heap-snapshot-dir <dir>] [--heap-log-interval-ms <ms>] [--json]',
-    description: 'Build or refresh local similarity clusters.',
-    options: [
-      '--k <count>  Limit nearest-neighbor fanout',
-      '--threshold <score>  Minimum similarity score',
-      '--heap-snapshot-dir <dir>  Write heap snapshots during long-running work',
-      '--heap-log-interval-ms <ms>  Emit periodic heap diagnostics',
-      '--json  Emit machine-readable JSON output explicitly',
-    ],
-    examples: ['ghcrawl cluster openclaw/openclaw --json', 'ghcrawl cluster openclaw/openclaw --threshold 0.82 --json'],
-    agentJson: true,
-  },
-  {
-    name: 'clusters',
-    synopsis: 'clusters <owner/repo> [--min-size <count>] [--limit <count>] [--sort recent|size] [--search <text>] [--include-closed] [--json]',
-    description: 'List local cluster summaries for one repository.',
-    options: [
-      '--min-size <count>  Minimum cluster size to return',
-      '--limit <count>  Maximum number of clusters to return',
-      '--sort recent|size  Sort by recency or cluster size',
-      '--search <text>  Filter clusters by text',
-      '--include-closed  Include locally closed clusters',
-      '--json  Emit machine-readable JSON output explicitly',
-    ],
-    examples: ['ghcrawl clusters openclaw/openclaw --min-size 10 --limit 20 --sort recent --json'],
-    agentJson: true,
-  },
-  {
-    name: 'cluster-detail',
-    synopsis: 'cluster-detail <owner/repo> --id <cluster-id> [--member-limit <count>] [--body-chars <count>] [--include-closed] [--json]',
-    description: 'Dump one local cluster and its members.',
-    options: [
-      '--id <cluster-id>  Cluster id to inspect',
-      '--member-limit <count>  Limit member rows in the response',
-      '--body-chars <count>  Limit body snippet size',
-      '--include-closed  Include locally closed clusters',
-      '--json  Emit machine-readable JSON output explicitly',
-    ],
-    examples: ['ghcrawl cluster-detail openclaw/openclaw --id 123 --member-limit 20 --body-chars 280 --json'],
-    agentJson: true,
-  },
-  {
-    name: 'search',
-    synopsis: 'search <owner/repo> --query <text> [--mode keyword|semantic|hybrid] [--json]',
-    description: 'Search local cluster and thread data.',
-    options: [
-      '--query <text>  Query string to search for',
-      '--mode keyword|semantic|hybrid  Choose search mode explicitly',
-      '--json  Emit machine-readable JSON output explicitly',
-    ],
-    examples: ['ghcrawl search openclaw/openclaw --query "download stalls" --mode hybrid --json'],
-    agentJson: true,
-  },
-  {
-    name: 'neighbors',
-    synopsis: 'neighbors <owner/repo> --number <thread> [--limit <count>] [--threshold <score>] [--json]',
-    description: 'List nearest semantic matches for one thread.',
-    options: [
-      '--number <thread>  Thread number to inspect',
-      '--limit <count>  Maximum number of neighbors to return',
-      '--threshold <score>  Minimum similarity score',
-      '--json  Emit machine-readable JSON output explicitly',
-    ],
-    examples: ['ghcrawl neighbors openclaw/openclaw --number 42 --limit 10 --json'],
-    agentJson: true,
-  },
-  {
-    name: 'tui',
-    synopsis: 'tui [owner/repo]',
-    description: 'Start the interactive terminal UI.',
-    options: [],
-    examples: ['ghcrawl tui', 'ghcrawl tui openclaw/openclaw'],
-  },
-  {
-    name: 'serve',
-    synopsis: 'serve [--port <port>]',
-    description: 'Start the local HTTP API server.',
-    options: ['--port <port>  Override the configured local API port'],
-    examples: ['ghcrawl serve', 'ghcrawl serve --port 5179'],
-  },
-  {
-    name: 'summarize',
-    synopsis: 'summarize <owner/repo> [--number <thread>] [--include-comments]',
-    description: 'Generate or refresh summaries for local thread content.',
-    options: ['--number <thread>  Restrict summary work to one thread', '--include-comments  Include comments in the summary input'],
-    examples: ['ghcrawl --dev summarize openclaw/openclaw', 'ghcrawl --dev summarize openclaw/openclaw --number 42 --include-comments'],
-    devOnly: true,
-  },
-  {
-    name: 'purge-comments',
-    synopsis: 'purge-comments <owner/repo> [--number <thread>]',
-    description: 'Delete stored comments for one repo or one thread.',
-    options: ['--number <thread>  Restrict purge to one thread'],
-    examples: ['ghcrawl --dev purge-comments openclaw/openclaw', 'ghcrawl --dev purge-comments openclaw/openclaw --number 42'],
-    devOnly: true,
-  },
-];
-
-class CliError extends Error {
-  readonly exitCode: number;
-  readonly command?: CommandName;
-
-  constructor(message: string, exitCode: number, command?: CommandName) {
-    super(message);
-    this.name = 'CliError';
-    this.exitCode = exitCode;
-    this.command = command;
-  }
-}
-
-class CliUsageError extends CliError {
-  constructor(message: string, command?: CommandName) {
-    super(message, 2, command);
-    this.name = 'CliUsageError';
-  }
-}
-
-function visibleCommandSpecs(devMode: boolean): CommandSpec[] {
-  return COMMAND_SPECS.filter((spec) => devMode || spec.devOnly !== true);
-}
-
-function getCommandSpec(name: string, devMode: boolean): CommandSpec | undefined {
-  return visibleCommandSpecs(devMode).find((spec) => spec.name === name);
-}
-
-function renderCommandList(devMode: boolean): string[] {
-  const specs = visibleCommandSpecs(devMode);
-  const width = Math.max(...specs.map((spec) => spec.name.length));
-  return specs.map((spec) => `  ${spec.name.padEnd(width)}  ${spec.description}`);
-}
-
-function commonGlobalOptions(): string[] {
-  return [
-    '--config-path <path>  Override the persisted config.json path',
-    '--workspace-root <path>  Override workspace root detection for .env.local and data/ghcrawl.db',
-    '--dev  Enable dev-only commands and help output',
-  ];
-}
-
-function usage(devMode = false): string {
-  const lines = [
-    'ghcrawl <command> [options]',
-    '',
-    'Commands:',
-    ...renderCommandList(devMode),
-    '',
-    'Global options:',
-    ...commonGlobalOptions().map((line) => `  ${line}`),
-    '',
-    "Use 'ghcrawl help <command>' or 'ghcrawl <command> --help' for details.",
-  ];
-  return `${lines.join('\n')}\n`;
-}
-
-function commandUsage(spec: CommandSpec): string {
-  const lines = [`ghcrawl ${spec.synopsis}`, '', spec.description];
-  if (spec.options.length > 0) {
-    lines.push('', 'Options:', ...spec.options.map((line) => `  ${line}`));
-  }
-  lines.push('', 'Global options:', ...commonGlobalOptions().map((line) => `  ${line}`));
-  if (spec.agentJson) {
-    lines.push('', 'Machine output:', '  Supports explicit --json. JSON remains the default in this compatibility pass.');
-  }
-  lines.push('', 'Examples:', ...spec.examples.map((example) => `  ${example}`));
-  return `${lines.join('\n')}\n`;
-}
-
-function hasHelpFlag(args: string[]): boolean {
-  return args.includes('--help') || args.includes('-h');
-}
-
-function usageHint(command?: CommandName): string {
-  return command ? `Run 'ghcrawl ${command} --help' for usage.` : "Run 'ghcrawl --help' for usage.";
-}
-
-function readFlagValue(argv: string[], index: number, flag: string): { value: string; nextIndex: number } {
-  const arg = argv[index];
-  const inlinePrefix = `${flag}=`;
-  if (arg.startsWith(inlinePrefix)) {
-    return { value: arg.slice(inlinePrefix.length), nextIndex: index };
-  }
-  const value = argv[index + 1];
-  if (value === undefined) {
-    throw new CliUsageError(`Missing value for ${flag}`);
-  }
-  return { value, nextIndex: index + 1 };
-}
-
-function parseGlobalFlags(argv: string[], env: NodeJS.ProcessEnv = process.env): ParsedGlobalFlags {
-  let devMode = env.GHCRAWL_DEV_MODE === '1';
-  let configPathOverride: string | undefined;
-  let workspaceRootOverride: string | undefined;
-  const filtered: string[] = [];
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === '--dev') {
-      devMode = true;
-      continue;
-    }
-    if (arg === '--config-path' || arg.startsWith('--config-path=')) {
-      const { value, nextIndex } = readFlagValue(argv, index, '--config-path');
-      configPathOverride = value;
-      index = nextIndex;
-      continue;
-    }
-    if (arg === '--workspace-root' || arg.startsWith('--workspace-root=')) {
-      const { value, nextIndex } = readFlagValue(argv, index, '--workspace-root');
-      workspaceRootOverride = value;
-      index = nextIndex;
-      continue;
-    }
-    filtered.push(arg);
-  }
-
-  return { argv: filtered, devMode, configPathOverride, workspaceRootOverride };
-}
-
-function parseArgsForCommand(
-  command: CommandName,
-  args: string[],
-  options: NonNullable<Parameters<typeof parseArgs>[0]>['options'],
-  allowPositionals = false,
-) {
-  try {
-    return parseArgs({
-      args,
-      allowPositionals,
-      options,
-    });
-  } catch (error) {
-    throw new CliUsageError(error instanceof Error ? error.message : String(error), command);
-  }
-}
-
-export function parseOwnerRepo(value: string): { owner: string; repo: string } {
-  const trimmed = value.trim();
-  const parts = trimmed.split('/');
-  if (parts.length !== 2 || !parts[0] || !parts[1]) {
-    throw new CliUsageError(`Expected owner/repo, received: ${value}`);
-  }
-  return { owner: parts[0], repo: parts[1] };
-}
-
-export function parseRepoFlags(command: CommandName, args: string[]): ParsedRepoFlags {
-  const parsed = parseArgsForCommand(
-    command,
-    args,
-    {
-      owner: { type: 'string' },
-      repo: { type: 'string' },
-      since: { type: 'string' },
-      limit: { type: 'string' },
-      json: { type: 'boolean' },
-      'include-comments': { type: 'boolean' },
-      'full-reconcile': { type: 'boolean' },
-      'include-closed': { type: 'boolean' },
-      kind: { type: 'string' },
-      number: { type: 'string' },
-      numbers: { type: 'string' },
-      login: { type: 'string' },
-      query: { type: 'string' },
-      mode: { type: 'string' },
-      k: { type: 'string' },
-      backend: { type: 'string' },
-      'candidate-k': { type: 'string' },
-      threshold: { type: 'string' },
-      port: { type: 'string' },
-      id: { type: 'string' },
-      sort: { type: 'string' },
-      search: { type: 'string' },
-      'min-size': { type: 'string' },
-      'member-limit': { type: 'string' },
-      'body-chars': { type: 'string' },
-      'no-sync': { type: 'boolean' },
-      'no-embed': { type: 'boolean' },
-      'no-cluster': { type: 'boolean' },
-      'heap-snapshot-dir': { type: 'string' },
-      'heap-log-interval-ms': { type: 'string' },
-    },
-    true,
-  );
-  const values = parsed.values as RepoCommandValues;
-
-  if (parsed.positionals.length > 1) {
-    throw new CliUsageError(`Too many positional arguments for ${command}`, command);
-  }
-
-  if (typeof values.repo === 'string' && values.repo.includes('/')) {
-    let target: { owner: string; repo: string };
-    try {
-      target = parseOwnerRepo(values.repo);
-    } catch (error) {
-      throw new CliUsageError(formatErrorMessage(error), command);
-    }
-    return { ...target, values };
-  }
-
-  if (parsed.positionals.length === 1) {
-    let target: { owner: string; repo: string };
-    try {
-      target = parseOwnerRepo(parsed.positionals[0]);
-    } catch (error) {
-      throw new CliUsageError(formatErrorMessage(error), command);
-    }
-    return { ...target, values };
-  }
-
-  const owner = values.owner;
-  const repo = values.repo;
-  if (typeof owner === 'string' && typeof repo === 'string') {
-    return { owner, repo, values };
-  }
-
-  throw new CliUsageError('Use --repo owner/repo or provide owner/repo as the first positional argument', command);
-}
-
-export function resolveSinceValue(value: string, now: Date = new Date()): string {
-  const trimmed = value.trim();
-  const absolute = new Date(trimmed);
-  if (!Number.isNaN(absolute.getTime())) {
-    return absolute.toISOString();
-  }
-
-  const match = trimmed.match(/^(\d+)(s|m|h|d|w|mo|y)$/i);
-  if (!match) {
-    throw new CliUsageError(`Invalid --since value: ${value}. Use an ISO timestamp or duration like 15m, 2h, 7d, or 1mo.`);
-  }
-
-  const amount = Number(match[1]);
-  const unit = match[2].toLowerCase();
-  const resolved = new Date(now);
-
-  switch (unit) {
-    case 's':
-      resolved.setTime(resolved.getTime() - amount * 1000);
-      break;
-    case 'm':
-      resolved.setTime(resolved.getTime() - amount * 60 * 1000);
-      break;
-    case 'h':
-      resolved.setTime(resolved.getTime() - amount * 60 * 60 * 1000);
-      break;
-    case 'd':
-      resolved.setTime(resolved.getTime() - amount * 24 * 60 * 60 * 1000);
-      break;
-    case 'w':
-      resolved.setTime(resolved.getTime() - amount * 7 * 24 * 60 * 60 * 1000);
-      break;
-    case 'mo':
-      resolved.setUTCMonth(resolved.getUTCMonth() - amount);
-      break;
-    case 'y':
-      resolved.setUTCFullYear(resolved.getUTCFullYear() - amount);
-      break;
-    default:
-      throw new CliUsageError(`Unsupported --since unit: ${unit}`);
-  }
-
-  return resolved.toISOString();
-}
 
 export function formatLogLine(message: string, now: Date = new Date()): string {
   return `[${now.toISOString()}] ${message}`;
@@ -569,137 +56,6 @@ export function formatLogLine(message: string, now: Date = new Date()): string {
 
 function writeProgress(message: string, stderr: NodeJS.WritableStream): void {
   stderr.write(`${formatLogLine(message)}\n`);
-}
-
-function formatBooleanStatus(value: boolean): string {
-  return value ? 'yes' : 'no';
-}
-
-function parsePositiveInteger(name: string, value: string, command: CommandName): number {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new CliUsageError(`Invalid --${name}: ${value}`, command);
-  }
-  return parsed;
-}
-
-function parseFiniteNumber(name: string, value: string, command: CommandName): number {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
-    throw new CliUsageError(`Invalid --${name}: ${value}`, command);
-  }
-  return parsed;
-}
-
-function parsePositiveIntegerList(name: string, value: string, command: CommandName): number[] {
-  const parts = value
-    .split(',')
-    .map((part) => part.trim())
-    .filter(Boolean);
-  if (parts.length === 0) {
-    throw new CliUsageError(`Invalid --${name}: ${value}`, command);
-  }
-  return parts.map((part) => parsePositiveInteger(name, part, command));
-}
-
-function parseEnum<T extends string>(command: CommandName, flagName: string, value: string | boolean | undefined, allowed: readonly T[]): T | undefined {
-  if (typeof value !== 'string') {
-    return undefined;
-  }
-  if ((allowed as readonly string[]).includes(value)) {
-    return value as T;
-  }
-  throw new CliUsageError(`Invalid --${flagName}: ${value}. Use one of ${allowed.join(', ')}.`, command);
-}
-
-function buildConfigureReport(options: {
-  configPath: string;
-  updated: boolean;
-  summaryModel: 'gpt-5-mini' | 'gpt-5.4-mini';
-  embeddingBasis: 'title_original' | 'title_summary';
-  vectorBackend: 'vectorlite';
-}): ConfigureReport {
-  return {
-    ...options,
-    costEstimateUsd: {
-      sampleThreads: 20_000,
-      pricingDate: 'April 1, 2026',
-      gpt5Mini: 12,
-      gpt54Mini: 30,
-    },
-  };
-}
-
-export function formatDoctorReport(result: DoctorReport): string {
-  const lines = [
-    'ghcrawl doctor',
-    `version: ${result.version}`,
-    '',
-    'Health',
-    `  ok: ${formatBooleanStatus(result.health.ok)}`,
-    `  config path: ${result.health.configPath}`,
-    `  config file exists: ${formatBooleanStatus(result.health.configFileExists)}`,
-    `  db path: ${result.health.dbPath}`,
-    `  api port: ${result.health.apiPort}`,
-    '',
-    'GitHub',
-    `  configured: ${formatBooleanStatus(result.github.configured)}`,
-    `  source: ${result.github.source}`,
-    `  format ok: ${formatBooleanStatus(result.github.formatOk)}`,
-    `  auth ok: ${formatBooleanStatus(result.github.authOk)}`,
-  ];
-  if (result.github.error) {
-    lines.push(`  note: ${result.github.error}`);
-  }
-  lines.push(
-    '',
-    'OpenAI',
-    `  configured: ${formatBooleanStatus(result.openai.configured)}`,
-    `  source: ${result.openai.source}`,
-    `  format ok: ${formatBooleanStatus(result.openai.formatOk)}`,
-    `  auth ok: ${formatBooleanStatus(result.openai.authOk)}`,
-  );
-  if (result.openai.error) {
-    lines.push(`  note: ${result.openai.error}`);
-  }
-  lines.push(
-    '',
-    'Vectorlite',
-    `  configured: ${formatBooleanStatus(result.vectorlite?.configured ?? false)}`,
-    `  runtime ok: ${formatBooleanStatus(result.vectorlite?.runtimeOk ?? false)}`,
-  );
-  if (result.vectorlite?.error) {
-    lines.push(`  note: ${result.vectorlite.error}`);
-  }
-  return `${lines.join('\n')}\n`;
-}
-
-export function formatConfigureReport(result: ConfigureReport): string {
-  const basisLabel = result.embeddingBasis === 'title_summary'
-    ? 'title + dedupe summary'
-    : 'title + original body';
-  const summaryModeNote = result.embeddingBasis === 'title_summary'
-    ? 'enabled automatically during refresh'
-    : 'disabled by default; enable title_summary to summarize before embedding';
-  const lines = [
-    'ghcrawl configure',
-    `config path: ${result.configPath}`,
-    `updated: ${result.updated ? 'yes' : 'no'}`,
-    '',
-    'Active settings',
-    `  summary model: ${result.summaryModel}`,
-    `  embedding basis: ${result.embeddingBasis} (${basisLabel})`,
-    `  llm summaries: ${summaryModeNote}`,
-    `  vector backend: ${result.vectorBackend}`,
-    '',
-    `Estimated one-time summary cost for ~${result.costEstimateUsd.sampleThreads.toLocaleString()} threads`,
-    `  pricing date: ${result.costEstimateUsd.pricingDate}`,
-    `  gpt-5-mini: ~$${result.costEstimateUsd.gpt5Mini.toFixed(0)} USD`,
-    `  gpt-5.4-mini: ~$${result.costEstimateUsd.gpt54Mini.toFixed(0)} USD`,
-    '',
-    'Changing summary model or embedding basis will make the next refresh rebuild vectors and clusters.',
-  ];
-  return `${lines.join('\n')}\n`;
 }
 
 function closeService(service: GHCrawlService | null): void {
@@ -846,21 +202,6 @@ export async function run(
 
   try {
     switch (commandSpec.name) {
-      case 'init': {
-        const parsed = parseArgsForCommand('init', rest, {
-          reconfigure: { type: 'boolean' },
-        });
-        const values = parsed.values as RepoCommandValues;
-        await runInitWizard({
-          reconfigure: values.reconfigure === true,
-          cwd,
-          env,
-          configPathOverride: parsedGlobals.configPathOverride,
-          workspaceRootOverride: parsedGlobals.workspaceRootOverride,
-        });
-        writeJson(stdout, getService().init());
-        return;
-      }
       case 'doctor': {
         const parsed = parseArgsForCommand('doctor', rest, {
           json: { type: 'boolean' },
@@ -881,8 +222,8 @@ export async function run(
           json: { type: 'boolean' },
         });
         const values = parsed.values as RepoCommandValues;
-        const summaryModel = parseEnum('configure', 'summary-model', values['summary-model'], ['gpt-5-mini', 'gpt-5.4-mini']);
-        const embeddingBasis = parseEnum('configure', 'embedding-basis', values['embedding-basis'], ['title_original', 'title_summary']);
+        const summaryModel = parseEnum('configure', 'summary-model', values['summary-model'], ['gpt-5.4', 'gpt-5-mini', 'gpt-5.4-mini']);
+        const embeddingBasis = parseEnum('configure', 'embedding-basis', values['embedding-basis'], ['title_original', 'title_summary', 'llm_key_summary']);
         const current = getConfig();
         const stored = readPersistedConfig(loadConfigOptions);
         const next = {
@@ -901,8 +242,8 @@ export async function run(
         const result = buildConfigureReport({
           configPath: current.configPath,
           updated,
-          summaryModel: next.summaryModel as 'gpt-5-mini' | 'gpt-5.4-mini',
-          embeddingBasis: next.embeddingBasis as 'title_original' | 'title_summary',
+          summaryModel: next.summaryModel as 'gpt-5.4' | 'gpt-5-mini' | 'gpt-5.4-mini',
+          embeddingBasis: next.embeddingBasis as 'title_original' | 'title_summary' | 'llm_key_summary',
           vectorBackend: 'vectorlite',
         });
         const shouldWriteJson = values.json === true || (stdout as NodeJS.WriteStream).isTTY !== true;
@@ -921,9 +262,66 @@ export async function run(
           since: typeof values.since === 'string' ? resolveSinceValue(values.since) : undefined,
           limit: typeof values.limit === 'string' ? parsePositiveInteger('limit', values.limit, 'sync') : undefined,
           includeComments: values['include-comments'] === true,
+          includeCode: values['include-code'] === true,
           fullReconcile: values['full-reconcile'] === true,
           onProgress: (message: string) => writeProgress(message, stderr),
         });
+        writeJson(stdout, result);
+        return;
+      }
+      case 'export-sync': {
+        const { owner, repo, values } = parseRepoFlags('export-sync', rest);
+        const result = getService().exportPortableSync({
+          owner,
+          repo,
+          outputPath: typeof values.output === 'string' ? values.output : undefined,
+          profile: parseEnum('export-sync', 'profile', values.profile, ['lean', 'review']),
+          writeManifest: values.manifest === true,
+          bodyChars:
+            typeof values['body-chars'] === 'string'
+              ? parsePositiveInteger('body-chars', values['body-chars'], 'export-sync')
+              : undefined,
+        });
+        writeJson(stdout, result);
+        return;
+      }
+      case 'validate-sync': {
+        const parsed = parseArgsForCommand('validate-sync', rest, { json: { type: 'boolean' } }, true);
+        if (parsed.positionals.length !== 1) {
+          throw new CliUsageError('validate-sync requires exactly one portable database path', 'validate-sync');
+        }
+        const result = validatePortableSyncDatabase(parsed.positionals[0]);
+        writeJson(stdout, result);
+        return;
+      }
+      case 'portable-size': {
+        const parsed = parseArgsForCommand('portable-size', rest, { json: { type: 'boolean' } }, true);
+        if (parsed.positionals.length !== 1) {
+          throw new CliUsageError('portable-size requires exactly one portable database path', 'portable-size');
+        }
+        const result = portableSyncSizeReport(parsed.positionals[0]);
+        writeJson(stdout, result);
+        return;
+      }
+      case 'sync-status': {
+        const { owner, repo, values } = parseRepoFlags('sync-status', rest);
+        if (typeof values.portable !== 'string') {
+          throw new CliUsageError('Missing --portable', 'sync-status');
+        }
+        const result = getService().portableSyncStatus({
+          owner,
+          repo,
+          portablePath: values.portable,
+        });
+        writeJson(stdout, result);
+        return;
+      }
+      case 'import-sync': {
+        const parsed = parseArgsForCommand('import-sync', rest, { json: { type: 'boolean' } }, true);
+        if (parsed.positionals.length !== 1) {
+          throw new CliUsageError('import-sync requires exactly one portable database path', 'import-sync');
+        }
+        const result = getService().importPortableSync(parsed.positionals[0]);
         writeJson(stdout, result);
         return;
       }
@@ -937,6 +335,7 @@ export async function run(
             sync: values['no-sync'] === true ? false : undefined,
             embed: values['no-embed'] === true ? false : undefined,
             cluster: values['no-cluster'] === true ? false : undefined,
+            includeCode: values['include-code'] === true,
             onProgress:
               heapDiagnostics?.wrapProgress((message: string) => writeProgress(message, stderr)) ??
               ((message: string) => writeProgress(message, stderr)),
@@ -951,6 +350,46 @@ export async function run(
           heapDiagnostics?.dispose();
         }
       }
+      case 'optimize': {
+        const parsed = parseArgsForCommand(
+          'optimize',
+          rest,
+          {
+            owner: { type: 'string' },
+            repo: { type: 'string' },
+            json: { type: 'boolean' },
+          },
+          true,
+        );
+        const values = parsed.values as RepoCommandValues;
+        if (parsed.positionals.length > 1) {
+          throw new CliUsageError('Too many positional arguments for optimize', 'optimize');
+        }
+        let target: { owner: string; repo: string } | undefined;
+        if (parsed.positionals.length === 1) {
+          target = parseOwnerRepo(parsed.positionals[0]);
+        } else if (typeof values.owner === 'string' || typeof values.repo === 'string') {
+          if (typeof values.owner !== 'string' || typeof values.repo !== 'string') {
+            throw new CliUsageError('Both --owner and --repo are required when either is set', 'optimize');
+          }
+          target = { owner: values.owner, repo: values.repo };
+        }
+        const result = getService().optimizeStorage(target);
+        writeJson(stdout, result);
+        return;
+      }
+      case 'runs': {
+        const { owner, repo, values } = parseRepoFlags('runs', rest);
+        const kind = parseEnum('runs', 'kind', values.kind, ['sync', 'summary', 'embedding', 'cluster']);
+        const result = getService().listRunHistory({
+          owner,
+          repo,
+          kind,
+          limit: typeof values.limit === 'string' ? parsePositiveInteger('limit', values.limit, 'runs') : undefined,
+        });
+        writeJson(stdout, result);
+        return;
+      }
       case 'threads': {
         const { owner, repo, values } = parseRepoFlags('threads', rest);
         const kind = parseEnum('threads', 'kind', values.kind, ['issue', 'pull_request']);
@@ -959,20 +398,6 @@ export async function run(
           repo,
           kind,
           numbers: typeof values.numbers === 'string' ? parsePositiveIntegerList('numbers', values.numbers, 'threads') : undefined,
-          includeClosed: values['include-closed'] === true,
-        });
-        writeJson(stdout, result);
-        return;
-      }
-      case 'author': {
-        const { owner, repo, values } = parseRepoFlags('author', rest);
-        if (typeof values.login !== 'string' || values.login.trim().length === 0) {
-          throw new CliUsageError('Missing --login', 'author');
-        }
-        const result = getService().listAuthorThreads({
-          owner,
-          repo,
-          login: values.login,
           includeClosed: values['include-closed'] === true,
         });
         writeJson(stdout, result);
@@ -1004,6 +429,96 @@ export async function run(
         writeJson(stdout, result);
         return;
       }
+      case 'exclude-cluster-member': {
+        const { owner, repo, values } = parseRepoFlags('exclude-cluster-member', rest);
+        if (typeof values.id !== 'string') {
+          throw new CliUsageError('Missing --id', 'exclude-cluster-member');
+        }
+        if (typeof values.number !== 'string') {
+          throw new CliUsageError('Missing --number', 'exclude-cluster-member');
+        }
+        const result = getService().excludeThreadFromCluster({
+          owner,
+          repo,
+          clusterId: parsePositiveInteger('id', values.id, 'exclude-cluster-member'),
+          threadNumber: parsePositiveInteger('number', values.number, 'exclude-cluster-member'),
+          reason: typeof values.reason === 'string' ? values.reason : undefined,
+        });
+        writeJson(stdout, result);
+        return;
+      }
+      case 'include-cluster-member': {
+        const { owner, repo, values } = parseRepoFlags('include-cluster-member', rest);
+        if (typeof values.id !== 'string') {
+          throw new CliUsageError('Missing --id', 'include-cluster-member');
+        }
+        if (typeof values.number !== 'string') {
+          throw new CliUsageError('Missing --number', 'include-cluster-member');
+        }
+        const result = getService().includeThreadInCluster({
+          owner,
+          repo,
+          clusterId: parsePositiveInteger('id', values.id, 'include-cluster-member'),
+          threadNumber: parsePositiveInteger('number', values.number, 'include-cluster-member'),
+          reason: typeof values.reason === 'string' ? values.reason : undefined,
+        });
+        writeJson(stdout, result);
+        return;
+      }
+      case 'set-cluster-canonical': {
+        const { owner, repo, values } = parseRepoFlags('set-cluster-canonical', rest);
+        if (typeof values.id !== 'string') {
+          throw new CliUsageError('Missing --id', 'set-cluster-canonical');
+        }
+        if (typeof values.number !== 'string') {
+          throw new CliUsageError('Missing --number', 'set-cluster-canonical');
+        }
+        const result = getService().setClusterCanonicalThread({
+          owner,
+          repo,
+          clusterId: parsePositiveInteger('id', values.id, 'set-cluster-canonical'),
+          threadNumber: parsePositiveInteger('number', values.number, 'set-cluster-canonical'),
+          reason: typeof values.reason === 'string' ? values.reason : undefined,
+        });
+        writeJson(stdout, result);
+        return;
+      }
+      case 'merge-clusters': {
+        const { owner, repo, values } = parseRepoFlags('merge-clusters', rest);
+        if (typeof values.source !== 'string') {
+          throw new CliUsageError('Missing --source', 'merge-clusters');
+        }
+        if (typeof values.target !== 'string') {
+          throw new CliUsageError('Missing --target', 'merge-clusters');
+        }
+        const result = getService().mergeDurableClusters({
+          owner,
+          repo,
+          sourceClusterId: parsePositiveInteger('source', values.source, 'merge-clusters'),
+          targetClusterId: parsePositiveInteger('target', values.target, 'merge-clusters'),
+          reason: typeof values.reason === 'string' ? values.reason : undefined,
+        });
+        writeJson(stdout, result);
+        return;
+      }
+      case 'split-cluster': {
+        const { owner, repo, values } = parseRepoFlags('split-cluster', rest);
+        if (typeof values.source !== 'string') {
+          throw new CliUsageError('Missing --source', 'split-cluster');
+        }
+        if (typeof values.numbers !== 'string') {
+          throw new CliUsageError('Missing --numbers', 'split-cluster');
+        }
+        const result = getService().splitDurableCluster({
+          owner,
+          repo,
+          sourceClusterId: parsePositiveInteger('source', values.source, 'split-cluster'),
+          threadNumbers: parsePositiveIntegerList('numbers', values.numbers, 'split-cluster'),
+          reason: typeof values.reason === 'string' ? values.reason : undefined,
+        });
+        writeJson(stdout, result);
+        return;
+      }
       case 'summarize': {
         const { owner, repo, values } = parseRepoFlags('summarize', rest);
         const result = await getService().summarizeRepository({
@@ -1011,6 +526,18 @@ export async function run(
           repo,
           threadNumber: typeof values.number === 'string' ? parsePositiveInteger('number', values.number, 'summarize') : undefined,
           includeComments: values['include-comments'] === true,
+          onProgress: (message: string) => writeProgress(message, stderr),
+        });
+        writeJson(stdout, result);
+        return;
+      }
+      case 'key-summaries': {
+        const { owner, repo, values } = parseRepoFlags('key-summaries', rest);
+        const result = await getService().generateKeySummaries({
+          owner,
+          repo,
+          threadNumber: typeof values.number === 'string' ? parsePositiveInteger('number', values.number, 'key-summaries') : undefined,
+          limit: typeof values.limit === 'string' ? parsePositiveInteger('limit', values.limit, 'key-summaries') : undefined,
           onProgress: (message: string) => writeProgress(message, stderr),
         });
         writeJson(stdout, result);
@@ -1045,8 +572,13 @@ export async function run(
           const result = await getService().clusterRepository({
             owner,
             repo,
+            threadNumber: typeof values.number === 'string' ? parsePositiveInteger('number', values.number, 'cluster') : undefined,
             k: typeof values.k === 'string' ? parsePositiveInteger('k', values.k, 'cluster') : undefined,
             minScore: typeof values.threshold === 'string' ? parseFiniteNumber('threshold', values.threshold, 'cluster') : undefined,
+            maxClusterSize:
+              typeof values['max-cluster-size'] === 'string'
+                ? parsePositiveInteger('max-cluster-size', values['max-cluster-size'], 'cluster')
+                : undefined,
             onProgress:
               heapDiagnostics?.wrapProgress((message: string) => writeProgress(message, stderr)) ??
               ((message: string) => writeProgress(message, stderr)),
@@ -1086,7 +618,21 @@ export async function run(
           limit: typeof values.limit === 'string' ? parsePositiveInteger('limit', values.limit, 'clusters') : undefined,
           sort,
           search: typeof values.search === 'string' ? values.search : undefined,
-          includeClosed: values['include-closed'] === true,
+          includeClosed: values['hide-closed'] === true ? false : true,
+        });
+        writeJson(stdout, result);
+        return;
+      }
+      case 'durable-clusters': {
+        const { owner, repo, values } = parseRepoFlags('durable-clusters', rest);
+        const result = getService().listDurableClusters({
+          owner,
+          repo,
+          includeInactive: values['include-inactive'] === true,
+          memberLimit:
+            typeof values['member-limit'] === 'string'
+              ? parsePositiveInteger('member-limit', values['member-limit'], 'durable-clusters')
+              : undefined,
         });
         writeJson(stdout, result);
         return;
@@ -1108,7 +654,28 @@ export async function run(
             typeof values['body-chars'] === 'string'
               ? parsePositiveInteger('body-chars', values['body-chars'], 'cluster-detail')
               : undefined,
-          includeClosed: values['include-closed'] === true,
+          includeClosed: values['hide-closed'] === true ? false : true,
+        });
+        writeJson(stdout, result);
+        return;
+      }
+      case 'cluster-explain': {
+        const { owner, repo, values } = parseRepoFlags('cluster-explain', rest);
+        if (typeof values.id !== 'string') {
+          throw new CliUsageError('Missing --id', 'cluster-explain');
+        }
+        const result = getService().explainDurableCluster({
+          owner,
+          repo,
+          clusterId: parsePositiveInteger('id', values.id, 'cluster-explain'),
+          memberLimit:
+            typeof values['member-limit'] === 'string'
+              ? parsePositiveInteger('member-limit', values['member-limit'], 'cluster-explain')
+              : undefined,
+          eventLimit:
+            typeof values['event-limit'] === 'string'
+              ? parsePositiveInteger('event-limit', values['event-limit'], 'cluster-explain')
+              : undefined,
         });
         writeJson(stdout, result);
         return;
@@ -1217,6 +784,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(code);
   }
 }
+
+export { formatConfigureReport, formatDoctorReport } from './reports.js';
+export { parseOwnerRepo, parseRepoFlags, resolveSinceValue } from './args.js';
 
 function loadCliVersion(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));

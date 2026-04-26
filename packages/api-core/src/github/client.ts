@@ -3,7 +3,6 @@ import { throttling } from '@octokit/plugin-throttling';
 import { Octokit } from 'octokit';
 
 export type GitHubClient = {
-  checkAuth: (reporter?: GitHubReporter) => Promise<void>;
   getRepo: (owner: string, repo: string, reporter?: GitHubReporter) => Promise<Record<string, unknown>>;
   listRepositoryIssues: (
     owner: string,
@@ -15,6 +14,7 @@ export type GitHubClient = {
   ) => Promise<Array<Record<string, unknown>>>;
   getIssue: (owner: string, repo: string, number: number, reporter?: GitHubReporter) => Promise<Record<string, unknown>>;
   getPull: (owner: string, repo: string, number: number, reporter?: GitHubReporter) => Promise<Record<string, unknown>>;
+  listPullFiles: (owner: string, repo: string, number: number, reporter?: GitHubReporter) => Promise<Array<Record<string, unknown>>>;
   listIssueComments: (owner: string, repo: string, number: number, reporter?: GitHubReporter) => Promise<Array<Record<string, unknown>>>;
   listPullReviews: (owner: string, repo: string, number: number, reporter?: GitHubReporter) => Promise<Array<Record<string, unknown>>>;
   listPullReviewComments: (
@@ -74,7 +74,7 @@ function formatResetTime(resetSeconds: string | null | undefined): string | null
 export function makeGitHubClient(options: RequestOptions): GitHubClient {
   const userAgent = options.userAgent ?? 'ghcrawl';
   const timeoutMs = options.timeoutMs ?? 30_000;
-  const pageDelayMs = options.pageDelayMs ?? 5000;
+  const pageDelayMs = options.pageDelayMs ?? 250;
   const BaseOctokit = Octokit.plugin(retry, throttling);
 
   function createOctokit(reporter?: GitHubReporter) {
@@ -156,11 +156,6 @@ export function makeGitHubClient(options: RequestOptions): GitHubClient {
   }
 
   return {
-    async checkAuth(reporter) {
-      await request('GET /rate_limit', reporter, async (octokit) => {
-        await octokit.request('GET /rate_limit');
-      });
-    },
     async getRepo(owner, repo, reporter) {
       return request(`GET /repos/${owner}/${repo}`, reporter, async (octokit) => {
         const response = await octokit.rest.repos.get({ owner, repo });
@@ -195,6 +190,20 @@ export function makeGitHubClient(options: RequestOptions): GitHubClient {
         const response = await octokit.rest.pulls.get({ owner, repo, pull_number: number });
         return response.data as Record<string, unknown>;
       });
+    },
+    async listPullFiles(owner, repo, number, reporter) {
+      return paginate(
+        `GET /repos/${owner}/${repo}/pulls/${number}/files per_page=100`,
+        undefined,
+        reporter,
+        (octokit) =>
+          octokit.paginate.iterator(octokit.rest.pulls.listFiles, {
+            owner,
+            repo,
+            pull_number: number,
+            per_page: 100,
+          }) as AsyncIterable<OctokitPage<Record<string, unknown>>>,
+      );
     },
     async listIssueComments(owner, repo, number, reporter) {
       return paginate(

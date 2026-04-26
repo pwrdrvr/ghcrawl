@@ -14,12 +14,14 @@
 - CLI is the only supported runtime host in V1.
 - Web is deferred and must stay HTTP-only against the local API boundary.
 - SQLite is the canonical store.
-- Exact local cosine similarity is the active kNN plan.
-- OpenSearch is explicitly deferred until local exact search proves insufficient.
-- Sync is open-only.
+- Persistent `vectorlite` sidecar search is the active kNN plan.
+- OpenSearch is explicitly deferred; it is not on the supported runtime path.
+- Sync is metadata-first and open-focused, with stale-open closure reconciliation on full unfiltered crawls.
 - Sync is metadata-only by default.
 - `sync --include-comments` is optional deeper hydration, not the default path.
 - Filtered crawls like `--limit` and `--since` do not perform stale-open reconciliation.
+- Durable cluster identities are canonical. Maintainer overrides are sticky and must survive reclustering.
+- Portable git-sync exports are the supported way to share compact state. The live DB is a cache and is intentionally not sync-friendly.
 
 ## Phase 0: Bootstrap
 
@@ -37,7 +39,7 @@
 - [x] Read `GITHUB_TOKEN` and fail clearly when missing.
 - [x] Read `OPENAI_API_KEY` and fail clearly when missing for OpenAI-dependent commands.
 - [x] Define `GHCRAWL_DB_PATH`, `GHCRAWL_API_PORT`, `GHCRAWL_SUMMARY_MODEL`, and `GHCRAWL_EMBED_MODEL`.
-- [ ] Decide whether to add a persisted runtime config file now or after first sync works.
+- [x] Add a persisted runtime config file for model, embedding, vector, and per-repo TUI preferences.
 - [x] Implement `doctor` checks for env vars, SQLite path creation, and optional OpenSearch reachability.
 - [x] Testing goal: config unit tests cover defaults, missing env vars, and override behavior.
 
@@ -54,9 +56,9 @@
 - [x] Add positional `owner/repo` CLI syntax.
 - [x] Add filtered crawls with `--since` and `--limit`.
 - [x] Make comment, review, and review-comment hydration opt-in with `--include-comments`.
-- [ ] Implement durable incremental checkpoints/cursors instead of relying only on `--since`.
+- [x] Persist durable sync checkpoints for full scans and overlapping closure sweeps.
 - [ ] Decide whether to persist GitHub ETags or GraphQL cursors for cheaper refreshes.
-- [ ] Add a dedicated `refresh-closed` or equivalent command if full open reconciliation becomes too slow on large repos.
+- [ ] Add a dedicated `refresh-closed` or equivalent command only if overlap/direct reconciliation becomes too slow on large repos.
 - [ ] Testing goal: add fixture-backed sync tests for idempotency, repeated refreshes, and partial-failure resume behavior.
 
 ## Phase 3: Document Building And Summaries
@@ -77,23 +79,25 @@
 
 ## Phase 4: Embeddings And Similarity Search
 
-- [x] Implement embedding generation with `text-embedding-3-small` by default.
-- [x] Persist embeddings in SQLite first.
-- [x] Implement exact cosine similarity search in process.
+- [x] Implement embedding generation with OpenAI embeddings.
+- [x] Move active vectors to one vector per open thread.
+- [x] Persist active vectors in a repository-scoped `vectorlite` sidecar instead of the main SQLite DB.
+- [x] Keep legacy SQLite embedding rows as migration input only, then purge rebuildable vector payloads.
+- [x] Implement vector search and neighbor lookup through `vectorlite`.
 - [x] Add `embed` and `search` CLI commands.
-- [ ] Measure local performance on a realistic fixture corpus and capture the numbers in docs.
-- [ ] Add retry/batching observability around embeddings and summaries so long runs are easier to operate.
-- [ ] Design a clean backend abstraction if we later want to swap exact local search with OpenSearch-backed ANN.
-- [ ] Testing goal: expand embedding job tests to cover retries, batching behavior, and unchanged-row skips more explicitly.
+- [x] Add retry/batching recovery around oversized embedding inputs.
+- [x] Add tests for batching, unchanged-row skips, closed-vector pruning, corrupted sidecar rebuild, and retry shrink behavior.
+- [ ] Capture current large-repo timing numbers in docs from the latest `openclaw/openclaw` run.
+- [ ] Keep the vector store interface narrow enough that a future backend can be swapped without leaking raw SQL into service code.
 
 Decision note:
 
-- this phase is the primary kNN path for the foreseeable future
-- do not block on Docker, OpenSearch, Lucene, or Faiss
+- `vectorlite` sidecar search is the primary kNN path for the foreseeable future
+- do not block normal operation on Docker, OpenSearch, Lucene, or Faiss
 
 ## Phase 5: OpenSearch Evaluation And Optional Backend
 
-- [ ] Add a local recipe for OpenSearch 3.3 only if local exact search is proven inadequate.
+- [ ] Add a local recipe for OpenSearch 3.3 only if `vectorlite` search is proven inadequate.
 - [ ] Implement OpenSearch index creation using `knn_vector`.
 - [ ] Start with Lucene/HNSW as the default OpenSearch backend.
 - [ ] Support metadata filters in vector search.
@@ -104,32 +108,33 @@ Decision note:
 Decision note:
 
 - this phase is explicitly deferred
-- only start it after exact local similarity is measured and shown to be insufficient
+- only start it after the supported `vectorlite` sidecar path is measured and shown to be insufficient
 
 ## Phase 6: Clustering
 
 - [x] Implement a first clustering pass based on nearest-neighbor edges plus connected components.
 - [x] Persist similarity edges, clusters, and cluster members.
 - [x] Add `cluster` CLI command.
-- [ ] Tune similarity thresholds and metadata boosts using real repo output.
-- [ ] Improve representative-thread selection and cluster explanation quality.
-- [ ] Decide whether issue-to-PR clustering needs different thresholds than issue-to-issue and PR-to-PR.
-- [ ] Test on a real or sanitized fixture corpus to inspect false positives and false negatives.
-- [ ] Testing goal: add golden cluster fixtures proving known related threads end up together.
+- [x] Add deterministic fingerprints based on normalized text, MinHash/SimHash-style signals, linked refs, files, module buckets, and hunk signatures.
+- [x] Make clustering work without embeddings or LLM summaries; model output only enriches the evidence.
+- [x] Add durable cluster governance: stable slugs, aliases, manual include/exclude/canonical overrides, merge, split, and close.
+- [x] Tune thresholds and metadata/file/LLM weights against real `openclaw/openclaw` output.
+- [x] Preserve closed and manually closed clusters in operator views by default.
+- [ ] Keep refining representative-thread selection and cluster explanation quality.
+- [ ] Add a small golden fixture suite for known true-positive and false-positive clusters.
 
-## Phase 7: API And Future UI
+## Phase 7: API, TUI, And Future Web UI
 
 - [x] Implement local API endpoints for health, repositories, threads, search, clusters, and rerun actions.
 - [x] Keep the HTTP API hosted in-process by the CLI rather than as a separate daemon.
 - [x] Preserve package boundaries so future web code stays HTTP-only and does not import `api-core`.
-- [ ] Add any missing read endpoints we want before UI work:
-  - neighbors
-  - run history
-  - thread detail with summaries and optional hydrated comments
+- [x] Add read endpoints and service methods for neighbors, run history, thread detail, cluster detail, durable clusters, and cluster evidence.
+- [x] Build the local TUI as the primary V1 browsing UI.
+- [x] Add TUI support for stable cluster names, closed-member display, markdown-ish detail previews, right-click menus, copy/open actions, pane focus, mouse selection, and per-repo preferences.
 - [ ] Build the deferred Vite web app only after the API shape settles.
 - [ ] Use `shadcn/ui` primitives with a custom visual system rather than stock styling.
 - [ ] Add filters for repo, item type, state, label, and cluster size.
-- [ ] Add detail panels that show raw text, summaries, nearest neighbors, and cluster membership.
+- [x] Add TUI detail panels that show thread metadata, LLM key summaries, top files, main preview, links, and cluster membership.
 - [ ] Add a search view with keyword, semantic, and hybrid modes.
 - [ ] Add status indicators for sync freshness and model/index freshness.
 - [ ] Testing goal: UI smoke tests prove the main list, detail, and search views render from seeded local data.
@@ -137,24 +142,32 @@ Decision note:
 ## Phase 8: Hardening
 
 - [x] Persist run-history tables for sync, summarize, embed, and cluster.
-- [ ] Add more structured logs and progress summaries for summarize, embed, and cluster.
-- [ ] Add failure recovery for partial enrichment runs.
-- [ ] Add export/report helpers for maintainers to share cluster results.
+- [x] Add structured progress summaries for sync, embed, cluster, refresh, and storage optimization.
+- [x] Add recovery behavior for partial enrichment runs through content hashes, current vector metadata, and sidecar rebuild.
+- [x] Add export/report helpers for maintainers to share cluster results and compact portable state.
 - [ ] Revisit model defaults and prompt budget after real data review.
-- [ ] Decide whether per-repo config files are needed.
-- [ ] Add database maintenance helpers:
+- [x] Add per-repo persisted TUI preferences.
+- [x] Add database maintenance helpers:
   - vacuum/cleanup
-  - prune stale summaries/embeddings
-  - optional reset commands scoped by repo
+  - WAL checkpoints
+  - planner stats refresh
+  - vector sidecar maintenance
+- [x] Add portable git-sync commands:
+  - `export-sync`
+  - `validate-sync`
+  - `portable-size`
+  - `sync-status`
+  - `import-sync`
 - [ ] Testing goal: end-to-end local workflow test covers `doctor`, `sync`, `summarize`, `embed`, `cluster`, and `serve`.
 
 ## Immediate Next Focus
 
-- [ ] Run a real full open-only crawl against `openclaw/openclaw` and inspect what the current metadata-first corpus looks like.
-- [ ] Review search quality on real examples before spending more tokens on broad summarization/embedding runs.
-- [ ] Decide whether default dedupe quality is good enough from title/body/labels alone, or whether we need selective comment hydration.
-- [ ] Add progress output for summarize, embed, and cluster similar to sync.
-- [ ] Capture a short operator guide for “full crawl vs filtered crawl vs include-comments crawl”.
+- [x] Run real large `openclaw/openclaw` crawls, embeddings, summaries, clustering, closure refreshes, and storage optimization.
+- [x] Tune cluster quality on real output and validate in the TUI.
+- [x] Capture operator docs for refresh, manual pipeline control, closed clusters, durable overrides, portable git-sync export, and optimize.
+- [ ] Finish service decomposition so `service.ts`, `apps/cli/src/main.ts`, and `apps/cli/src/tui/app.ts` stay small enough to maintain.
+- [x] Add focused tests around portable import conflict handling and sync drift reporting.
+- [ ] Add a release-readiness pass for packaged `vectorlite` installs across supported Node versions.
 
 ## Recommended Execution Order
 
@@ -162,4 +175,5 @@ Decision note:
 - [x] Prove GitHub sync into SQLite before any UI work.
 - [x] Prove document building before embeddings.
 - [x] Prove exact local similarity before OpenSearch.
-- [ ] Tune clustering quality before polishing the UI.
+- [x] Tune clustering quality before polishing the TUI.
+- [ ] Keep refactoring service/TUI/CLI command surfaces in small commits until the core files stop carrying unrelated responsibilities.

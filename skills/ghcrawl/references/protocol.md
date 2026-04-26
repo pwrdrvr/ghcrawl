@@ -10,19 +10,20 @@ Do not start with `ghcrawl --help` or `<subcommand> --help`. Use the command sur
 
 ### `ghcrawl doctor --json`
 
-Health and auth smoke check.
+Local setup and token-presence check.
 
 Use this only when needed. Treat the result as a gate:
 
-- If GitHub/OpenAI auth is missing or unhealthy, stay read-only.
-- If GitHub/OpenAI auth is healthy, API-backed commands are available, but still require explicit user direction.
+- If the GitHub token is missing, stay read-only.
+- If the GitHub token is present, API-backed GitHub commands are available, but still require explicit user direction.
+- If the OpenAI key is missing, avoid summary and embedding commands.
 
 Do not call this automatically on every skill invocation. Use it when:
 
 - the user explicitly asked for API-backed work
-- or a read-only request failed and local setup/auth may be the reason
+- or a read-only request failed and local setup may be the reason
 
-If the user asked only for read-only analysis, missing auth is not itself a blocker. Work from the existing local dataset through the CLI.
+If the user asked only for read-only analysis, missing tokens are not themselves a blocker. Work from the existing local dataset through the CLI.
 
 ### `ghcrawl configure --json`
 
@@ -51,21 +52,12 @@ The returned `thread` objects include:
 If `clusterId` is non-null, follow with:
 
 - `ghcrawl cluster-detail owner/repo --id <clusterId>`
+- `ghcrawl cluster-explain owner/repo --id <clusterId>` when the user asks why the cluster exists or what changed it
 
 Useful flags:
 
 - `--numbers 42,43,44`
 - `--kind issue|pull_request`
-- `--include-closed`
-
-### `ghcrawl author owner/repo --login <user> --json`
-
-Bulk read path for all open issue/PR records from one author in the local DB.
-
-Use this when you want to inspect a user's open items together and see the strongest stored same-author similarity match for each item.
-
-Useful flags:
-
 - `--include-closed`
 
 ### `ghcrawl refresh owner/repo`
@@ -84,6 +76,31 @@ Optional skips:
 - `--no-cluster`
 
 Do not run this unless the user explicitly asked for a refresh/rebuild.
+
+### `ghcrawl runs owner/repo --json`
+
+Read-only run history for one repo.
+
+Use this when sync freshness, repeated failures, or pipeline status matters.
+
+Useful flags:
+
+- `--kind sync|summary|embedding|cluster`
+- `--limit <count>`
+
+Returns:
+
+- `repository`
+- `runs[]`
+
+Each run includes:
+
+- `runKind`
+- `status`
+- `startedAt`
+- `finishedAt`
+- `stats`
+- `errorText`
 
 ### `ghcrawl clusters owner/repo --json`
 
@@ -156,6 +173,51 @@ Each member includes:
 
 By default this hides locally closed clusters; use `--include-closed` when the user explicitly wants them.
 
+### `ghcrawl durable-clusters owner/repo --json`
+
+Read-only list of durable cluster identities and governed memberships.
+
+Useful flags:
+
+- `--include-inactive`
+- `--member-limit <count>`
+
+Use this when stable cluster slugs, removed members, blocked members, or durable governance state matter more than the latest run snapshot.
+
+### `ghcrawl cluster-explain owner/repo --id <cluster-id> --json`
+
+Read-only explanation for one durable cluster.
+
+Useful flags:
+
+- `--member-limit <count>`
+- `--event-limit <count>`
+
+Returns:
+
+- stable durable identity and slug
+- governed memberships
+- aliases
+- maintainer overrides
+- event history
+- pairwise evidence sources and score breakdowns
+
+Use this when the user asks why threads are together, why a thread stayed out, or what maintainer action changed the cluster.
+
+### Durable governance commands
+
+These mutate local durable cluster governance. Use them only when the user explicitly asks for that mutation:
+
+```bash
+ghcrawl exclude-cluster-member owner/repo --id 123 --number 42 --reason "false positive" --json
+ghcrawl include-cluster-member owner/repo --id 123 --number 42 --reason "same root cause" --json
+ghcrawl set-cluster-canonical owner/repo --id 123 --number 42 --reason "best root issue" --json
+ghcrawl merge-clusters owner/repo --source 123 --target 456 --reason "same incident" --json
+ghcrawl split-cluster owner/repo --source 123 --numbers 42,43 --reason "separate root cause" --json
+```
+
+After a small sync or governance edit, use `ghcrawl cluster owner/repo --number <thread-number> --json` only when the user explicitly asks to refresh that local durable neighborhood.
+
 ### `ghcrawl close-thread owner/repo --number <thread-number> --json`
 
 Marks one local issue/PR closed without waiting for the next GitHub sync.
@@ -185,15 +247,17 @@ If `ghcrawl` is not installed globally:
 ```bash
 pnpm --filter ghcrawl cli doctor --json
 pnpm --filter ghcrawl cli configure --json
+pnpm --filter ghcrawl cli runs owner/repo --limit 20 --json
 pnpm --filter ghcrawl cli threads owner/repo --numbers 12345 --json
 pnpm --filter ghcrawl cli threads owner/repo --numbers 42,43,44 --json
 pnpm --filter ghcrawl cli threads owner/repo --numbers 42,43,44 --include-closed --json
-pnpm --filter ghcrawl cli author owner/repo --login lqquan --json
 pnpm --filter ghcrawl cli refresh owner/repo
 pnpm --filter ghcrawl cli clusters owner/repo --min-size 10 --limit 20 --sort recent --json
 pnpm --filter ghcrawl cli clusters owner/repo --min-size 10 --limit 20 --sort recent --include-closed --json
+pnpm --filter ghcrawl cli durable-clusters owner/repo --member-limit 10 --json
 pnpm --filter ghcrawl cli cluster-detail owner/repo --id 123 --member-limit 20 --body-chars 280 --json
 pnpm --filter ghcrawl cli cluster-detail owner/repo --id 123 --member-limit 20 --body-chars 280 --include-closed --json
+pnpm --filter ghcrawl cli cluster-explain owner/repo --id 123 --member-limit 20 --event-limit 50 --json
 pnpm --filter ghcrawl cli close-thread owner/repo --number 42 --json
 pnpm --filter ghcrawl cli close-cluster owner/repo --id 123 --json
 ```
@@ -202,10 +266,12 @@ If the supported CLI path still fails, hangs, or returns unusable output, stop a
 
 ## Suggested analysis flow
 
-1. Start read-only with `clusters`, `cluster-detail`, `threads`, `author`, `search`, or `neighbors`
+1. Start read-only with `clusters`, `cluster-detail`, `threads`, `runs`, `search`, or `neighbors`
 2. Only if API-backed work is needed or a read-only request failed, run `ghcrawl doctor --json`
 3. If auth is unavailable, stay read-only
 4. Only if doctor is healthy and the user explicitly asked, run `ghcrawl refresh owner/repo`
-5. `ghcrawl clusters owner/repo --min-size 10 --limit 20 --sort recent --json`
-6. `ghcrawl cluster-detail owner/repo --id <cluster-id> --json`
-7. optionally `threads`, `author`, `search`, or `neighbors` with `--json`
+5. `ghcrawl runs owner/repo --limit 20 --json` when freshness or failures matter
+6. `ghcrawl clusters owner/repo --min-size 10 --limit 20 --sort recent --json`
+7. `ghcrawl cluster-detail owner/repo --id <cluster-id> --json`
+8. `ghcrawl cluster-explain owner/repo --id <cluster-id> --json` when evidence or governance matters
+9. optionally `threads`, `search`, or `neighbors` with `--json`

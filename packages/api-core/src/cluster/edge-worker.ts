@@ -7,7 +7,7 @@ import { buildSourceKindEdges } from './exact-edges.js';
 type WorkerInput = {
   dbPath: string;
   repoId: number;
-  sourceKind: 'title' | 'body' | 'dedupe_summary';
+  sourceKind: 'title' | 'body' | 'dedupe_summary' | 'llm_key_summary';
   limit: number;
   minScore: number;
 };

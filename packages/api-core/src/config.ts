@@ -5,25 +5,23 @@ import path from 'node:path';
 import dotenv from 'dotenv';
 
 export type ConfigValueSource = 'env' | 'config' | 'dotenv' | 'default' | 'none';
-export type SecretProvider = 'plaintext' | 'op';
 export type TuiSortPreference = 'recent' | 'size';
-export type TuiMinClusterSize = 0 | 1 | 10 | 20 | 50;
+export type TuiMemberSortPreference = 'kind' | 'recent' | 'number' | 'state' | 'title';
+export type TuiMinClusterSize = 0 | 1 | 2 | 5 | 10 | 20 | 50;
 export type TuiWideLayoutPreference = 'columns' | 'right-stack';
-export type EmbeddingBasis = 'title_original' | 'title_summary';
+export type EmbeddingBasis = 'title_original' | 'title_summary' | 'llm_key_summary';
 export type VectorBackend = 'vectorlite';
 
 export type TuiRepositoryPreference = {
   minClusterSize: TuiMinClusterSize;
   sortMode: TuiSortPreference;
+  memberSortMode: TuiMemberSortPreference;
   wideLayout: TuiWideLayoutPreference;
 };
 
 export type PersistedGitcrawlConfig = {
   githubToken?: string;
   openaiApiKey?: string;
-  secretProvider?: SecretProvider;
-  opVaultName?: string;
-  opItemName?: string;
   dbPath?: string;
   apiPort?: number;
   summaryModel?: string;
@@ -50,9 +48,6 @@ export type GitcrawlConfig = {
   githubTokenSource: ConfigValueSource;
   openaiApiKey?: string;
   openaiApiKeySource: ConfigValueSource;
-  secretProvider: SecretProvider;
-  opVaultName?: string;
-  opItemName?: string;
   summaryModel: string;
   embedModel: string;
   embeddingBasis: EmbeddingBasis;
@@ -164,16 +159,16 @@ function getNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
-function getSecretProvider(value: unknown): SecretProvider | undefined {
-  return value === 'plaintext' || value === 'op' ? value : undefined;
-}
-
 function getTuiSortPreference(value: unknown): TuiSortPreference | undefined {
   return value === 'recent' || value === 'size' ? value : undefined;
 }
 
+function getTuiMemberSortPreference(value: unknown): TuiMemberSortPreference | undefined {
+  return value === 'kind' || value === 'recent' || value === 'number' || value === 'state' || value === 'title' ? value : undefined;
+}
+
 function getTuiMinClusterSize(value: unknown): TuiMinClusterSize | undefined {
-  return value === 0 || value === 1 || value === 10 || value === 20 || value === 50 ? value : undefined;
+  return value === 0 || value === 1 || value === 2 || value === 5 || value === 10 || value === 20 || value === 50 ? value : undefined;
 }
 
 function getTuiWideLayoutPreference(value: unknown): TuiWideLayoutPreference | undefined {
@@ -181,7 +176,7 @@ function getTuiWideLayoutPreference(value: unknown): TuiWideLayoutPreference | u
 }
 
 function getEmbeddingBasis(value: unknown): EmbeddingBasis | undefined {
-  return value === 'title_original' || value === 'title_summary' ? value : undefined;
+  return value === 'title_original' || value === 'title_summary' || value === 'llm_key_summary' ? value : undefined;
 }
 
 function getVectorBackend(value: unknown): VectorBackend | undefined {
@@ -201,11 +196,12 @@ function getTuiPreferences(value: unknown): Record<string, TuiRepositoryPreferen
     const record = preference as Record<string, unknown>;
     const minClusterSize = getTuiMinClusterSize(record.minClusterSize);
     const sortMode = getTuiSortPreference(record.sortMode);
+    const memberSortMode = getTuiMemberSortPreference(record.memberSortMode) ?? 'kind';
     const wideLayout = getTuiWideLayoutPreference(record.wideLayout) ?? 'columns';
     if (minClusterSize === undefined || sortMode === undefined) {
       continue;
     }
-    preferences[fullName] = { minClusterSize, sortMode, wideLayout };
+    preferences[fullName] = { minClusterSize, sortMode, memberSortMode, wideLayout };
   }
 
   return preferences;
@@ -226,9 +222,6 @@ export function readPersistedConfig(options: LoadConfigOptions = {}): LoadedStor
     data: {
       githubToken: getString(raw.githubToken),
       openaiApiKey: getString(raw.openaiApiKey),
-      secretProvider: getSecretProvider(raw.secretProvider),
-      opVaultName: getString(raw.opVaultName),
-      opItemName: getString(raw.opItemName),
       dbPath: getString(raw.dbPath),
       apiPort: getNumber(raw.apiPort),
       summaryModel: getString(raw.summaryModel),
@@ -271,14 +264,6 @@ function parseIntegerSetting(name: string, raw: string): number {
     throw new Error(`Invalid ${name}: ${raw}`);
   }
   return parsed;
-}
-
-export function isLikelyGitHubToken(value: string): boolean {
-  return /^(gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)$/.test(value.trim());
-}
-
-export function isLikelyOpenAiApiKey(value: string): boolean {
-  return /^sk-[A-Za-z0-9._-]+$/.test(value.trim());
 }
 
 export function loadConfig(options: LoadConfigOptions = {}): GitcrawlConfig {
@@ -345,7 +330,7 @@ export function loadConfig(options: LoadConfigOptions = {}): GitcrawlConfig {
     { source: 'env', value: getEnvString(env, 'GHCRAWL_SUMMARY_MODEL', 'GHCRAWL_SUMMARY_MODEL') },
     { source: 'config', value: stored.data.summaryModel },
     { source: 'dotenv', value: getDotenvString(dotenvValues, 'GHCRAWL_SUMMARY_MODEL', 'GHCRAWL_SUMMARY_MODEL') },
-    { source: 'default', value: 'gpt-5-mini' },
+    { source: 'default', value: 'gpt-5.4' },
   );
   const embedModel = pickDefined<string>(
     { source: 'env', value: getEnvString(env, 'GHCRAWL_EMBED_MODEL', 'GHCRAWL_EMBED_MODEL') },
@@ -398,10 +383,7 @@ export function loadConfig(options: LoadConfigOptions = {}): GitcrawlConfig {
     githubTokenSource: githubToken.source,
     openaiApiKey: openaiApiKey.value,
     openaiApiKeySource: openaiApiKey.source,
-    secretProvider: stored.data.secretProvider ?? 'plaintext',
-    opVaultName: stored.data.opVaultName,
-    opItemName: stored.data.opItemName,
-    summaryModel: summaryModel.value ?? 'gpt-5-mini',
+    summaryModel: summaryModel.value ?? 'gpt-5.4',
     embedModel: embedModel.value ?? 'text-embedding-3-large',
     embeddingBasis: embeddingBasis.value ?? 'title_original',
     vectorBackend: vectorBackend.value ?? 'vectorlite',
@@ -421,19 +403,28 @@ export function ensureRuntimeDirs(config: GitcrawlConfig): void {
 }
 
 export function getTuiRepositoryPreference(config: GitcrawlConfig, owner: string, repo: string): TuiRepositoryPreference {
-  return config.tuiPreferences[`${owner}/${repo}`] ?? { minClusterSize: 10, sortMode: 'recent', wideLayout: 'columns' };
+  return config.tuiPreferences[`${owner}/${repo}`] ?? { minClusterSize: 5, sortMode: 'size', memberSortMode: 'kind', wideLayout: 'columns' };
 }
 
 export function writeTuiRepositoryPreference(
   config: GitcrawlConfig,
-  params: { owner: string; repo: string; minClusterSize: TuiMinClusterSize; sortMode: TuiSortPreference; wideLayout: TuiWideLayoutPreference },
+  params: {
+    owner: string;
+    repo: string;
+    minClusterSize: TuiMinClusterSize;
+    sortMode: TuiSortPreference;
+    memberSortMode?: TuiMemberSortPreference;
+    wideLayout: TuiWideLayoutPreference;
+  },
 ): { configPath: string } {
   const fullName = `${params.owner}/${params.repo}`;
+  const previousPreference = config.tuiPreferences[fullName];
   const nextPreferences = {
     ...config.tuiPreferences,
     [fullName]: {
       minClusterSize: params.minClusterSize,
       sortMode: params.sortMode,
+      memberSortMode: params.memberSortMode ?? previousPreference?.memberSortMode ?? 'kind',
       wideLayout: params.wideLayout,
     },
   };
@@ -453,24 +444,14 @@ export function writeTuiRepositoryPreference(
 
 export function requireGithubToken(config: GitcrawlConfig): string {
   if (!config.githubToken) {
-    if (config.secretProvider === 'op' && config.opVaultName && config.opItemName) {
-      throw new Error(
-        `Missing GitHub token in the environment. This config is set to use 1Password CLI via ${config.opVaultName}/${config.opItemName}; run ghcrawl through your op wrapper or set GITHUB_TOKEN. Expected config at ${config.configPath}`,
-      );
-    }
-    throw new Error(`Missing GitHub token. Run ghcrawl init or set GITHUB_TOKEN. Expected config at ${config.configPath}`);
+    throw new Error(`Missing GitHub token. Set GITHUB_TOKEN or add githubToken to ${config.configPath}.`);
   }
   return config.githubToken;
 }
 
 export function requireOpenAiKey(config: GitcrawlConfig): string {
   if (!config.openaiApiKey) {
-    if (config.secretProvider === 'op' && config.opVaultName && config.opItemName) {
-      throw new Error(
-        `Missing OpenAI API key in the environment. This config is set to use 1Password CLI via ${config.opVaultName}/${config.opItemName}; run ghcrawl through your op wrapper or set OPENAI_API_KEY. Expected config at ${config.configPath}`,
-      );
-    }
-    throw new Error(`Missing OpenAI API key. Run ghcrawl init or set OPENAI_API_KEY. Expected config at ${config.configPath}`);
+    throw new Error(`Missing OpenAI API key. Set OPENAI_API_KEY or add openaiApiKey to ${config.configPath}.`);
   }
   return config.openaiApiKey;
 }

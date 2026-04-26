@@ -12,7 +12,7 @@ Use `discrawl` as the main product pattern:
 
 - local-first
 - deterministic CLI entry points
-- explicit `init` / `doctor` / `sync` style commands
+- explicit `doctor` / `sync` style commands
 - SQLite as the canonical local store
 - optional higher-level search on top of the local store
 
@@ -96,7 +96,7 @@ Reasoning:
 Primary interface should feel like `discrawl`:
 
 ```bash
-ghcrawl init
+export GITHUB_TOKEN=github_pat_...
 ghcrawl doctor
 ghcrawl sync --owner openclaw --repo openclaw
 ghcrawl summarize --since 30d
@@ -108,8 +108,7 @@ ghcrawl serve
 
 Recommended initial commands:
 
-- `init`: write config and local paths
-- `doctor`: verify env, GitHub auth, OpenAI auth, DB, and optional OpenSearch reachability
+- `doctor`: verify token presence, DB, and vector runtime readiness
 - `sync`: fetch repository data into SQLite
 - `summarize`: generate or refresh thread summaries
 - `embed`: generate embeddings for summary documents
@@ -137,7 +136,7 @@ Environment variables:
 - `OPENAI_API_KEY`
 - `GHCRAWL_DB_PATH` with default `data/ghcrawl.db`
 - `GHCRAWL_API_PORT` with default `5179`
-- `GHCRAWL_SUMMARY_MODEL` with default `gpt-5-mini`
+- `GHCRAWL_SUMMARY_MODEL` with default `gpt-5.4`
 - `GHCRAWL_EMBED_MODEL` with default `text-embedding-3-small`
 - `GHCRAWL_OPENSEARCH_URL` optional
 - `GHCRAWL_OPENSEARCH_INDEX` optional
@@ -279,7 +278,7 @@ Use OpenAI for two distinct jobs:
 
 Default models:
 
-- summarization: `gpt-5-mini`
+- summarization: `gpt-5.4`
 - embeddings: `text-embedding-3-small`
 
 Relevant official constraints to design around:

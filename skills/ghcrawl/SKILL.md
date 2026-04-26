@@ -29,7 +29,7 @@ Current pipeline defaults to keep in mind:
 - changing summary model or embedding basis with `ghcrawl configure` makes the next refresh rebuild vectors and clusters
 - opting into `title_summary` can materially improve clustering quality, but it adds OpenAI cost; on `openclaw/openclaw` it improved non-solo cluster membership by about 50%
 
-Also never run `close-thread` or `close-cluster` unless the user explicitly asks you to mark a local thread or cluster closed.
+Also never run `close-thread`, `close-cluster`, `exclude-cluster-member`, `include-cluster-member`, `set-cluster-canonical`, `merge-clusters`, or `split-cluster` unless the user explicitly asks you to change local cluster governance.
 
 ## When to use this skill
 
@@ -60,11 +60,13 @@ Start with local read-only commands:
 Without explicit user direction to refresh data, prefer these local-only commands:
 
 ```bash
+ghcrawl runs owner/repo --limit 20 --json
 ghcrawl threads owner/repo --numbers 12345 --json
 ghcrawl clusters owner/repo --min-size 10 --limit 20 --sort recent --json
+ghcrawl durable-clusters owner/repo --member-limit 10 --json
 ghcrawl cluster-detail owner/repo --id 123 --member-limit 20 --body-chars 280 --json
+ghcrawl cluster-explain owner/repo --id 123 --member-limit 20 --event-limit 50 --json
 ghcrawl threads owner/repo --numbers 42,43,44 --json
-ghcrawl author owner/repo --login lqquan --json
 ghcrawl search owner/repo --query "download stalls" --mode hybrid --json
 ghcrawl neighbors owner/repo --number 42 --limit 10 --json
 ghcrawl configure --json
@@ -81,13 +83,13 @@ By default:
 
 If the user explicitly wants to inspect those records, add `--include-closed`.
 
-Use `threads --numbers 12345` when you need to find the cluster for one specific issue/PR number. The returned thread record includes `clusterId`. If it is non-null, follow with `cluster-detail --id <clusterId>`.
+Use `threads --numbers 12345` when you need to find the cluster for one specific issue/PR number. The returned thread record includes `clusterId`. If it is non-null, follow with `cluster-detail --id <clusterId>` for snapshot details or `cluster-explain --id <clusterId>` for durable evidence and governance.
+
+Use `runs` when freshness, repeated failures, or background pipeline status matters. It returns recent sync, summary, embedding, and cluster runs with status, timestamps, stats, and errors.
 
 Use `configure --json` when you need to confirm the currently selected summary model or embedding basis before suggesting an expensive refresh.
 
 Use `threads --numbers ...` when you need a batch of specific issue/PR records. Do not pay the CLI startup cost 10 times for 10 separate single-thread lookups.
-
-Use `author --login ...` when you need one author's open threads and their strongest stored same-author similarity matches in one call.
 
 If the user explicitly asks to mark a local issue/PR or cluster closed, use:
 
@@ -97,6 +99,18 @@ ghcrawl close-cluster owner/repo --id 123 --json
 ```
 
 If `close-thread` closes the last open item in a cluster, ghcrawl will automatically mark that cluster closed too.
+
+If the user explicitly asks to govern durable cluster membership, use:
+
+```bash
+ghcrawl exclude-cluster-member owner/repo --id 123 --number 42 --reason "false positive" --json
+ghcrawl include-cluster-member owner/repo --id 123 --number 42 --reason "same root cause" --json
+ghcrawl set-cluster-canonical owner/repo --id 123 --number 42 --reason "best root issue" --json
+ghcrawl merge-clusters owner/repo --source 123 --target 456 --reason "same incident" --json
+ghcrawl split-cluster owner/repo --source 123 --numbers 42,43 --reason "separate root cause" --json
+```
+
+Use `cluster --number <thread>` only when the user explicitly asks to refresh one local durable neighborhood after a small sync or governance edit.
 
 ### 2. Check local health only when needed
 
@@ -187,7 +201,26 @@ This returns:
 - a body snippet
 - stored summary fields when present
 
-### 7. Optional deeper inspection
+### 7. Explain durable evidence and governance
+
+Use:
+
+```bash
+ghcrawl cluster-explain owner/repo --id 123 --member-limit 20 --event-limit 50 --json
+```
+
+This returns:
+
+- stable durable cluster identity and slug
+- governed memberships
+- aliases
+- maintainer overrides
+- event history
+- pairwise evidence sources and score breakdowns
+
+Use this when the user asks why items are together, why an item stayed out, or what a maintainer changed.
+
+### 8. Optional deeper inspection
 
 Use search or neighbors as needed:
 

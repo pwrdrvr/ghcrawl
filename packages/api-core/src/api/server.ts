@@ -1,9 +1,20 @@
 import http from 'node:http';
 
-import { actionRequestSchema, closeClusterRequestSchema, closeThreadRequestSchema, refreshRequestSchema } from '@ghcrawl/api-contract';
+import {
+  actionRequestSchema,
+  closeClusterRequestSchema,
+  closeThreadRequestSchema,
+  excludeClusterMemberRequestSchema,
+  includeClusterMemberRequestSchema,
+  mergeClustersRequestSchema,
+  refreshRequestSchema,
+  setClusterCanonicalRequestSchema,
+  splitClusterRequestSchema,
+} from '@ghcrawl/api-contract';
 import { ZodError } from 'zod';
 
-import { GHCrawlService, parseRepoParams } from '../service.js';
+import { GHCrawlService } from '../service.js';
+import { parseRepoParams } from './params.js';
 
 function sendJson(res: http.ServerResponse, status: number, payload: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
@@ -39,6 +50,24 @@ export function createApiServer(service: GHCrawlService): http.Server {
         return;
       }
 
+      if (req.method === 'GET' && url.pathname === '/runs') {
+        const params = parseRepoParams(url);
+        const kindParam = url.searchParams.get('kind');
+        const kind =
+          kindParam === 'sync' || kindParam === 'summary' || kindParam === 'embedding' || kindParam === 'cluster' ? kindParam : undefined;
+        const limitValue = url.searchParams.get('limit');
+        sendJson(
+          res,
+          200,
+          service.listRunHistory({
+            ...params,
+            kind,
+            limit: limitValue ? Number(limitValue) : undefined,
+          }),
+        );
+        return;
+      }
+
       if (req.method === 'GET' && url.pathname === '/threads') {
         const params = parseRepoParams(url);
         const kindParam = url.searchParams.get('kind');
@@ -53,18 +82,6 @@ export function createApiServer(service: GHCrawlService): http.Server {
             : undefined;
         const includeClosed = url.searchParams.get('includeClosed') === 'true';
         sendJson(res, 200, service.listThreads({ ...params, kind, numbers, includeClosed }));
-        return;
-      }
-
-      if (req.method === 'GET' && url.pathname === '/author-threads') {
-        const params = parseRepoParams(url);
-        const login = (url.searchParams.get('login') ?? '').trim();
-        if (!login) {
-          sendJson(res, 400, { error: 'Missing login parameter' });
-          return;
-        }
-        const includeClosed = url.searchParams.get('includeClosed') === 'true';
-        sendJson(res, 200, service.listAuthorThreads({ ...params, login, includeClosed }));
         return;
       }
 
@@ -110,8 +127,24 @@ export function createApiServer(service: GHCrawlService): http.Server {
 
       if (req.method === 'GET' && url.pathname === '/clusters') {
         const params = parseRepoParams(url);
-        const includeClosed = url.searchParams.get('includeClosed') === 'true';
+        const includeClosed = url.searchParams.get('includeClosed') !== 'false';
         sendJson(res, 200, service.listClusters({ ...params, includeClosed }));
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === '/durable-clusters') {
+        const params = parseRepoParams(url);
+        const includeInactive = url.searchParams.get('includeInactive') === 'true';
+        const memberLimitValue = url.searchParams.get('memberLimit');
+        sendJson(
+          res,
+          200,
+          service.listDurableClusters({
+            ...params,
+            includeInactive,
+            memberLimit: memberLimitValue ? Number(memberLimitValue) : undefined,
+          }),
+        );
         return;
       }
 
@@ -122,7 +155,7 @@ export function createApiServer(service: GHCrawlService): http.Server {
         const minSizeValue = url.searchParams.get('minSize');
         const limitValue = url.searchParams.get('limit');
         const search = url.searchParams.get('search') ?? undefined;
-        const includeClosed = url.searchParams.get('includeClosed') === 'true';
+        const includeClosed = url.searchParams.get('includeClosed') !== 'false';
         sendJson(
           res,
           200,
@@ -152,7 +185,7 @@ export function createApiServer(service: GHCrawlService): http.Server {
         }
         const memberLimitValue = url.searchParams.get('memberLimit');
         const bodyCharsValue = url.searchParams.get('bodyChars');
-        const includeClosed = url.searchParams.get('includeClosed') === 'true';
+        const includeClosed = url.searchParams.get('includeClosed') !== 'false';
         sendJson(
           res,
           200,
@@ -162,6 +195,33 @@ export function createApiServer(service: GHCrawlService): http.Server {
             memberLimit: memberLimitValue ? Number(memberLimitValue) : undefined,
             bodyChars: bodyCharsValue ? Number(bodyCharsValue) : undefined,
             includeClosed,
+          }),
+        );
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === '/cluster-explain') {
+        const params = parseRepoParams(url);
+        const clusterIdValue = url.searchParams.get('clusterId');
+        if (!clusterIdValue) {
+          sendJson(res, 400, { error: 'Missing clusterId parameter' });
+          return;
+        }
+        const clusterId = Number(clusterIdValue);
+        if (!Number.isInteger(clusterId) || clusterId <= 0) {
+          sendJson(res, 400, { error: 'Invalid clusterId parameter' });
+          return;
+        }
+        const memberLimitValue = url.searchParams.get('memberLimit');
+        const eventLimitValue = url.searchParams.get('eventLimit');
+        sendJson(
+          res,
+          200,
+          service.explainDurableCluster({
+            ...params,
+            clusterId,
+            memberLimit: memberLimitValue ? Number(memberLimitValue) : undefined,
+            eventLimit: eventLimitValue ? Number(eventLimitValue) : undefined,
           }),
         );
         return;
@@ -188,6 +248,36 @@ export function createApiServer(service: GHCrawlService): http.Server {
       if (req.method === 'POST' && url.pathname === '/actions/close-cluster') {
         const body = closeClusterRequestSchema.parse(await readBody(req));
         sendJson(res, 200, service.closeClusterLocally(body));
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/actions/exclude-cluster-member') {
+        const body = excludeClusterMemberRequestSchema.parse(await readBody(req));
+        sendJson(res, 200, service.excludeThreadFromCluster(body));
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/actions/include-cluster-member') {
+        const body = includeClusterMemberRequestSchema.parse(await readBody(req));
+        sendJson(res, 200, service.includeThreadInCluster(body));
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/actions/set-cluster-canonical') {
+        const body = setClusterCanonicalRequestSchema.parse(await readBody(req));
+        sendJson(res, 200, service.setClusterCanonicalThread(body));
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/actions/merge-clusters') {
+        const body = mergeClustersRequestSchema.parse(await readBody(req));
+        sendJson(res, 200, service.mergeDurableClusters(body));
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/actions/split-cluster') {
+        const body = splitClusterRequestSchema.parse(await readBody(req));
+        sendJson(res, 200, service.splitDurableCluster(body));
         return;
       }
 
