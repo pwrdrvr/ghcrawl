@@ -1,12 +1,71 @@
 import fs from 'node:fs';
 import { existsSync } from 'node:fs';
 
-import type { OptimizeResponse } from '@ghcrawl/api-contract';
+import { optimizeResponseSchema, type OptimizeResponse, type RepositoryDto } from '@ghcrawl/api-contract';
 
-import type { SqliteDatabase } from './db/sqlite.js';
+import type { GitcrawlConfig } from './config.js';
+import { openDb, type SqliteDatabase } from './db/sqlite.js';
+import { requireFromHere } from './service-constants.js';
 import type { SqliteMaintenanceStats } from './service-types.js';
+import { nowIso } from './service-utils.js';
+import { repositoryVectorStorePath, vectorStoreSidecarPath } from './vector/repository-store.js';
+import type { VectorStore } from './vector/store.js';
 
 type OptimizeTarget = OptimizeResponse['targets'][number];
+
+export function optimizeStorageStores(params: {
+  config: GitcrawlConfig;
+  db: SqliteDatabase;
+  vectorStore: VectorStore;
+  repository?: RepositoryDto | null;
+}): OptimizeResponse {
+  const startedAt = nowIso();
+  const repository = params.repository ?? null;
+
+  const targets = [
+    optimizeSqliteTarget({
+      name: 'main',
+      db: params.db,
+      dbPath: params.config.dbPath,
+    }),
+  ];
+
+  if (repository) {
+    const storePath = repositoryVectorStorePath(params.config.configDir, repository.fullName);
+    const sidecarPath = vectorStoreSidecarPath(storePath);
+    if (existsSync(storePath)) {
+      params.vectorStore.close();
+      const vectorDb = openDb(storePath) as SqliteDatabase & { loadExtension: (extensionPath: string) => void };
+      try {
+        const vectorlite = requireFromHere('vectorlite') as { vectorlitePath: () => string };
+        vectorDb.loadExtension(vectorlite.vectorlitePath());
+        targets.push(
+          optimizeSqliteTarget({
+            name: 'vector',
+            db: vectorDb,
+            dbPath: storePath,
+            sidecarPath,
+          }),
+        );
+      } finally {
+        vectorDb.close();
+      }
+    } else {
+      targets.push(missingVectorStoreTarget(storePath, sidecarPath));
+    }
+  }
+
+  const bytesReclaimed = targets.reduce((sum, target) => sum + target.bytesReclaimed, 0);
+  return optimizeResponseSchema.parse({
+    ok: true,
+    repository,
+    startedAt,
+    finishedAt: nowIso(),
+    targets,
+    bytesReclaimed,
+    message: `Optimized ${targets.filter((target) => target.existed).length} SQLite store(s); reclaimed ${bytesReclaimed} byte(s).`,
+  });
+}
 
 export function missingVectorStoreTarget(storePath: string, sidecarPath: string): OptimizeTarget {
   const sidecarBytes = fileSize(sidecarPath);

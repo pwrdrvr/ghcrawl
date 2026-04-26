@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
@@ -17,7 +16,6 @@ import {
   embedResultSchema,
   healthResponseSchema,
   neighborsResponseSchema,
-  optimizeResponseSchema,
   refreshResponseSchema,
   searchResponseSchema,
   syncResultSchema,
@@ -134,7 +132,7 @@ import {
 import { finishServiceRun, listRunHistoryForRepository, startServiceRun } from './run-history.js';
 import { listStoredRepositories } from './repositories/list.js';
 import { cosineSimilarity, dotProduct, rankNearestNeighbors, rankNearestNeighborsByScore } from './search/exact.js';
-import { missingVectorStoreTarget, optimizeSqliteTarget } from './storage-maintenance.js';
+import { optimizeStorageStores } from './storage-maintenance.js';
 import { fetchThreadComments } from './sync/comments.js';
 import { getSyncCursorState, writeSyncCursorState } from './sync/cursor.js';
 import { persistThreadCodeSnapshot, upsertRepository, upsertThread } from './sync/persistence.js';
@@ -223,7 +221,7 @@ import {
   rebuildRepositoryVectorStore,
   resetRepositoryVectors,
 } from './vector/repository-maintenance.js';
-import { isCorruptedVectorIndexError, repositoryVectorStorePath, vectorStoreSidecarPath } from './vector/repository-store.js';
+import { isCorruptedVectorIndexError, repositoryVectorStorePath } from './vector/repository-store.js';
 import { VectorliteStore } from './vector/vectorlite-store.js';
 
 export type { DoctorResult, TuiClusterDetail, TuiClusterMember, TuiClusterSortMode, TuiClusterSummary, TuiRefreshState, TuiRepoStats, TuiSnapshot, TuiThreadDetail } from './service-types.js';
@@ -2457,54 +2455,16 @@ export class GHCrawlService {
   }
 
   optimizeStorage(params: { owner?: string; repo?: string } = {}): OptimizeResponse {
-    const startedAt = nowIso();
     const repository =
       params.owner && params.repo
         ? this.requireRepository(params.owner, params.repo)
         : null;
 
-    const targets = [
-      optimizeSqliteTarget({
-        name: 'main',
-        db: this.db,
-        dbPath: this.config.dbPath,
-      }),
-    ];
-
-    if (repository) {
-      const storePath = repositoryVectorStorePath(this.config.configDir, repository.fullName);
-      const sidecarPath = vectorStoreSidecarPath(storePath);
-      if (existsSync(storePath)) {
-        this.vectorStore.close();
-        const vectorDb = openDb(storePath) as SqliteDatabase & { loadExtension: (extensionPath: string) => void };
-        try {
-          const vectorlite = requireFromHere('vectorlite') as { vectorlitePath: () => string };
-          vectorDb.loadExtension(vectorlite.vectorlitePath());
-          targets.push(
-            optimizeSqliteTarget({
-              name: 'vector',
-              db: vectorDb,
-              dbPath: storePath,
-              sidecarPath,
-            }),
-          );
-        } finally {
-          vectorDb.close();
-        }
-      } else {
-        targets.push(missingVectorStoreTarget(storePath, sidecarPath));
-      }
-    }
-
-    const bytesReclaimed = targets.reduce((sum, target) => sum + target.bytesReclaimed, 0);
-    return optimizeResponseSchema.parse({
-      ok: true,
+    return optimizeStorageStores({
+      config: this.config,
+      db: this.db,
+      vectorStore: this.vectorStore,
       repository,
-      startedAt,
-      finishedAt: nowIso(),
-      targets,
-      bytesReclaimed,
-      message: `Optimized ${targets.filter((target) => target.existed).length} SQLite store(s); reclaimed ${bytesReclaimed} byte(s).`,
     });
   }
 
