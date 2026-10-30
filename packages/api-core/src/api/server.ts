@@ -3,6 +3,7 @@ import http from 'node:http';
 import { actionRequestSchema, closeClusterRequestSchema, closeThreadRequestSchema, refreshRequestSchema } from '@ghcrawl/api-contract';
 import { ZodError } from 'zod';
 
+import { formatTriageMarkdown } from '../report/triage.js';
 import { GHCrawlService, parseRepoParams } from '../service.js';
 
 function sendJson(res: http.ServerResponse, status: number, payload: unknown): void {
@@ -164,6 +165,21 @@ export function createApiServer(service: GHCrawlService): http.Server {
             includeClosed,
           }),
         );
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === '/triage') {
+        const params = parseRepoParams(url);
+        const limit = url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined;
+        const minSize = url.searchParams.has('min-size') ? Number(url.searchParams.get('min-size')) : undefined;
+        const format = url.searchParams.get('format');
+        const report = service.generateTriageReport({ ...params, limit, minSize });
+        if (format === 'markdown') {
+          res.writeHead(200, { 'Content-Type': 'text/markdown' });
+          res.end(formatTriageMarkdown(report));
+        } else {
+          sendJson(res, 200, report);
+        }
         return;
       }
 

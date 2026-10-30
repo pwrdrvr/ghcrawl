@@ -5,7 +5,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
-import { createApiServer, GHCrawlService, loadConfig, readPersistedConfig, writePersistedConfig, type LoadConfigOptions } from '@ghcrawl/api-core';
+import { createApiServer, formatTriageMarkdown, GHCrawlService, loadConfig, readPersistedConfig, writePersistedConfig, type LoadConfigOptions } from '@ghcrawl/api-core';
 import { createHeapDiagnostics, type HeapDiagnostics } from './heap-diagnostics.js';
 import { runInitWizard } from './init-wizard.js';
 import { startTui } from './tui/app.js';
@@ -28,6 +28,7 @@ type CommandName =
   | 'cluster-experiment'
   | 'clusters'
   | 'cluster-detail'
+  | 'triage'
   | 'search'
   | 'neighbors'
   | 'tui'
@@ -241,6 +242,17 @@ const COMMAND_SPECS: readonly CommandSpec[] = [
     ],
     examples: ['ghcrawl cluster-detail openclaw/openclaw --id 123 --member-limit 20 --body-chars 280 --json'],
     agentJson: true,
+  },
+  {
+    name: 'triage',
+    synopsis: 'triage <owner/repo> [--limit <count>] [--min-size <count>] [--json]',
+    description: 'Summarize clusters into a triage report with suggested review actions.',
+    options: [
+      '--limit <count>  Maximum number of clusters to include',
+      '--min-size <count>  Minimum cluster size to include',
+      '--json  Emit the report as JSON instead of Markdown',
+    ],
+    examples: ['ghcrawl triage openclaw/openclaw', 'ghcrawl triage openclaw/openclaw --min-size 3 --json'],
   },
   {
     name: 'search',
@@ -1111,6 +1123,21 @@ export async function run(
           includeClosed: values['include-closed'] === true,
         });
         writeJson(stdout, result);
+        return;
+      }
+      case 'triage': {
+        const { owner, repo, values } = parseRepoFlags('triage', rest);
+        const report = getService().generateTriageReport({
+          owner,
+          repo,
+          limit: typeof values.limit === 'string' ? parsePositiveInteger('limit', values.limit, 'triage') : undefined,
+          minSize: typeof values['min-size'] === 'string' ? parsePositiveInteger('min-size', values['min-size'], 'triage') : undefined,
+        });
+        if (values.json === true) {
+          stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+        } else {
+          stdout.write(`${formatTriageMarkdown(report)}\n`);
+        }
         return;
       }
       case 'search': {
