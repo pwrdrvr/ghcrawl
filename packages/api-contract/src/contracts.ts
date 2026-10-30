@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const threadKindSchema = z.enum(['issue', 'pull_request']);
+export const threadKindSchema = z.enum(['issue', 'pull_request', 'discussion']);
 export type ThreadKind = z.infer<typeof threadKindSchema>;
 
 export const searchModeSchema = z.enum(['keyword', 'semantic', 'hybrid']);
@@ -217,6 +217,7 @@ export const refreshRequestSchema = z.object({
   sync: z.boolean().optional(),
   embed: z.boolean().optional(),
   cluster: z.boolean().optional(),
+  includeDiscussions: z.boolean().optional(),
 });
 export type RefreshRequest = z.infer<typeof refreshRequestSchema>;
 

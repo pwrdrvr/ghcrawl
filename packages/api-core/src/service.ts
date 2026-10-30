@@ -76,7 +76,7 @@ type ThreadRow = {
   id: number;
   repo_id: number;
   number: number;
-  kind: 'issue' | 'pull_request';
+  kind: 'issue' | 'pull_request' | 'discussion';
   state: string;
   closed_at_gh: string | null;
   closed_at_local: string | null;
@@ -239,6 +239,7 @@ type SyncRunStats = {
   effectiveSince: string | null;
   limit: number | null;
   includeComments: boolean;
+  includeDiscussions?: boolean;
   fullReconcile?: boolean;
   isFullOpenScan: boolean;
   isOverlappingOpenScan: boolean;
@@ -271,14 +272,14 @@ export type TuiClusterSummary = {
   latestUpdatedAt: string | null;
   representativeThreadId: number | null;
   representativeNumber: number | null;
-  representativeKind: 'issue' | 'pull_request' | null;
+  representativeKind: 'issue' | 'pull_request' | 'discussion' | null;
   searchText: string;
 };
 
 export type TuiClusterMember = {
   id: number;
   number: number;
-  kind: 'issue' | 'pull_request';
+  kind: 'issue' | 'pull_request' | 'discussion';
   isClosed: boolean;
   title: string;
   updatedAtGh: string | null;
@@ -299,7 +300,7 @@ export type TuiClusterDetail = {
   latestUpdatedAt: string | null;
   representativeThreadId: number | null;
   representativeNumber: number | null;
-  representativeKind: 'issue' | 'pull_request' | null;
+  representativeKind: 'issue' | 'pull_request' | 'discussion' | null;
   members: TuiClusterMember[];
 };
 
@@ -345,6 +346,7 @@ type SyncOptions = {
   since?: string;
   limit?: number;
   includeComments?: boolean;
+  includeDiscussions?: boolean;
   fullReconcile?: boolean;
   onProgress?: (message: string) => void;
   startedAt?: string;
@@ -435,6 +437,7 @@ function parseSyncRunStats(statsJson: string | null): SyncRunStats | null {
       effectiveSince: typeof parsed.effectiveSince === 'string' ? parsed.effectiveSince : null,
       limit: typeof parsed.limit === 'number' ? parsed.limit : null,
       includeComments: parsed.includeComments === true,
+      includeDiscussions: parsed.includeDiscussions === true,
       isFullOpenScan: parsed.isFullOpenScan === true,
       isOverlappingOpenScan: parsed.isOverlappingOpenScan === true,
       overlapReferenceAt: typeof parsed.overlapReferenceAt === 'string' ? parsed.overlapReferenceAt : null,
@@ -528,7 +531,7 @@ function threadToDto(row: ThreadRow, clusterId?: number | null): ThreadDto {
     id: row.id,
     repoId: row.repo_id,
     number: row.number,
-    kind: row.kind,
+    kind: row.kind as ThreadDto['kind'],
     state: row.state,
     isClosed: isEffectivelyClosed(row),
     closedAtGh: row.closed_at_gh ?? null,
@@ -654,7 +657,7 @@ export class GHCrawlService {
     return repositoriesResponseSchema.parse({ repositories: rows.map(repositoryToDto) });
   }
 
-  listThreads(params: { owner: string; repo: string; kind?: 'issue' | 'pull_request'; numbers?: number[]; includeClosed?: boolean }): ThreadsResponse {
+  listThreads(params: { owner: string; repo: string; kind?: 'issue' | 'pull_request' | 'discussion'; numbers?: number[]; includeClosed?: boolean }): ThreadsResponse {
     const repository = this.requireRepository(params.owner, params.repo);
     const clusterIds = new Map<number, number>();
     const clusterRows = this.db
@@ -884,6 +887,7 @@ export class GHCrawlService {
   ): Promise<SyncResultDto> {
     const crawlStartedAt = params.startedAt ?? nowIso();
     const includeComments = params.includeComments ?? false;
+    const includeDiscussions = params.includeDiscussions ?? false;
     const github = this.requireGithub();
     params.onProgress?.(`[sync] fetching repository metadata for ${params.owner}/${params.repo}`);
     const reporter = params.onProgress ? (message: string) => params.onProgress?.(message.replace(/^\[github\]/, '[sync/github]')) : undefined;
@@ -909,6 +913,9 @@ export class GHCrawlService {
           ? '[sync] comment hydration enabled; fetching issue comments, reviews, and review comments'
           : '[sync] metadata-only mode; skipping comment, review, and review-comment fetches',
       );
+      if (includeDiscussions) {
+        params.onProgress?.('[sync] discussion sync enabled; crawling GitHub Discussions metadata');
+      }
       if (isFullOpenScan) {
         params.onProgress?.('[sync] full open scan; no prior completed overlap/full cursor was found for this repository');
       } else if (params.since === undefined && effectiveSince && overlapReferenceAt) {
@@ -946,6 +953,35 @@ export class GHCrawlService {
           const message = error instanceof Error ? error.message : String(error);
           throw new Error(`sync failed while processing ${kind} #${number}: ${message}`);
         }
+      }
+
+      if (includeDiscussions && github.listRepositoryDiscussions) {
+        const discussions = await github.listRepositoryDiscussions(
+          params.owner,
+          params.repo,
+          effectiveSince,
+          params.limit,
+          reporter,
+        );
+        params.onProgress?.(`[sync] discovered ${discussions.length} discussions to process`);
+        for (const [index, discussion] of discussions.entries()) {
+          if (index > 0 && index % SYNC_BATCH_SIZE === 0) {
+            params.onProgress?.(`[sync] discussion batch boundary reached at ${index} threads; sleeping 5s before continuing`);
+            await new Promise((resolve) => setTimeout(resolve, SYNC_BATCH_DELAY_MS));
+          }
+          const number = Number(discussion.number);
+          params.onProgress?.(`[sync] discussion ${index + 1}/${discussions.length} #${number}`);
+          try {
+            const threadId = this.upsertThread(repoId, 'discussion', discussion, crawlStartedAt);
+            this.refreshDocument(threadId);
+            threadsSynced += 1;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            throw new Error(`sync failed while processing discussion #${number}: ${message}`);
+          }
+        }
+      } else if (includeDiscussions) {
+        params.onProgress?.('[sync] discussion sync requested but GitHub client does not support discussions; skipping');
       }
 
       const shouldSweepClosedOverlap = params.limit === undefined && effectiveSince !== undefined;
@@ -1004,6 +1040,7 @@ export class GHCrawlService {
         effectiveSince: effectiveSince ?? null,
         limit: params.limit ?? null,
         includeComments,
+        includeDiscussions,
         fullReconcile: params.fullReconcile ?? false,
         isFullOpenScan,
         isOverlappingOpenScan,
@@ -1863,7 +1900,7 @@ export class GHCrawlService {
         ACTIVE_EMBED_DIMENSIONS,
       ) as ActiveVectorRow | undefined;
     let responseThread: ThreadRow | ActiveVectorRow;
-    let neighbors: Array<{ threadId: number; number: number; kind: 'issue' | 'pull_request'; title: string; score: number }>;
+    let neighbors: Array<{ threadId: number; number: number; kind: 'issue' | 'pull_request' | 'discussion'; title: string; score: number }>;
 
     if (targetRow) {
       responseThread = targetRow;
@@ -1913,7 +1950,7 @@ export class GHCrawlService {
         targetBySource.set(row.source_kind, JSON.parse(row.embedding_json) as number[]);
       }
 
-      const aggregated = new Map<number, { number: number; kind: 'issue' | 'pull_request'; title: string; score: number }>();
+      const aggregated = new Map<number, { number: number; kind: 'issue' | 'pull_request' | 'discussion'; title: string; score: number }>();
       for (const row of this.iterateStoredEmbeddings(repository.id)) {
         if (row.id === responseThread.id) continue;
         const targetEmbedding = targetBySource.get(row.source_kind);
@@ -2024,6 +2061,7 @@ export class GHCrawlService {
     sync?: boolean;
     embed?: boolean;
     cluster?: boolean;
+    includeDiscussions?: boolean;
     onProgress?: (message: string) => void;
   }): Promise<RefreshResponse> {
     const selected = {
@@ -2046,6 +2084,7 @@ export class GHCrawlService {
       sync = await this.syncRepository({
         owner: params.owner,
         repo: params.repo,
+        includeDiscussions: params.includeDiscussions,
         onProgress: params.onProgress,
       });
     }
@@ -2500,7 +2539,7 @@ export class GHCrawlService {
          where repo_id = ? and state = 'open' and closed_at_local is null
          group by kind`,
       )
-      .all(repoId) as Array<{ kind: 'issue' | 'pull_request'; count: number }>;
+      .all(repoId) as Array<{ kind: 'issue' | 'pull_request' | 'discussion'; count: number }>;
     const latestRun = this.getLatestClusterRun(repoId);
     const latestSync = (this.db
       .prepare("select finished_at from sync_runs where repo_id = ? and status = 'completed' order by id desc limit 1")
@@ -2928,7 +2967,7 @@ export class GHCrawlService {
         close_reason_local: string | null;
         representative_thread_id: number | null;
         representative_number: number | null;
-        representative_kind: 'issue' | 'pull_request' | null;
+        representative_kind: 'issue' | 'pull_request' | 'discussion' | null;
         representative_title: string | null;
         latest_updated_at: string | null;
         issue_count: number;
@@ -2994,7 +3033,7 @@ export class GHCrawlService {
           close_reason_local: string | null;
           representative_thread_id: number | null;
           representative_number: number | null;
-          representative_kind: 'issue' | 'pull_request' | null;
+          representative_kind: 'issue' | 'pull_request' | 'discussion' | null;
           representative_title: string | null;
           latest_updated_at: string | null;
           issue_count: number;
@@ -3135,7 +3174,7 @@ export class GHCrawlService {
 
   private upsertThread(
     repoId: number,
-    kind: 'issue' | 'pull_request',
+    kind: 'issue' | 'pull_request' | 'discussion',
     payload: Record<string, unknown>,
     pulledAt: string,
   ): number {
@@ -3217,6 +3256,7 @@ export class GHCrawlService {
          where repo_id = ?
            and state = 'open'
            and closed_at_local is null
+           and kind in ('issue', 'pull_request')
            and (last_pulled_at is null or last_pulled_at < ?)
          order by number asc`,
       )
@@ -3300,6 +3340,7 @@ export class GHCrawlService {
          where repo_id = ?
            and state = 'open'
            and closed_at_local is null
+           and kind in ('issue', 'pull_request')
            and (last_pulled_at is null or last_pulled_at < ?)
          order by number asc`,
       )

@@ -123,12 +123,13 @@ const COMMAND_SPECS: readonly CommandSpec[] = [
   },
   {
     name: 'sync',
-    synopsis: 'sync <owner/repo> [--since <iso|duration>] [--limit <count>] [--include-comments] [--full-reconcile] [--json]',
+    synopsis: 'sync <owner/repo> [--since <iso|duration>] [--limit <count>] [--include-comments] [--include-discussions] [--full-reconcile] [--json]',
     description: 'Sync open GitHub issues and PRs into the local database.',
     options: [
       '--since <iso|duration>  Limit sync window using ISO time or 15m/2h/7d/1mo',
       '--limit <count>  Limit the number of synced items',
       '--include-comments  Hydrate issue comments, PR reviews, and review comments',
+      '--include-discussions  Also crawl GitHub Discussions',
       '--full-reconcile  Reconcile stale open items instead of metadata-only incrementals',
       '--json  Emit machine-readable JSON output explicitly',
     ],
@@ -137,12 +138,13 @@ const COMMAND_SPECS: readonly CommandSpec[] = [
   },
   {
     name: 'refresh',
-    synopsis: 'refresh <owner/repo> [--no-sync] [--no-embed] [--no-cluster] [--heap-snapshot-dir <dir>] [--heap-log-interval-ms <ms>] [--json]',
+    synopsis: 'refresh <owner/repo> [--no-sync] [--no-embed] [--no-cluster] [--include-discussions] [--heap-snapshot-dir <dir>] [--heap-log-interval-ms <ms>] [--json]',
     description: 'Run sync, embed, and cluster in one staged pipeline.',
     options: [
       '--no-sync  Skip the GitHub sync stage',
       '--no-embed  Skip the embeddings stage',
       '--no-cluster  Skip the clustering stage',
+      '--include-discussions  Also crawl GitHub Discussions during sync',
       '--heap-snapshot-dir <dir>  Write heap snapshots during long-running work',
       '--heap-log-interval-ms <ms>  Emit periodic heap diagnostics',
       '--json  Emit machine-readable JSON output explicitly',
@@ -456,6 +458,7 @@ export function parseRepoFlags(command: CommandName, args: string[]): ParsedRepo
       limit: { type: 'string' },
       json: { type: 'boolean' },
       'include-comments': { type: 'boolean' },
+      'include-discussions': { type: 'boolean' },
       'full-reconcile': { type: 'boolean' },
       'include-closed': { type: 'boolean' },
       kind: { type: 'string' },
@@ -921,6 +924,7 @@ export async function run(
           since: typeof values.since === 'string' ? resolveSinceValue(values.since) : undefined,
           limit: typeof values.limit === 'string' ? parsePositiveInteger('limit', values.limit, 'sync') : undefined,
           includeComments: values['include-comments'] === true,
+          includeDiscussions: values['include-discussions'] === true,
           fullReconcile: values['full-reconcile'] === true,
           onProgress: (message: string) => writeProgress(message, stderr),
         });
@@ -937,6 +941,7 @@ export async function run(
             sync: values['no-sync'] === true ? false : undefined,
             embed: values['no-embed'] === true ? false : undefined,
             cluster: values['no-cluster'] === true ? false : undefined,
+            includeDiscussions: values['include-discussions'] === true,
             onProgress:
               heapDiagnostics?.wrapProgress((message: string) => writeProgress(message, stderr)) ??
               ((message: string) => writeProgress(message, stderr)),
