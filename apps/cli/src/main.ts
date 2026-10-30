@@ -25,6 +25,7 @@ type CommandName =
   | 'purge-comments'
   | 'embed'
   | 'cluster'
+  | 'diff'
   | 'cluster-experiment'
   | 'clusters'
   | 'cluster-detail'
@@ -212,6 +213,13 @@ const COMMAND_SPECS: readonly CommandSpec[] = [
     ],
     examples: ['ghcrawl cluster openclaw/openclaw --json', 'ghcrawl cluster openclaw/openclaw --threshold 0.82 --json'],
     agentJson: true,
+  },
+  {
+    name: 'diff',
+    synopsis: 'diff <owner/repo>',
+    description: 'Show cluster transitions between the latest two cluster runs.',
+    options: [],
+    examples: ['ghcrawl diff openclaw/openclaw'],
   },
   {
     name: 'clusters',
@@ -1060,6 +1068,12 @@ export async function run(
         } finally {
           heapDiagnostics?.dispose();
         }
+      }
+      case 'diff': {
+        const { owner, repo } = parseRepoFlags('diff', rest);
+        const result = getService().diffClusters({ owner, repo });
+        stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return;
       }
       case 'cluster-experiment': {
         const { owner, repo, values } = parseRepoFlags('cluster-experiment', rest);

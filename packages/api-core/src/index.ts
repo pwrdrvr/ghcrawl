@@ -3,6 +3,8 @@ export * from './config.js';
 export * from './documents/normalize.js';
 export * from './search/exact.js';
 export * from './cluster/build.js';
+export * from './cluster/lineage.js';
+export type { ClusterDiffResponse } from '@ghcrawl/api-contract';
 export * from './service.js';
 export * from './vector/store.js';
 export * from './vector/vectorlite-store.js';
